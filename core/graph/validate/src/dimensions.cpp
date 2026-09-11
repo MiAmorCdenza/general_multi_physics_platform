@@ -1,18 +1,18 @@
 /**
  * @file dimensions.cpp
- * @brief 量纲解析的实现。
+ * @brief Implementation of dimension resolution.
  *
- * 算法：Kahn 拓扑排序 + 沿序推进。
+ * Algorithm: Kahn topological sort + a sweep along that order.
  *
- * 每个节点的每个输出端口，其量纲按以下优先级确定：
- *   1. 端口类型声明为 `exact`  → 直接用声明的量纲
- *   2. 端口类型声明为 `any`    → 未知（不约束，也无从推断）
- *   3. 端口类型声明为 `same_as_input` → 取**第一个已连线的输入端口**的量纲；
- *      若该输入本身是 `same_as_input`，则取它上游那条边的源输出量纲
- *      （上游已在拓扑序中先被解析）
+ * For every output port of every node the dimension is determined by this priority:
+ *   1. The port type declares `exact`  -> use the declared dimension directly
+ *   2. The port type declares `any`    -> unknown (no constraint, and nothing to infer from)
+ *   3. The port type declares `same_as_input` -> take the dimension of the **first connected input port**;
+ *      if that input is itself `same_as_input`, take the source output dimension of the edge upstream of it
+ *      (the upstream was already resolved earlier in the topological order)
  *
- * 遇到无法解析的情况**标记为未知并继续**，绝不崩溃或死循环——
- * 解析器可能被用在"结构校验还没跑"的时刻。
+ * An unresolvable case is **marked unknown and resolution continues**, never a crash or an endless loop --
+ * the resolver may be used at a moment when "structural validation has not run yet".
  */
 #include <qp/graph/validate/dimensions.hpp>
 
@@ -22,21 +22,11 @@
 namespace qp::graph {
 namespace {
 
-/// @brief 取节点类型描述。未注册返回 nullptr。
+/// @brief Get the node type description. Returns nullptr when unregistered.
 [[nodiscard]] const NodeDesc* desc_of(const Graph& g, const ResolveContext& ctx, NodeId id) {
     const Node* n = g.find_node(id);
     if (n == nullptr || n->type_name.empty()) return nullptr;
     return ctx.catalog->find(n->type_name);
-}
-
-/// @brief 取输入端口的描述。找不到返回 nullptr。
-[[nodiscard]] const PortDesc* input_desc(const NodeDesc* d, PortNumber port) {
-    return d == nullptr ? nullptr : d->find_port(port, /*is_output=*/false);
-}
-
-/// @brief 取输出端口的描述。找不到返回 nullptr。
-[[nodiscard]] const PortDesc* output_desc(const NodeDesc* d, PortNumber port) {
-    return d == nullptr ? nullptr : d->find_port(port, /*is_output=*/true);
 }
 
 }  // namespace
@@ -52,9 +42,9 @@ DimensionMap resolve_dimensions(const Graph& g, const ResolveContext& ctx) noexc
     DimensionMap out;
     if (!ctx.valid()) return out;
 
-    // ── 拓扑序（Kahn）────────────────────────────────────────────────────────
+    // -- Topological order (Kahn) ---------------------------------------------
     //
-    // 入度 = 该节点有多少个"有入边的输入端口"。
+    // In-degree = how many "input ports that have an incoming edge" this node has.
     const std::size_t n = g.slots().size();
     std::vector<std::size_t> indegree(n, 0);
     for (const auto& e : g.edges()) {
@@ -68,10 +58,10 @@ DimensionMap resolve_dimensions(const Graph& g, const ResolveContext& ctx) noexc
         }
     }
 
-    // 已解析的输出端口量纲，按 (node, port) 查询
+    // Resolved output-port dimensions, queried by (node, port)
     DimensionMap resolved;
 
-    // 取某个输入端口的来源输出端口。无入边返回无效。
+    // Source output port of a given input port. Returns invalid when there is no incoming edge.
     const auto source_of = [&g](NodeId node, PortNumber port) -> PortRef {
         const Edge* e = g.incoming(PortRef{node, port, PortDirection::input});
         return e == nullptr ? PortRef{} : e->from;
@@ -101,7 +91,7 @@ DimensionMap resolve_dimensions(const Graph& g, const ResolveContext& ctx) noexc
                         break;
 
                     case qp::ports::DimensionConstraint::same_as_input: {
-                        // 取第一个已连线的输入端口的量纲
+                        // Take the dimension of the first connected input port
                         bool found = false;
                         for (const auto& in_port : d->inputs) {
                             const PortRef src = source_of(id, in_port.number);
@@ -112,14 +102,14 @@ DimensionMap resolve_dimensions(const Graph& g, const ResolveContext& ctx) noexc
                                 resolved.set(id, out_port.number, r->dimension);
                                 found = true;
                             } else {
-                                // 上游还没解析出来（或上游本身未知）
+                                // The upstream is not resolved yet (or the upstream itself is unknown)
                                 resolved.set_unknown(id, out_port.number);
                                 found = true;
                             }
                             break;
                         }
                         if (!found) {
-                            // 没有任何已连线的输入 → 无从推断
+                            // No connected input at all -> nothing to infer from
                             resolved.set_unknown(id, out_port.number);
                         }
                         break;
@@ -128,7 +118,7 @@ DimensionMap resolve_dimensions(const Graph& g, const ResolveContext& ctx) noexc
             }
         }
 
-        // 推进下游
+        // Advance the downstream nodes
         for (const auto& e : g.edges()) {
             if (e.from.node != id) continue;
             if (e.to.node.index >= n) continue;
@@ -139,7 +129,7 @@ DimensionMap resolve_dimensions(const Graph& g, const ResolveContext& ctx) noexc
         }
     }
 
-    // 有环（理论上不该发生：结构层已保证无环）→ 剩余节点标为未知，而不是崩溃
+    // A cycle (which should not happen: the structure layer guarantees acyclicity) -> mark the leftover nodes unknown instead of crashing
     if (processed < g.node_count()) {
         for (const auto& s : g.slots()) {
             if (!s.occupied) continue;
@@ -153,7 +143,7 @@ DimensionMap resolve_dimensions(const Graph& g, const ResolveContext& ctx) noexc
         }
     }
 
-    // 把结果搬到输出（按 slots 顺序，保证确定性）
+    // Move the results to the output (in slots order, which guarantees determinism)
     for (const auto& s : g.slots()) {
         if (!s.occupied) continue;
         const NodeDesc* d = desc_of(g, ctx, s.node.id);

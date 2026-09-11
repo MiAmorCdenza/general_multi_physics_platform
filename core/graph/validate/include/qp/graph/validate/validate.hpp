@@ -1,37 +1,37 @@
 /**
  * @file validate.hpp
- * @brief 加载期校验：打开实验时就报错，而不是算了十分钟曲线荒谬。
+ * @brief Load-time validation: complain when the experiment opens, not ten minutes into nonsense.
  *
- * ## 校验为什么必须在加载期
+ * ## Why validation must happen at load time
  *
- * 类型与量纲错误若推迟到求值期，症状是"学生算了十分钟，结果荒谬"。
- * 加载期拒绝的代价是"打开实验时弹一个错误框"。两者对课堂的影响
- * 差一个数量级——这条是 `docs/plan-tree.md` 里 `validate` 模块的全部理由。
+ * Deferring a type or dimension error to evaluation means "the student computed for ten minutes
+ * and the result is nonsense". Rejecting at load time costs one error dialog when the experiment
+ * opens: an order of magnitude apart. That is the whole case for `validate` in `docs/plan-tree.md`.
  *
- * ## 校验的五个层次
+ * ## The five layers of validation
  *
- * 1. **结构**：节点类型已注册、每条边指向的节点与端口真实存在、
- *    类型字段非空。这一层只用图本身。
- * 2. **端口存在性**：连线两端的端口号必须在 `NodeDesc` 里真实存在。
- *    图结构层无法检查它——它不认识 `NodeDesc`。
- * 3. **连接兼容**：把端口层的 `check_connection` 应用到每条边上。
- *    这一步才真正用到 `same_as_input` 的解析结果。
- * 4. **必需参数**：标记为 `required` 且不可连线的端口必须有值。
- * 5. **域许可**：节点是否允许出现在它被放置的域里
- *    （实时域禁止阻塞/分配，因此默认拒绝）。
+ * 1. **Structure**: node types are registered, every edge points at nodes and ports that
+ *    really exist, and the type field is not empty. This layer uses the graph alone.
+ * 2. **Port existence**: the port numbers at both ends of an edge must really exist in `NodeDesc`.
+ *    The graph-structure layer cannot check that -- it does not know about `NodeDesc`.
+ * 3. **Connection compatibility**: apply the ports layer's `check_connection` to every edge.
+ *    This is the step that actually uses the resolved `same_as_input` result.
+ * 4. **Required parameters**: a port marked `required` and not connectable must carry a value.
+ * 5. **Domain permission**: whether a node may appear in the domain it was placed in
+ *    (the real-time domain forbids blocking/allocation, so it is denied by default).
  *
- * ## 为什么一次报全部问题
+ * ## Why report every problem at once
  *
- * 在第一个错误处停下，用户要改 N 次才能打开一个实验。
- * 因此校验**收集全部问题**再一起返回，每条都带节点与端口定位。
+ * Stopping at the first error would make the user fix and retry N times to open one experiment.
+ * So validation **collects every problem** and returns them together, each located by node/port.
  *
- * @ownership   pure（不修改图）
+ * @ownership   pure (does not modify the graph)
  * @thread      main
  * @pre         none
  * @post        none
- * @invariant   校验是只读的：调用前后图与版本号完全不变
- * @errors      noexcept（问题以 Report 表达，不抛）
- * @frozen      否
+ * @invariant   validation is read-only: graph and version are unchanged across the call
+ * @errors      noexcept (problems are expressed by a Report; nothing is thrown)
+ * @frozen      no
  */
 #pragma once
 
@@ -41,62 +41,62 @@
 
 namespace qp::graph {
 
-/// @brief 图所处的域。不同域对节点能力的要求不同。
-enum class Domain : std::uint8_t {
-    /// 烘焙（field）：离线、可阻塞、可分配。
-    field = 0,
-    /// 实时（particle）：每帧执行，禁止阻塞与分配。
-    particle = 1,
-    /// 渲染（render）：纯声明，不求值。
-    render = 2,
-};
-
-[[nodiscard]] constexpr const char* to_string(Domain d) noexcept {
-    switch (d) {
-        case Domain::field: return "field";
-        case Domain::particle: return "particle";
-        case Domain::render: return "render";
-    }
-    return "unknown";
-}
-
 /**
- * @brief 校验选项。
+ * @brief Validation options.
+ *
+ * Note: the `Domain` enum is **not defined here** -- it belongs to `core/graph/domain`
+ * (three-domain semantics are that module's job). An early version defined one
+ * `Domain` of the same name in each module, which became a redefinition error in any
+ * translation unit including both. Domain semantics deserve exactly one definition.
+ *
+ * This module therefore offers domain checking in **parameterized** form: the caller (usually
+ * `core/graph/domain`) maps `Domain` onto the few flags here.
+ * Then validate does not depend on domain, while domain may depend on validate's Report, and
+ * no module cycle exists.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   默认值即"最严格的合理设置"
+ * @invariant   the defaults are "the strictest reasonable setting"
  * @errors      noexcept
- * @frozen      否
+ * @frozen      no
  */
 struct ValidateOptions final {
-    /// 图所在的域。决定域许可检查。
-    Domain domain = Domain::field;
-    /// 是否把"输出端口未连接"视为警告。
+    /// Whether to check a node type's permission for the current domain. Off: no domain check.
+    bool check_domain = false;
+    /// Whether the current domain is allowed to appear in the baked domain.
+    bool domain_allows_field = true;
+    /// Whether the current domain is allowed to appear in the real-time domain.
+    bool domain_allows_particle = true;
+    /// Human-readable domain name, used in error messages.
+    const char* domain_name = "field";
+    /// Whether this domain runs every frame (real-time), for a more accurate hint.
+    bool domain_runs_every_frame = false;
+
+    /// Whether "an output port is unconnected" counts as a warning.
     ///
-    /// 默认 **false**：一片叶子输出不连是正常用法（用户只关心其中一个结果）。
-    /// 打开后适合"实验模板完整性"检查。
+    /// Default **false**: leaving a leaf output unwired is normal (the user wants one result).
+    /// Switching it on suits an "experiment template completeness" check.
     bool warn_unconnected_outputs = false;
-    /// 是否要求所有必需参数就位。默认 true。
+    /// Whether every required parameter must be present. Default true.
     bool require_required_params = true;
 };
 
 /**
- * @brief 校验整张图。
+ * @brief Validate the whole graph.
  *
- * 只读：调用前后图与版本号**完全不变**（有测试断言）。
+ * Read-only: graph and version are **completely unchanged** by the call (a test asserts this).
  *
- * @ownership   borrows（只读 g 与 ctx）
+ * @ownership   borrows (read-only g and ctx)
  * @thread      main
  * @pre         ctx.valid()
- * @post        返回的 Report 汇总**全部**发现的问题，而不是第一个
- * @invariant   校验不修改图；同一张图两次校验得到相同结果
+ * @post        the returned Report aggregates **all** problems found, not just the first
+ * @invariant   validation does not modify the graph; two runs on one graph agree
  * @errors      noexcept
  * @complexity  O(V + E)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       graph.validate.ok_on_consistent_graph,
  *              graph.validate.rejects_unknown_node_type,
  *              graph.validate.rejects_missing_port,
@@ -116,20 +116,20 @@ struct ValidateOptions final {
                                     const ValidateOptions& options = {});
 
 /**
- * @brief 校验"能不能把这条边接上去"，用于连线前的预演。
+ * @brief Check "can this edge be attached", for previewing before wiring.
  *
- * 与 `validate_graph` 的区别：它回答的是**单个动作**能否执行，
- * 因此 `core/graph/mutate` 可以在真正改图之前给出理由。
+ * Unlike `validate_graph`, it answers whether a **single action** may be performed, so
+ * `core/graph/mutate` can give a reason before actually mutating the graph.
  *
  * @ownership   borrows
  * @thread      main
  * @pre         ctx.valid()
- * @post        返回空 Report 表示可以连；否则给出拒绝原因
- * @invariant   不修改图
+ * @post        an empty Report means the edge may be made; otherwise the rejection reason
+ * @invariant   does not modify the graph
  * @errors      noexcept
  * @complexity  O(V + E)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       graph.validate.check_edge_ok, graph.validate.check_edge_rejects_mismatch,
  *              graph.validate.check_edge_rejects_unknown_ports
  */

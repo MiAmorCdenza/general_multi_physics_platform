@@ -1,11 +1,11 @@
 /**
  * @file test_eval.cpp
- * @brief core/graph/eval 的单元与性质测试。
+ * @brief Unit and property tests for core/graph/eval.
  *
- * 三组重点：
- *   1. **哈希的确定性**：不依赖地址、时间、实现定义的 std::hash
- *   2. **缓存键的判别力**：世代号、端口号、参数变化都必须导致不同的键
- *   3. **求值的确定性**：同一图两次求值给出逐位相同结果
+ * Three areas of emphasis:
+ *   1. **Hash determinism**: independent of addresses, time and implementation-defined std::hash
+ *   2. **Cache-key discrimination**: generation, port number and parameter changes give other keys
+ *   3. **Evaluation determinism**: evaluating the same graph twice gives bit-identical results
  */
 #include <catch2/catch_test_macros.hpp>
 
@@ -22,7 +22,7 @@ namespace {
 
 using qp::ports::Value;
 
-/// @brief 简单可用的节点目录。
+/// @brief A simple, usable node catalog.
 class FakeCatalog final : public INodeCatalog {
 public:
     void add(NodeDesc d) { descs_.push_back(std::move(d)); }
@@ -53,7 +53,7 @@ private:
     return p;
 }
 
-/// @brief 常量节点：输出参数 1 的值。无输入。
+/// @brief Constant node: outputs the value of parameter 1. No inputs.
 [[nodiscard]] NodeDesc make_const() {
     NodeDesc d{};
     d.type_name = "const";
@@ -63,7 +63,7 @@ private:
     return d;
 }
 
-/// @brief 加法节点：输出 = 输入1 + 输入2。
+/// @brief Add node: output = input1 + input2.
 [[nodiscard]] NodeDesc make_add() {
     NodeDesc d{};
     d.type_name = "add";
@@ -74,7 +74,7 @@ private:
     return d;
 }
 
-/// @brief 倍率节点：输出 = 输入1 × 参数1。
+/// @brief Scale node: output = input1 x parameter1.
 [[nodiscard]] NodeDesc make_scale() {
     NodeDesc d{};
     d.type_name = "scale";
@@ -85,7 +85,7 @@ private:
     return d;
 }
 
-/// @brief 会失败的节点：用于验证错误传播。
+/// @brief A node that fails: used to verify error propagation.
 [[nodiscard]] NodeDesc make_failing() {
     NodeDesc d{};
     d.type_name = "failing";
@@ -95,7 +95,7 @@ private:
     return d;
 }
 
-/// @brief 计数求值器：记录被调用次数，用来证明缓存真的生效。
+/// @brief Counting evaluator: records how often it is called, proving the cache really works.
 class CountingEvaluator final : public INodeEvaluator {
 public:
     [[nodiscard]] Result<std::vector<std::pair<PortNumber, Value>>> evaluate(
@@ -134,7 +134,7 @@ public:
     std::vector<std::pair<PortNumber, Value>> last_inputs;
 };
 
-/// @brief 测试场景。与 validate 的 Scene 同理：不可移动，用 setup 填充。
+/// @brief Test scene. As with validate's Scene: not movable, filled in by setup.
 struct Scene {
     Graph g;
     FakeCatalog catalog;
@@ -180,20 +180,20 @@ struct Scene {
     name.setup()
 
 }  // namespace
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // value_key.hpp
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 
 TEST_CASE("graph.eval.hash_is_fnv1a", "[graph][eval]") {
-    // FNV-1a 的已知值："a" 的哈希是 0xaf63dc4c8601ec8c
+    // A known FNV-1a value: the hash of "a" is 0xaf63dc4c8601ec8c
     const char* a = "a";
     const ValueHash h = mix_bytes(kFnvOffsetBasis, a, 1);
     REQUIRE(h == 0xaf63dc4c8601ec8cULL);
 
-    // 空输入不改变种子
+    // An empty input does not change the seed
     REQUIRE(mix_bytes(kFnvOffsetBasis, a, 0) == kFnvOffsetBasis);
 
-    // 多字节："foobar" 是 FNV-1a 64 的标准测试向量
+    // Multi-byte: "foobar" is the standard FNV-1a 64 test vector
     const char* foobar = "foobar";
     REQUIRE(mix_bytes(kFnvOffsetBasis, foobar, 6) == 0x85944171f73967e8ULL);
 }
@@ -202,7 +202,7 @@ TEST_CASE("graph.eval.hash_of_empty_is_seed", "[graph][eval]") {
     REQUIRE(mix_bytes(kFnvOffsetBasis, nullptr, 0) == kFnvOffsetBasis);
     const char dummy = 0;
     REQUIRE(mix_bytes(kFnvOffsetBasis, &dummy, 0) == kFnvOffsetBasis);
-    REQUIRE(mix_u64(kFnvOffsetBasis, 0) != kFnvOffsetBasis);   // 混入一个 0 也会变
+    REQUIRE(mix_u64(kFnvOffsetBasis, 0) != kFnvOffsetBasis);   // mixing in a 0 changes it too
 }
 
 TEST_CASE("graph.eval.hash_is_deterministic", "[graph][eval][property]") {
@@ -215,7 +215,7 @@ TEST_CASE("graph.eval.hash_is_deterministic", "[graph][eval][property]") {
         const ValueHash a = hash_value(kFnvOffsetBasis, v);
         const ValueHash b = hash_value(kFnvOffsetBasis, v);
         REQUIRE(a == b);
-        // 不同种子给出不同结果（否则哈希没有区分力）
+        // A different seed gives a different result (otherwise the hash discriminates nothing)
         const ValueHash c = hash_value(0, v);
         INFO("v.kind=" << v.kind_name());
         REQUIRE(c != a);
@@ -223,7 +223,7 @@ TEST_CASE("graph.eval.hash_is_deterministic", "[graph][eval][property]") {
 }
 
 TEST_CASE("graph.eval.hash_value_kind_discriminates", "[graph][eval]") {
-    // 不同种类的值绝不能给出同一哈希：种类标签先行混入
+    // Different value kinds must never hash alike: the kind tag is mixed in first
     const Value f64{1.0};
     const Value f32{1.0f};
     const Value i64{std::int64_t{1}};
@@ -245,16 +245,16 @@ TEST_CASE("graph.eval.hash_value_kind_discriminates", "[graph][eval]") {
 }
 
 TEST_CASE("graph.eval.hash_value_f32_f64_differ", "[graph][eval]") {
-    // 1.0 的 f32 与 f64 表示字节不同，因此哈希必须不同
+    // The f32 and f64 representations of 1.0 use different bytes, so the hashes must differ
     REQUIRE(hash_value(kFnvOffsetBasis, Value{1.0}) !=
             hash_value(kFnvOffsetBasis, Value{1.0f}));
-    // 1.5 在两种精度下都精确可表示，但字节宽度不同 → 哈希仍不同
+    // 1.5 is exactly representable at both precisions, but the byte width differs -> hashes differ
     REQUIRE(hash_value(kFnvOffsetBasis, Value{1.5}) !=
             hash_value(kFnvOffsetBasis, Value{1.5f}));
 }
 
 TEST_CASE("graph.eval.hash_field_uses_lattice", "[graph][eval]") {
-    // 场走标识：按格子描述符哈希，不逐字节哈希数据
+    // Fields go by identity: hash the lattice descriptor, not the data byte by byte
     const auto small = qp::abi::make_lattice(qp::abi::LatticeKind::line,
                                              qp::abi::ComponentKind::scalar,
                                              qp::abi::ElementType::f32, qp::abi::FieldDim{}, 8);
@@ -268,7 +268,7 @@ TEST_CASE("graph.eval.hash_field_uses_lattice", "[graph][eval]") {
 }
 
 TEST_CASE("graph.eval.hash_port_number_matters", "[graph][eval]") {
-    // {1: 2.0} 与 {2: 2.0} 必须不同：否则"把线从端口 1 挪到端口 2"会命中同一缓存
+    // {1: 2.0} and {2: 2.0} must differ, or moving a wire from port 1 to port 2 hits the same cache
     const std::vector<std::pair<PortNumber, Value>> a{{1, Value{2.0}}};
     const std::vector<std::pair<PortNumber, Value>> b{{2, Value{2.0}}};
     REQUIRE(hash_port_values(kFnvOffsetBasis, a) != hash_port_values(kFnvOffsetBasis, b));
@@ -277,7 +277,7 @@ TEST_CASE("graph.eval.hash_port_number_matters", "[graph][eval]") {
 TEST_CASE("graph.eval.hash_order_matters", "[graph][eval]") {
     const std::vector<std::pair<PortNumber, Value>> a{{1, Value{1.0}}, {2, Value{2.0}}};
     const std::vector<std::pair<PortNumber, Value>> b{{2, Value{2.0}}, {1, Value{1.0}}};
-    // 顺序敏感是**刻意的**：键构造方负责先排序，而不是让哈希"猜"语义
+    // Order sensitivity is **deliberate**: the key builder sorts first, the hash never guesses semantics
     REQUIRE(hash_port_values(kFnvOffsetBasis, a) != hash_port_values(kFnvOffsetBasis, b));
 }
 
@@ -291,8 +291,8 @@ TEST_CASE("graph.eval.canonical_text_is_stable", "[graph][eval]") {
         REQUIRE_FALSE(a.empty());
         REQUIRE(canonical_text(v) == a);
     }
-    // 浮点用 %a（十六进制浮点）：精确且不受 locale 影响。
-    // 1.5 = 1×2^0 + 1×2^-1 → 0x1.8p+0
+    // Floats use %a (hexadecimal float): exact and unaffected by locale.
+    // 1.5 = 1x2^0 + 1x2^-1 -> 0x1.8p+0
     REQUIRE(canonical_text(Value{1.5}) == "f64:0x1.8p+0");
     REQUIRE(canonical_text(Value{1.0}) == "f64:0x1p+0");
     REQUIRE(canonical_text(Value{0.5}) == "f64:0x1p-1");
@@ -301,16 +301,16 @@ TEST_CASE("graph.eval.canonical_text_is_stable", "[graph][eval]") {
 }
 
 TEST_CASE("graph.eval.canonical_text_discriminates", "[graph][eval]") {
-    // 文本不同 ⟺ 值不同。这是"哈希碰撞不会导致错误命中"的基础。
+    // Different text <=> different value. The basis for "a hash collision cannot cause a wrong hit".
     //
-    // 关键案例：0.1 + 0.2 与字面量 0.3 在 double 下**不相等**。
-    // 早期实现用 %.17g，它把两者都输出成 "0.3"——
-    // 于是缓存键的精确比较会把两个不同的计算当成同一次。
-    // 改用 %a（十六进制浮点）后两者可区分。
+    // The key case: 0.1 + 0.2 and the literal 0.3 are **not equal** as doubles.
+    // An early implementation used %.17g, which printed both as "0.3" --
+    // so the cache key's exact comparison treated two different computations as one.
+    // Switching to %a (hexadecimal float) makes them distinguishable.
     //
-    // 注意 volatile：不加它，编译器（FLT_EVAL_METHOD == 2 的 32 位工具链）
-    // 会在扩展精度下折叠常量，使 0.1+0.2 恰好等于 0.3。
-    // 加 volatile 强制它走一次真正的 double 舍入。
+    // Note the volatile: without it the compiler (a 32-bit FLT_EVAL_METHOD == 2 toolchain)
+    // folds the constants at extended precision, making 0.1+0.2 exactly equal 0.3.
+    // volatile forces one real double rounding.
     volatile double a = 0.1;
     volatile double b = 0.2;
     const double sum_rt = a + b;
@@ -321,9 +321,9 @@ TEST_CASE("graph.eval.canonical_text_discriminates", "[graph][eval]") {
     REQUIRE(canonical_text(Value{true}) != canonical_text(Value{std::int64_t{1}}));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // cache.hpp
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 
 TEST_CASE("graph.eval.cache_key_equality", "[graph][eval]") {
     CacheKey a{};
@@ -347,19 +347,19 @@ TEST_CASE("graph.eval.cache_key_equality", "[graph][eval]") {
 }
 
 TEST_CASE("graph.eval.cache_key_generation_matters", "[graph][eval]") {
-    // 这是旧工程 `id(lattice)` 缺陷的修复落点。
-    // 槽位复用后世代不同 → 键不同 → 不会命中旧节点的缓存。
+    // This is where the old project's `id(lattice)` defect is fixed.
+    // A reused slot has a different generation -> a different key -> no hit on the old cache.
     CacheKey old_key{};
     old_key.node = NodeId{3, 1};
     old_key.content = 42;
     CacheKey new_key{};
-    new_key.node = NodeId{3, 2};   // 同一槽位，新世代
-    new_key.content = 42;          // 内容哈希碰巧相同
+    new_key.node = NodeId{3, 2};   // the same slot, a new generation
+    new_key.content = 42;          // the content hash happens to be equal
     REQUIRE_FALSE(old_key.equals(new_key));
 }
 
 TEST_CASE("graph.eval.cache_key_param_change_differs", "[graph][eval]") {
-    // 参数变化 → 内容哈希变化 → 键不同
+    // A parameter change -> a different content hash -> a different key
     const std::vector<std::pair<PortNumber, Value>> p1{{1, Value{1.0}}};
     const std::vector<std::pair<PortNumber, Value>> p2{{1, Value{2.0}}};
     CacheKey a{};
@@ -394,7 +394,7 @@ TEST_CASE("graph.eval.cache_store_and_fetch", "[graph][eval]") {
     REQUIRE(e->outputs.front().second.as_f64() == 2.5);
     REQUIRE(c.hits() == 1);
 
-    // 覆盖写
+    // Overwrite
     c.put(k, {{1, Value{9.0}}});
     REQUIRE(c.size() == 1);
     REQUIRE(c.find(k)->outputs.front().second.as_f64() == 9.0);
@@ -416,16 +416,16 @@ TEST_CASE("graph.eval.cache_eviction_lru", "[graph][eval]") {
     c.put(b, {{1, Value{2.0}}});
     REQUIRE(c.size() == 2);
 
-    // 访问 a 让它变"最近使用"
+    // Touching a makes it "most recently used"
     REQUIRE(c.find(a) != nullptr);
 
-    // 插入第三个 → 淘汰最久未使用的 b
+    // Inserting a third -> evict the least recently used, b
     c.put(d, {{1, Value{3.0}}});
     REQUIRE(c.size() == 2);
     REQUIRE(c.evictions() == 1);
-    REQUIRE(c.find(a) != nullptr);   // a 被访问过，保留
+    REQUIRE(c.find(a) != nullptr);   // a was touched, so it stays
     REQUIRE(c.find(d) != nullptr);
-    REQUIRE(c.find(b) == nullptr);   // b 被淘汰
+    REQUIRE(c.find(b) == nullptr);   // b was evicted
 }
 
 TEST_CASE("graph.eval.cache_disabled_when_zero", "[graph][eval]") {
@@ -447,7 +447,7 @@ TEST_CASE("graph.eval.cache_clear", "[graph][eval]") {
     REQUIRE(c.size() == 1);
     c.clear();
     REQUIRE(c.size() == 0);
-    // 统计量保留（它们是累计观察量，不是瞬时状态）
+    // Statistics are kept (they are cumulative observations, not instantaneous state)
     REQUIRE(c.capacity() == 4);
 }
 
@@ -468,9 +468,9 @@ TEST_CASE("graph.eval.cache_stats_are_consistent", "[graph][eval]") {
 }
 
 TEST_CASE("graph.eval.cache_undo_redo_hits", "[graph][eval]") {
-    // 撤销回上一步 → 之前的键重新出现 → **立刻命中**。
-    // 这是内容寻址相对"版本号失效"的关键优势：
-    // 课堂演示里撤销/重做是高频操作，每次重算会打断节奏。
+    // Undoing one step -> the previous key reappears -> an **immediate hit**.
+    // This is the key advantage of content addressing over "invalidate by version":
+    // undo/redo is frequent in a classroom demo, and recomputing every time breaks the flow.
     EvalCache c{16};
     CacheKey before{};
     before.node = NodeId{1, 1};
@@ -481,16 +481,16 @@ TEST_CASE("graph.eval.cache_undo_redo_hits", "[graph][eval]") {
 
     c.put(before, {{1, Value{1.0}}});
     c.put(after, {{1, Value{2.0}}});
-    // 撤销后回到 before 的键
+    // After the undo we are back at before's key
     const CacheEntry* e = c.find(before);
     REQUIRE(e != nullptr);
     REQUIRE(e->outputs.front().second.as_f64() == 1.0);
-    REQUIRE(c.evictions() == 0);   // 两个键都在，没有被淘汰
+    REQUIRE(c.evictions() == 0);   // both keys are present, nothing was evicted
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // evaluator.hpp
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 
 TEST_CASE("graph.eval.single_node", "[graph][eval]") {
     QP_EVAL_SCENE(s);
@@ -539,16 +539,16 @@ TEST_CASE("graph.eval.deterministic_across_runs", "[graph][eval]") {
     REQUIRE(s.run());
     const double first = s.result.get(sum, 1).as_f64();
 
-    // 清空缓存后重算，结果必须**逐位相同**。
-    // 注意不要在这里写 == 0.1 + 0.2：那会触发浮点常量折叠，
-    // 而本机是 FLT_EVAL_METHOD == 2 的 32 位工具链（见
-    // standards/test-taxonomy.md §5.1），编译期与运行期求值可能不同。
+    // Recompute after clearing the cache: the result must be **bit-identical**.
+    // Note: do not write == 0.1 + 0.2 here -- that triggers float constant folding,
+    // and this machine is a 32-bit FLT_EVAL_METHOD == 2 toolchain (see
+    // standards/test-taxonomy.md section 5.1), so compile-time and run-time evaluation can differ.
     s.cache.clear();
     REQUIRE(s.run());
     const double second = s.result.get(sum, 1).as_f64();
     REQUIRE(first == second);
-    // 与另算一遍的同一个表达式比较。用 volatile 保证两侧都在运行期求值
-    // （常量折叠会在扩展精度下算，见 standards/test-taxonomy.md §5.1）。
+    // Compare against the same expression computed separately. volatile keeps both sides
+    // at run time (constant folding would use extended precision; see test-taxonomy section 5.1).
     volatile double v1 = 0.1;
     volatile double v2 = 0.2;
     const double expected = v1 + v2;
@@ -564,15 +564,15 @@ TEST_CASE("graph.eval.cache_hit_on_second_run", "[graph][eval]") {
     REQUIRE(s.evaluator.compute_count == 1);
     REQUIRE(s.result.get(c, 1).as_f64() == 1.0);
 
-    // 第二次：键不变 → 命中缓存，实现不再被调用
+    // Second run: the key is unchanged -> cache hit, the implementation is not called
     REQUIRE(s.run());
     REQUIRE(s.evaluator.compute_count == 1);
     REQUIRE(s.result.get(c, 1).as_f64() == 1.0);
 }
 
 TEST_CASE("graph.eval.param_change_invalidates_only_downstream", "[graph][eval]") {
-    // 三个独立分支：改一个参数只应让**那一条链**重算。
-    // 这是内容寻址相对"版本号失效"的核心价值。
+    // Three independent branches: changing one parameter should recompute **only that chain**.
+    // This is the core value of content addressing over "invalidate by version".
     QP_EVAL_SCENE(s);
     const NodeId a = s.add_node("const", "a");
     const NodeId t1 = s.add_node("scale", "t1");
@@ -589,18 +589,18 @@ TEST_CASE("graph.eval.param_change_invalidates_only_downstream", "[graph][eval]"
     const std::size_t after_first = s.evaluator.compute_count;
     REQUIRE(after_first == 4);
 
-    // 只改 a 的参数
+    // Change only a's parameter
     s.set(a, 1, 5.0);
     REQUIRE(s.run());
-    // a 与 t1 重算（2 次）；b 与 t2 命中缓存
+    // a and t1 recompute (2 calls); b and t2 hit the cache
     REQUIRE(s.evaluator.compute_count == after_first + 2);
     REQUIRE(s.result.get(t1, 1).as_f64() == 50.0);
-    REQUIRE(s.result.get(t2, 1).as_f64() == 300.0);   // 仍是旧值（b 未变）
+    REQUIRE(s.result.get(t2, 1).as_f64() == 300.0);   // still the old value (b did not change)
 }
 
 TEST_CASE("graph.eval.diamond_evaluates_once", "[graph][eval]") {
-    // 菱形：a → t1 → sum，a → t2 → sum。
-    // 拓扑序保证 a 只被访问一次，因此只算一次。
+    // Diamond: a -> t1 -> sum, a -> t2 -> sum.
+    // Topological order guarantees a is visited once, hence computed once.
     QP_EVAL_SCENE(s);
     const NodeId a = s.add_node("const", "a");
     const NodeId t1 = s.add_node("scale", "t1");
@@ -615,7 +615,7 @@ TEST_CASE("graph.eval.diamond_evaluates_once", "[graph][eval]") {
     s.wire(t2, 1, sum, 2);
 
     REQUIRE(s.run());
-    REQUIRE(s.evaluator.const_count == 1);        // a 只算了一次
+    REQUIRE(s.evaluator.const_count == 1);        // a was computed only once
     REQUIRE(s.result.get(sum, 1).as_f64() == 16.0);   // 6 + 10
     REQUIRE(s.evaluator.compute_count == 4);
 }
@@ -625,17 +625,17 @@ TEST_CASE("graph.eval.bypass_passthrough", "[graph][eval]") {
     const NodeId a = s.add_node("const", "a");
     const NodeId sc = s.add_node("scale", "sc");
     s.set(a, 1, 4.0);
-    s.set(sc, 2, 100.0);   // 若参与计算会变成 400
+    s.set(sc, 2, 100.0);   // would become 400 if it took part in the computation
     s.wire(a, 1, sc, 1);
 
-    // 绕过：不调用实现，把输入透传到输出
+    // Bypass: do not call the implementation, pass the inputs straight through to the outputs
     s.g.find_node_mutable(sc)->bypassed = true;
     s.g.bump_version();
 
     const auto r = s.run();
     REQUIRE(r);
     REQUIRE(r.value().nodes_skipped == 1);
-    REQUIRE(s.result.get(sc, 1).as_f64() == 4.0);   // 未乘 100
+    REQUIRE(s.result.get(sc, 1).as_f64() == 4.0);   // not multiplied by 100
 }
 
 TEST_CASE("graph.eval.unknown_type_fails", "[graph][eval]") {
@@ -648,8 +648,8 @@ TEST_CASE("graph.eval.unknown_type_fails", "[graph][eval]") {
 }
 
 TEST_CASE("graph.eval.missing_param_fails", "[graph][eval]") {
-    // 常量节点没设参数 → 输入是无效值 → 实现返回无效值（ak 0.0），
-    // 本身不报错。这条用例验证的是"未设参数不会崩溃"。
+    // A const node with no parameter set -> an invalid input value -> the implementation
+    // returns an invalid value (i.e. 0.0) and does not error. This case checks "no crash".
     QP_EVAL_SCENE(s);
     const NodeId c = s.add_node("const", "c");
 
@@ -697,7 +697,7 @@ TEST_CASE("graph.eval.result_lookup", "[graph][eval]") {
     REQUIRE(r.get(NodeId{1, 1}, 1).as_f64() == 1.0);
     REQUIRE(r.get(NodeId{1, 1}, 2).as_f64() == 2.0);
     REQUIRE(r.get(NodeId{2, 1}, 1).as_f64() == 3.0);
-    // 端口号是键的一部分
+    // The port number is part of the key
     REQUIRE_FALSE(r.get(NodeId{1, 1}, 3).valid());
     REQUIRE_FALSE(r.get(NodeId{9, 9}, 1).valid());
 }

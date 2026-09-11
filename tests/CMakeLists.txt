@@ -1,17 +1,20 @@
-# 测试：八类测试的分类落在目录结构上（standards/test-taxonomy.md）
+# Tests: the eight test categories map onto the directory structure (standards/test-taxonomy.md)
 #
-#   unit/       第 1 类 单元 + 第 3 类 性质（用 [property] tag 标记）
-#   abi/        第 2 类 静态布局契约
-#   golden/     第 4 类 黄金回归
-#   determinism/ 第 5 类 确定性
-#   contract/   第 8 类 契约合规套件
-#   smoke/      core 独立性证明
-#   meta/       门禁自身的测试
+#   unit/        category 1 unit + category 3 property (marked with the [property] tag)
+#   abi/         category 2 static layout contract
+#   golden/      category 4 golden regression
+#   determinism/ category 5 determinism
+#   contract/    category 8 contract compliance suite
+#   smoke/      proof that core stands alone
+#   meta/       tests of the gates themselves
 #
-# 不使用 Catch2 的自动发现（Catch2Main 自行注册用例），因此每个可执行文件
-# 只需向 CTest 注册一次。
+# Catch2's automatic discovery is not used (Catch2Main registers the cases itself), so each
+# executable only needs to be registered with CTest once.
 
-# Catch2 的 extras 模块提供 catch_discover_tests
+# Shared test entry point: turns off the MSVC debug runtime's abort dialog (see that file).
+set(QP_TEST_MAIN ${CMAKE_CURRENT_SOURCE_DIR}/support/test_main.cpp)
+
+# Catch2's extras module provides catch_discover_tests
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/external/Catch2/extras")
 if(EXISTS "${CMAKE_SOURCE_DIR}/external/Catch2/extras/Catch.cmake")
     include(Catch)
@@ -23,10 +26,10 @@ else()
     endif()
 endif()
 
-# ── Python 解释器（门禁脚本需要）────────────────────────────────────────────
+# -- Python interpreter (the gate scripts need it) ---------------------------
 find_package(Python3 COMPONENTS Interpreter QUIET)
 
-# ── 契约完备性门禁（enforcement.md §5）──────────────────────────────────────
+# -- Contract completeness gate (enforcement.md §5) --------------------------
 if(Python3_Interpreter_FOUND)
     add_test(NAME gate.contracts
         COMMAND ${Python3_EXECUTABLE}
@@ -41,29 +44,35 @@ else()
     message(WARNING "未找到 Python3，跳过 gate.contracts（契约门禁未启用）")
 endif()
 
-# ── 测试目标 ─────────────────────────────────────────────────────────────────
+# -- Test targets -------------------------------------------------------------
 #
-# 用 catch_discover_tests 而不是 add_test(COMMAND <exe>)：
-#   注册到 CTest 的是**每个 TEST_CASE**，而不是整个可执行文件。
-#   收益：CI 日志直接点名失败用例；可按 [property] / [golden] 等 tag 过滤；
-#         失败粒度与契约 @tests 的粒度对齐（契约里写的就是 TEST_CASE id）。
+# catch_discover_tests instead of add_test(COMMAND <exe>):
+#   what gets registered with CTest is **each TEST_CASE**, not the whole executable.
+#   Benefits: the CI log names the failing case; filtering by [property] / [golden] works;
+#         the failure granularity matches the contract @tests granularity (contracts name TEST_CASE ids).
 #
-# 每个可执行文件额外保留一个 <target>.all 聚合测试，便于本地快速全跑。
+# Each executable also keeps a <target>.all aggregate test for a fast local full run.
+#
+# Catch2::Catch2 plus a custom main (not Catch2WithMain):
+#   the death test deliberately calls abort(), and the MSVC debug runtime turns abort() into a
+#   **modal dialog**, so the process blocks until someone clicks a button -- automation hangs forever.
+#   tests/support/test_main.cpp turns that dialog off (keeping the diagnostic text on stderr).
 function(qp_add_test target)
     cmake_parse_arguments(ARG "" "" "SOURCES;LIBS;LABELS" ${ARGN})
     if(NOT ARG_LABELS)
         set(ARG_LABELS "unit")
     endif()
 
-    add_executable(${target} ${ARG_SOURCES})
-    target_link_libraries(${target} PRIVATE qp::units Catch2::Catch2WithMain ${ARG_LIBS})
+    add_executable(${target} ${ARG_SOURCES} ${QP_TEST_MAIN})
+    target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(${target} PRIVATE qp::units Catch2::Catch2 ${ARG_LIBS})
 
     catch_discover_tests(${target}
         TEST_PREFIX "${target}."
         PROPERTIES LABELS "${ARG_LABELS}"
-        ADD_TAGS_AS_LABELS)          # [golden] / [property] 等 tag 直接成为 CTest 标签
+        ADD_TAGS_AS_LABELS)          # tags such as [golden] / [property] become CTest labels directly
 
-    # 聚合测试：一次跑完该可执行文件的全部用例
+    # Aggregate test: run every case of that executable in one go
     add_test(NAME "${target}.all" COMMAND ${target})
     set_tests_properties("${target}.all" PROPERTIES
         LABELS "${ARG_LABELS};aggregate"
@@ -93,26 +102,29 @@ qp_add_test(qp_test_core_standalone
 qp_add_test(qp_test_diag
     SOURCES unit/diag/test_diag.cpp
     LIBS qp::diag)
+qp_add_test(qp_test_diag_log
+    SOURCES unit/diag/test_log.cpp
+    LIBS qp::diag)
 
-# ── 死亡测试：验证"违反 @pre 必然终止进程" ─────────────────────────────────
+# -- Death test: verify that "violating @pre always terminates the process" --
 #
-# 被测用例带 `[.]` 标签（Catch2 hidden），因此 catch_discover_tests 不会
-# 为它注册普通测试项——这一点很重要：否则它会以 SKIP 通过，
-# 掩盖"死亡测试根本没跑"这个事实。
+# The case under test carries the `[.]` tag (Catch2 hidden), so catch_discover_tests does not
+# register an ordinary test for it -- and that matters: otherwise it would pass as SKIP and
+# hide the fact that the death test never ran.
 #
-# 这里的判据是**进程退出码**：
-#   - 用 PASS_REGULAR_EXPRESSION 要求终止原因确实是契约违反，
-#     否则任意崩溃都会让这个测试"通过"。
-#   - 同时要求 Catch2 报出"没有失败断言"——即进程是被 terminate 掉的，
-#     而不是某个 REQUIRE 失败导致的非零退出。
+# The criterion here is the **process exit code**:
+#   - PASS_REGULAR_EXPRESSION requires the termination reason to really be a contract violation,
+#     otherwise any crash would make this test "pass".
+#   - It also requires Catch2 to report "no failed assertions" -- that is, the process was
+#     terminated rather than exiting non-zero because some REQUIRE failed.
 add_test(NAME qp_test_diag.death.contract_violation
     COMMAND ${CMAKE_COMMAND} -E env QP_TEST_SELF=$<TARGET_FILE:qp_test_diag>
             $<TARGET_FILE:qp_test_diag> "diag.contract.violation_terminates")
 set_tests_properties(qp_test_diag.death.contract_violation PROPERTIES
     LABELS "unit;death"
-    PASS_REGULAR_EXPRESSION "契约违反")
+    PASS_REGULAR_EXPRESSION "contract violation")
 
-# ── 层级依赖门禁（enforcement.md §4）───────────────────────────────────────
+# -- Layer dependency gate (enforcement.md §4) ------------------------------
 if(Python3_Interpreter_FOUND)
     add_test(NAME gate.layers
         COMMAND ${Python3_EXECUTABLE}
@@ -129,7 +141,48 @@ if(Python3_Interpreter_FOUND)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 endif()
 
-# ── 门禁自身的测试（enforcement.md §8）─────────────────────────────────────
+# -- Code dialect gate (code-dialect.md §6) ---------------------------------
+# D1 pictographs / D2 source comments must be ASCII English / D3 no non-ASCII graphics in comments.
+#
+# The baseline is zero (127 files, 0 violations), so this is registered as a mandatory gate.
+# Before that it was registered as the meta self-check only, on purpose: an always-red gate gets
+# ignored, and "no gate" and "a red gate" are two different failures that must not be confused.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME gate.dialect
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_dialect.py --quiet)
+    set_tests_properties(gate.dialect PROPERTIES
+        LABELS "gate"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+    add_test(NAME meta.dialect_checker
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/meta/check_dialect_gate.py)
+    set_tests_properties(meta.dialect_checker PROPERTIES
+        LABELS "gate"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+endif()
+
+# -- File encoding gate (line endings, UTF-8, .ps1 BOM) ---------------------
+# The compiler checks none of these three, but each has really bitten this project: Chinese
+# comments saved as GBK, CRLF polluting a golden comparison, and a BOM-less .ps1 decoded as ANSI by PowerShell 5.1.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME gate.encoding
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_encoding.py --quiet)
+    set_tests_properties(gate.encoding PROPERTIES
+        LABELS "gate"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+    add_test(NAME meta.encoding_checker
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/meta/check_encoding_gate.py)
+    set_tests_properties(meta.encoding_checker PROPERTIES
+        LABELS "gate"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+endif()
+
+# -- Tests of the gates themselves (enforcement.md §8) ----------------------
 if(Python3_Interpreter_FOUND)
     add_test(NAME meta.contract_checker
         COMMAND ${Python3_EXECUTABLE}
@@ -139,8 +192,8 @@ if(Python3_Interpreter_FOUND)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 endif()
 
-# ── ABI 布局断言（enforcement.md §7）────────────────────────────────────────
-# 需要同时链接 units：用于守住 abi::FieldDim 与 units::Dim 的一致性。
+# -- ABI layout assertions (enforcement.md §7) -------------------------------
+# Must also link units: this guards the consistency of abi::FieldDim and units::Dim.
 qp_add_test(qp_test_abi_layout
     SOURCES abi/test_abi_layout.cpp
     LIBS qp::abi qp::units
@@ -163,3 +216,12 @@ qp_add_test(qp_test_graph_validate
 qp_add_test(qp_test_graph_eval
     SOURCES unit/graph/test_eval.cpp
     LIBS qp::graph_eval)
+qp_add_test(qp_test_graph_domain
+    SOURCES unit/graph/test_domain.cpp
+    LIBS qp::graph_domain)
+qp_add_test(qp_test_graph_field
+    SOURCES unit/graph/test_field.cpp
+    LIBS qp::field)
+qp_add_test(qp_test_graph_kernels
+    SOURCES unit/graph/test_kernels.cpp
+    LIBS qp::graph_kernels)

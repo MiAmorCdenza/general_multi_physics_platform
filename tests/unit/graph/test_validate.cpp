@@ -1,12 +1,12 @@
 /**
  * @file test_validate.cpp
- * @brief core/graph/validate 的单元与性质测试。
+ * @brief Unit and property tests for core/graph/validate.
  *
- * 用一个假的节点目录 + 真实的内置端口类型表构造场景。
- * 重点：
- *   1. `same_as_input` 的**量纲解析**——只有看到整张图才能完成的那一步
- *   2. **一次报全部问题**，而不是在第一个错误处停下
- *   3. 校验是**只读**的：调用前后图与版本号完全不变
+ * Scenarios are built from a fake node catalog + the real built-in port type table.
+ * Focus:
+ *   1. **Dimension resolution** of `same_as_input` -- the step that needs the whole graph in view
+ *   2. **Reporting every problem at once**, instead of stopping at the first error
+ *   3. Validation is **read-only**: the graph and its version are completely unchanged across the call
  */
 #include <catch2/catch_test_macros.hpp>
 
@@ -24,7 +24,7 @@ using qp::ports::DimensionConstraint;
 using qp::ports::NumericKind;
 using qp::ports::PortTypeId;
 
-/// @brief 简单可用的节点目录：持有描述，按类型名查找。
+/// @brief A simple usable node catalog: owns descriptions and looks them up by type name.
 class FakeCatalog final : public INodeCatalog {
 public:
     void add(NodeDesc d) { descs_.push_back(std::move(d)); }
@@ -38,7 +38,7 @@ public:
     [[nodiscard]] std::size_t size() const noexcept override { return descs_.size(); }
 
 private:
-    // deque：push_back 不使已有元素的地址失效（vector 会）
+    // deque: push_back does not invalidate the address of existing elements (vector does)
     std::deque<NodeDesc> descs_;
 };
 
@@ -60,11 +60,11 @@ private:
     return p;
 }
 
-/// @brief 建一个测试用的类型表：加入若干带具体量纲的标量类型。
+/// @brief Build a type table for the tests: adds several scalar types with concrete dimensions.
 ///
-/// 不用构造函数填充而用成员函数：`PortTypeRegistry` 不可拷贝也不可移动，
-/// 因此 `Types` 也不能移动，`Scene` 因而不能按值返回。
-/// 让调用方先构造 `Scene` 再调用本函数，就避开了整条移动链。
+/// A member function rather than a constructor fill: `PortTypeRegistry` is neither copyable nor movable,
+/// so `Types` cannot move either, and `Scene` therefore cannot be returned by value.
+/// Having the caller construct `Scene` first and then call this function sidesteps the whole move chain.
 struct Types {
     qp::ports::PortTypeRegistry reg;
 
@@ -103,7 +103,7 @@ private:
     }
 };
 
-/// @brief 一个"源"节点：输出一个具体量纲。
+/// @brief A "source" node: outputs one concrete dimension.
 [[nodiscard]] NodeDesc make_source(const char* type, PortTypeId out_type) {
     NodeDesc d{};
     d.type_name = type;
@@ -112,7 +112,7 @@ private:
     return d;
 }
 
-/// @brief 一个"单位换算/跟随"节点：入一个、出一个 same_as_input。
+/// @brief A "unit conversion / follower" node: one input, one same_as_input output.
 [[nodiscard]] NodeDesc make_follower(const char* type) {
     NodeDesc d{};
     d.type_name = type;
@@ -122,7 +122,7 @@ private:
     return d;
 }
 
-/// @brief 一个"求和"节点：两个输入（any 量纲）、输出跟随输入。
+/// @brief An "adder" node: two inputs (any dimension), output follows the input.
 [[nodiscard]] NodeDesc make_adder(const char* type) {
     NodeDesc d{};
     d.type_name = type;
@@ -133,7 +133,7 @@ private:
     return d;
 }
 
-/// @brief 测试场景：图 + 目录 + 类型表 + 上下文。
+/// @brief Test scenario: graph + catalog + type table + context.
 struct Scene {
     Graph g;
     FakeCatalog catalog;
@@ -157,10 +157,10 @@ struct Scene {
     }
 };
 
-/// @brief 标准场景：长度源 / 加速度源 / 跟随节点 / 加法节点 / 加速度汇。
+/// @brief The standard scenario: length source / acceleration source / follower / adder / acceleration sink.
 ///
-/// 用 `void setup(Scene&)` 而不是"按值返回 Scene"：Scene 里的
-/// `PortTypeRegistry` 不可拷贝也不可移动，因此 Scene 本身不可移动。
+/// A `void setup(Scene&)` instead of "return Scene by value": the `PortTypeRegistry` inside Scene
+/// is neither copyable nor movable, so Scene itself cannot move.
 void setup_scene(Scene& s) {
     s.types.install();
     s.catalog.add(make_source("length_src", Types::length_id));
@@ -175,16 +175,16 @@ void setup_scene(Scene& s) {
     }());
 }
 
-/// @brief 便捷：构造并填充一个场景。
+/// @brief Convenience: construct a scenario and fill it in.
 #define QP_SCENE(name) \
     Scene name;        \
     setup_scene(name)
 
 }  // namespace
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // report.hpp
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 
 TEST_CASE("graph.validate.report_ok", "[graph][validate]") {
     Report r;
@@ -194,7 +194,7 @@ TEST_CASE("graph.validate.report_ok", "[graph][validate]") {
     REQUIRE(r.worst() == Severity::info);
 
     r.warn(ErrorCode::not_connected, "只是警告");
-    REQUIRE(r.ok());                      // 警告不阻止加载
+    REQUIRE(r.ok());                      // a warning does not block loading
     REQUIRE(r.worst() == Severity::warning);
 
     r.error(ErrorCode::dimension_mismatch, "这是错误");
@@ -224,7 +224,7 @@ TEST_CASE("graph.validate.issue_text", "[graph][validate]") {
     REQUIRE(text.find("out1") != std::string::npos);
     REQUIRE(text.find("量纲不一致") != std::string::npos);
     REQUIRE(text.find("检查单位") != std::string::npos);
-    // 幂等
+    // Idempotent
     REQUIRE(i.to_text() == text);
 
     i.severity = Severity::info;
@@ -232,7 +232,7 @@ TEST_CASE("graph.validate.issue_text", "[graph][validate]") {
 }
 
 TEST_CASE("graph.validate.issue_location", "[graph][validate]") {
-    // 定位信息用稳定句柄，不用指针：报告会被缓存、打印、发到别的线程
+    // Locations use stable handles, not pointers: a report gets cached, printed, and sent to other threads
     Report r;
     r.error(ErrorCode::unknown_port, "没有这个端口", NodeId{7, 3}, 2, false, "补一个端口");
     REQUIRE(r.size() == 1);
@@ -245,7 +245,7 @@ TEST_CASE("graph.validate.issue_location", "[graph][validate]") {
 }
 
 TEST_CASE("graph.validate.report_collects_all", "[graph][validate]") {
-    // 一次给全部问题：在第一个错误处停下，用户要改 N 次才能打开实验
+    // Give every problem at once: stopping at the first error costs the user N fixes to open an experiment
     Report r;
     r.error(ErrorCode::missing_field, "e1");
     r.error(ErrorCode::dimension_mismatch, "e2");
@@ -268,9 +268,9 @@ TEST_CASE("graph.validate.report_worst_severity", "[graph][validate]") {
     REQUIRE(r.worst() == Severity::error);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 量纲解析
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
+// Dimension resolution
+// ===========================================================================
 
 TEST_CASE("graph.validate.resolve_dimension_from_port_type", "[graph][validate]") {
     QP_SCENE(s);
@@ -289,8 +289,8 @@ TEST_CASE("graph.validate.resolve_dimension_from_port_type", "[graph][validate]"
 }
 
 TEST_CASE("graph.validate.resolve_same_as_input_chain", "[graph][validate]") {
-    // 长度源 → 跟随 → 跟随 → 跟随：链末端的量纲必须仍是长度。
-    // 这是"只有看到整张图才能完成"的那一步。
+    // length source -> follower -> follower -> follower: the dimension at the chain end must still be length.
+    // This is the step that "only the whole graph in view can complete".
     QP_SCENE(s);
     const NodeId src = s.add("length_src");
     const NodeId f1 = s.add("passthrough");
@@ -308,7 +308,7 @@ TEST_CASE("graph.validate.resolve_same_as_input_chain", "[graph][validate]") {
         REQUIRE(r->dimension == qp::units::dims::length);
     }
 
-    // 链末端接加速度汇 → 必须报量纲不一致
+    // The chain end feeds an acceleration sink -> a dimension mismatch must be reported
     const NodeId sink = s.add("accel_sink");
     s.wire(f3, 1, sink, 1);
     const Report rep = s.check();
@@ -317,8 +317,8 @@ TEST_CASE("graph.validate.resolve_same_as_input_chain", "[graph][validate]") {
 }
 
 TEST_CASE("graph.validate.resolve_unknown_when_input_missing", "[graph][validate]") {
-    // 没有任何输入连线的 same_as_input 输出 → 未知，但**不报错**：
-    // 是否报错由校验层决定（例如该输入是 required 时会有另一条错误）
+    // A same_as_input output with no connected input -> unknown, but **no error is reported**:
+    // whether to report is the validation layer's call (for example a required input produces another error)
     QP_SCENE(s);
     const NodeId f = s.add("passthrough");
 
@@ -333,7 +333,7 @@ TEST_CASE("graph.validate.resolve_ignores_unknown_types", "[graph][validate]") {
     const NodeId weird = s.add("not_in_catalog");
 
     const DimensionMap m = resolve_dimensions(s.g, s.ctx());
-    // 未知类型没有任何解析结果（而不是崩溃）
+    // An unknown type has no resolution result at all (rather than crashing)
     REQUIRE(m.find(weird, 1) == nullptr);
 }
 
@@ -368,12 +368,12 @@ TEST_CASE("graph.validate.dimensions_lookup", "[graph][validate]") {
     REQUIRE(m.find(NodeId{1, 1}, 1)->known);
     REQUIRE(m.find(NodeId{2, 1}, 1) != nullptr);
     REQUIRE_FALSE(m.find(NodeId{2, 1}, 1)->known);
-    // 端口号也是键的一部分
+    // The port number is part of the key too
     REQUIRE(m.find(NodeId{1, 1}, 2) == nullptr);
 }
 
 TEST_CASE("graph.validate.dimensions_unknown_for_unset", "[graph][validate]") {
-    // 端口类型为 any 的输出 → 未知
+    // An output whose port type is any -> unknown
     QP_SCENE(s);
     s.catalog.add([] {
         NodeDesc d{};
@@ -389,11 +389,11 @@ TEST_CASE("graph.validate.dimensions_unknown_for_unset", "[graph][validate]") {
 }
 
 TEST_CASE("graph.validate.resolve_adder_takes_first_connected_input", "[graph][validate]") {
-    // 加法节点：输出跟随**第一个已连线**的输入
+    // Adder node: the output follows the **first connected** input
     QP_SCENE(s);
     const NodeId acc = s.add("accel_src");
     const NodeId add = s.add("add");
-    s.wire(acc, 1, add, 1);   // 输入 1 接加速度源
+    s.wire(acc, 1, add, 1);   // input 1 takes the acceleration source
 
     const DimensionMap m = resolve_dimensions(s.g, s.ctx());
     const ResolvedDimension* r = m.find(add, 1);
@@ -402,9 +402,9 @@ TEST_CASE("graph.validate.resolve_adder_takes_first_connected_input", "[graph][v
     REQUIRE(r->dimension == qp::units::dims::acceleration);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// 全图校验
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
+// Whole-graph validation
+// ===========================================================================
 
 TEST_CASE("graph.validate.ok_on_consistent_graph", "[graph][validate]") {
     QP_SCENE(s);
@@ -435,11 +435,11 @@ TEST_CASE("graph.validate.rejects_unknown_node_type", "[graph][validate]") {
 }
 
 TEST_CASE("graph.validate.rejects_missing_port", "[graph][validate]") {
-    // 图结构层不知道端口号是否存在，只有校验层能看到 NodeDesc
+    // The graph structure layer does not know whether a port number exists; only the validation layer sees NodeDesc
     QP_SCENE(s);
     const NodeId src = s.add("length_src");
     const NodeId f = s.add("passthrough");
-    // passthrough 只有输入端口 1；接到 5 号必须被拒
+    // passthrough has input port 1 only; connecting to port 5 must be rejected
     REQUIRE(s.g.connect(PortRef{src, 1, PortDirection::output},
                         PortRef{f, 5, PortDirection::input}));
 
@@ -453,9 +453,9 @@ TEST_CASE("graph.validate.rejects_missing_port", "[graph][validate]") {
 }
 
 TEST_CASE("graph.validate.rejects_dimension_mismatch_on_edge", "[graph][validate]") {
-    // 加速度源直接接到"跟随"节点的输入是合法的（跟随不约束量纲），
-    // 但跟随节点的输出再接到加速度汇时必须一致。
-    // 这里构造真正的不一致：长度源 → 加速度汇
+    // An acceleration source wired straight into a "follower" input is legal (a follower constrains no dimension),
+    // but the follower's output wired on to an acceleration sink must agree.
+    // A genuine mismatch is built here: length source -> acceleration sink
     QP_SCENE(s);
     const NodeId len = s.add("length_src", "len");
     const NodeId sink = s.add("accel_sink", "sink");
@@ -475,7 +475,7 @@ TEST_CASE("graph.validate.rejects_dimension_mismatch_on_edge", "[graph][validate
 }
 
 TEST_CASE("graph.validate.rejects_type_mismatch_on_edge", "[graph][validate]") {
-    // 整型源接到浮点输入：数值类别不同，必须拒绝（避免静默丢位）
+    // An integer source into a floating-point input: the numeric kinds differ, so it must be rejected (no silent truncation)
     QP_SCENE(s);
     s.catalog.add([] {
         NodeDesc d{};
@@ -511,14 +511,14 @@ TEST_CASE("graph.validate.rejects_missing_required_param", "[graph][validate]") 
     REQUIRE_FALSE(r.ok());
     REQUIRE(r.count(Severity::error) >= 1);
 
-    // 填上值之后通过
+    // It passes once a value is filled in
     s.g.find_node_mutable(n)->set_param(1, qp::ports::Value{2.0});
     s.g.bump_version();
     Report r2 = s.check();
     INFO(r2.to_text());
     REQUIRE(r2.ok());
 
-    // 连一条线也能满足
+    // A connection satisfies it too
     s.g.find_node_mutable(n)->erase_param(1);
     s.g.bump_version();
     const NodeId len = s.add("length_src");
@@ -534,40 +534,55 @@ TEST_CASE("graph.validate.rejects_domain_violation", "[graph][validate]") {
         NodeDesc d{};
         d.type_name = "bake_only";
         d.allow_in_field_domain = true;
-        d.allow_in_particle_domain = false;   // 实时域禁止
+        d.allow_in_particle_domain = false;   // banned in the real-time domain
         d.outputs.push_back(out_port(1, "v", Types::anydim_id));
         return d;
     }());
     const NodeId id = s.add("bake_only");
 
+    // The domain check is now **parameterised**: validate does not depend on the Domain enum
+    // from core/graph/domain (that would be a redefinition in a translation unit holding both).
+    // `domain_allows_*` means "**is the current domain** that domain".
     ValidateOptions field_opts{};
-    field_opts.domain = Domain::field;
-    REQUIRE(s.check(field_opts).ok());
+    field_opts.check_domain = true;
+    field_opts.domain_allows_field = true;       // current domain = bake domain
+    field_opts.domain_allows_particle = false;
+    field_opts.domain_name = "field";
+    REQUIRE(s.check(field_opts).ok());   // the node allows baking -> no violation
 
     ValidateOptions particle_opts{};
-    particle_opts.domain = Domain::particle;
+    particle_opts.check_domain = true;
+    particle_opts.domain_allows_field = false;
+    particle_opts.domain_allows_particle = true;  // current domain = real-time domain
+    particle_opts.domain_name = "particle";
+    particle_opts.domain_runs_every_frame = true;
     const Report r = s.check(particle_opts);
     REQUIRE_FALSE(r.ok());
     bool found = false;
     for (const auto& i : r.issues()) {
         if (i.node == id && i.code == ErrorCode::plugin_capability_missing) {
             found = true;
-            REQUIRE(i.message.find("实时域") != std::string::npos);
+            REQUIRE(i.message.find("particle") != std::string::npos);
         }
     }
     REQUIRE(found);
+
+    // With the domain check off, no domain is reported
+    ValidateOptions no_check{};
+    no_check.check_domain = false;
+    REQUIRE(s.check(no_check).ok());
 }
 
 TEST_CASE("graph.validate.collects_all_issues", "[graph][validate]") {
-    // 一次给全部问题：三类错误同时存在时都要报出来
+    // Give every problem at once: all three kinds of error must be reported when they coexist
     QP_SCENE(s);
     const NodeId ghost = s.add("no_such_type", "g");
     const NodeId len = s.add("length_src", "L");
     const NodeId sink = s.add("accel_sink", "S");
-    s.wire(len, 1, sink, 1);                                   // 量纲不一致
+    s.wire(len, 1, sink, 1);                                   // dimension mismatch
     REQUIRE(s.g.connect(PortRef{len, 1, PortDirection::output},
-                        PortRef{ghost, 1, PortDirection::input}));   // 未知类型
-    // 再加一个缺端口的
+                        PortRef{ghost, 1, PortDirection::input}));   // unknown type
+    // Add one more with a missing port
     const NodeId f = s.add("passthrough", "P");
     REQUIRE(s.g.connect(PortRef{len, 1, PortDirection::output},
                         PortRef{f, 9, PortDirection::input}));
@@ -575,7 +590,7 @@ TEST_CASE("graph.validate.collects_all_issues", "[graph][validate]") {
     const Report r = s.check();
     REQUIRE_FALSE(r.ok());
     REQUIRE(r.size() >= 3);
-    // 三类错误都在
+    // All three kinds of error are present
     bool has_unknown_node = false, has_unknown_port = false, has_dim = false;
     for (const auto& i : r.issues()) {
         if (i.code == ErrorCode::unknown_node) has_unknown_node = true;
@@ -588,7 +603,7 @@ TEST_CASE("graph.validate.collects_all_issues", "[graph][validate]") {
 }
 
 TEST_CASE("graph.validate.is_readonly", "[graph][validate]") {
-    // 校验不得修改图与版本号——否则"打开实验"这个动作会有副作用
+    // Validation must not modify the graph or its version -- otherwise "open an experiment" would have side effects
     QP_SCENE(s);
     const NodeId len = s.add("length_src");
     const NodeId f = s.add("passthrough");
@@ -610,7 +625,7 @@ TEST_CASE("graph.validate.is_readonly", "[graph][validate]") {
 }
 
 TEST_CASE("graph.validate.warns_on_any_port", "[graph][validate]") {
-    // any 端口让类型检查失效——允许但必须留痕
+    // An any port voids type checking -- allowed, but it must leave a trace
     QP_SCENE(s);
     s.catalog.add([] {
         NodeDesc d{};
@@ -624,7 +639,7 @@ TEST_CASE("graph.validate.warns_on_any_port", "[graph][validate]") {
     s.wire(src, 1, ap, 1);
 
     const Report r = s.check();
-    REQUIRE(r.ok());                       // 警告不阻止加载
+    REQUIRE(r.ok());                       // a warning does not block loading
     REQUIRE(r.count(Severity::warning) >= 1);
     bool found = false;
     for (const auto& i : r.issues()) {
@@ -647,12 +662,12 @@ TEST_CASE("graph.validate.warns_on_unconnected_output_when_enabled", "[graph][va
     ValidateOptions loud{};
     loud.warn_unconnected_outputs = true;
     const Report r = s.check(loud);
-    REQUIRE(r.ok());                       // 仍是警告
+    REQUIRE(r.ok());                       // still a warning
     REQUIRE(r.count(Severity::warning) >= 1);
 }
 
 TEST_CASE("graph.validate.allows_unconnected_optional_input", "[graph][validate]") {
-    // 非 required 的输入不连线是合法的
+    // Leaving a non-required input unconnected is legal
     QP_SCENE(s);
     (void)s.add("passthrough", "P");
     REQUIRE(s.check().ok());
@@ -672,8 +687,8 @@ TEST_CASE("graph.validate.deterministic", "[graph][validate]") {
 }
 
 TEST_CASE("graph.validate.rejects_dangling_edge_to_deleted_node", "[graph][validate]") {
-    // 结构层删节点时会连带删边，因此正常情况下不会留下悬垂边。
-    // 这里验证的是：即便图里出现了未注册类型，校验也不会崩溃或漏报。
+    // The structure layer deletes the edges along with a node, so normally no dangling edge is left behind.
+    // What this verifies: even when an unregistered type appears in the graph, validation neither crashes nor misses it.
     QP_SCENE(s);
     const NodeId len = s.add("length_src");
     const NodeId ghost = s.add("no_such_type");
@@ -681,13 +696,13 @@ TEST_CASE("graph.validate.rejects_dangling_edge_to_deleted_node", "[graph][valid
 
     const Report r = s.check();
     REQUIRE_FALSE(r.ok());
-    // 上游类型未知 → 至少一条 unknown_node；边本身不再重复刷屏
+    // The upstream type is unknown -> at least one unknown_node; the edge itself no longer floods the report
     REQUIRE(r.count(Severity::error) >= 1);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// check_edge（连线前预演）
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
+// check_edge (dry run before connecting)
+// ===========================================================================
 
 TEST_CASE("graph.validate.check_edge_ok", "[graph][validate]") {
     QP_SCENE(s);
@@ -717,25 +732,25 @@ TEST_CASE("graph.validate.check_edge_rejects_unknown_ports", "[graph][validate]"
     const NodeId f = s.add("passthrough");
     const NodeId ghost = s.add("no_such_type");
 
-    // 目标端口不存在
+    // The target port does not exist
     Report r1 = check_edge(s.g, s.ctx(), PortRef{src, 1, PortDirection::output},
                            PortRef{f, 9, PortDirection::input});
     REQUIRE_FALSE(r1.ok());
     REQUIRE(r1.issues().front().code == ErrorCode::unknown_port);
 
-    // 源节点类型未注册
+    // The source node type is unregistered
     Report r2 = check_edge(s.g, s.ctx(), PortRef{ghost, 1, PortDirection::output},
                            PortRef{f, 1, PortDirection::input});
     REQUIRE_FALSE(r2.ok());
     REQUIRE(r2.issues().front().code == ErrorCode::unknown_node);
 
-    // 方向错误
+    // Wrong direction
     Report r3 = check_edge(s.g, s.ctx(), PortRef{f, 1, PortDirection::input},
                            PortRef{src, 1, PortDirection::output});
     REQUIRE_FALSE(r3.ok());
     REQUIRE(r3.issues().front().code == ErrorCode::invalid_argument);
 
-    // 无效句柄
+    // Invalid handle
     Report r4 = check_edge(s.g, s.ctx(), PortRef{}, PortRef{f, 1, PortDirection::input});
     REQUIRE_FALSE(r4.ok());
 }

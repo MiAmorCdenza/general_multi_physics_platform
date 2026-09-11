@@ -1,6 +1,6 @@
-# core/graph/ir：中间表示。插件 API 本身。
+# core/graph/ir: the intermediate representation. This is the plugin API itself.
 #
-# 依赖规则：ir 只依赖 L0 与 ports，不依赖 core/graph 内其他子模块。
+# Dependency rule: ir depends only on L0 and ports, never on another core/graph submodule.
 
 add_library(qp_graph_ir STATIC
     src/descriptor.cpp)

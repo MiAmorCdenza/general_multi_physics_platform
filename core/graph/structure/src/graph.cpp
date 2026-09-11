@@ -1,14 +1,14 @@
 /**
  * @file graph.cpp
- * @brief 图结构的实现。
+ * @brief Implementation of the graph structure.
  *
- * 全部变异遵循同一模板：
- *   1. 校验（失败立即返回，图未动）
- *   2. 应用（此时不再有失败可能）
- *   3. 递增版本号
+ * Every mutation follows the same template:
+ *   1. Validate (return immediately on failure, the graph is untouched)
+ *   2. Apply (no failure is possible at this point)
+ *   3. Bump the version number
  *
- * "应用阶段不失败"是关键：它让强异常保证成为**结构性**的，
- * 而不是靠 try/catch 兜底。
+ * "The apply phase cannot fail" is the key: it makes the strong exception guarantee **structural**
+ * instead of relying on a try/catch safety net.
  */
 #include <qp/graph/structure/graph.hpp>
 
@@ -22,14 +22,14 @@ using qp::diag::ErrorCode;
 }  // namespace
 
 Graph::Graph() {
-    // 槽位 0 是**哨兵**，永不占用。
-    // 理由：NodeId::index == 0 表示"无"，若 0 是合法槽位，
-    // 第一个加入的节点就会拿到 index 0 而立刻被判为无效句柄。
-    // 用一个恒空的哨兵槽把"无"与"第 0 个"彻底分开。
+    // Slot 0 is a **sentinel** and is never occupied.
+    // Reason: NodeId::index == 0 means "none"; if 0 were a legal slot,
+    // the first node added would get index 0 and be judged an invalid handle at once.
+    // A permanently empty sentinel slot keeps "none" and "the 0th" fully apart.
     slots_.resize(1);
 }
 
-// ── 节点 ────────────────────────────────────────────────────────────────────
+// -- Nodes -------------------------------------------------------------------
 
 Node* Graph::node_at(NodeId id) noexcept {
     if (!id.valid() || id.index >= slots_.size()) return nullptr;
@@ -39,8 +39,8 @@ Node* Graph::node_at(NodeId id) noexcept {
 }
 
 const Node* Graph::find_node(NodeId id) const noexcept {
-    // 直接查（不通过 node_at）：const 版本必须保持 const 正确性，
-    // 用 const_cast 去调非 const 版本会让 GCC 报 -fpermissive 错误。
+    // Looked up directly (not through node_at): the const version must stay const-correct,
+    // and calling the non-const version via const_cast makes GCC report -fpermissive errors.
     if (!id.valid() || id.index >= slots_.size()) return nullptr;
     const NodeSlot& s = slots_[id.index];
     if (!s.occupied || s.generation != id.generation) return nullptr;
@@ -56,8 +56,8 @@ Result<NodeId> Graph::add_node(std::string_view type_name) {
         return Result<NodeId>{ErrorCode::invalid_argument};
     }
 
-    // 找一个空槽：优先复用已删除的槽位（保持 slots_ 不无限增长）。
-    // 从 1 开始：槽位 0 是哨兵（见构造函数的说明）。
+    // Find a free slot: reuse deleted slots first (so slots_ does not grow without bound).
+    // Starts at 1: slot 0 is the sentinel (see the constructor).
     for (std::size_t i = 1; i < slots_.size(); ++i) {
         NodeSlot& s = slots_[i];
         if (s.occupied) continue;
@@ -71,10 +71,10 @@ Result<NodeId> Graph::add_node(std::string_view type_name) {
         return Result<NodeId>{s.node.id};
     }
 
-    // 没有空槽：追加。
-    // 注意：**先 push_back 再从 slots_.back() 取 id**。早先的写法在
-    // push_back 之前用局部变量构造 id，而 push_back 的重分配会让那个
-    // Node 失效——返回的句柄于是指向已被销毁的副本。
+    // No free slot: append.
+    // Note: **push_back first, then read the id from slots_.back()**. An earlier version built
+    // the id in a local before push_back, and the reallocation that push_back performs invalidated
+    // that Node -- so the returned handle pointed at an already destroyed copy.
     {
         NodeSlot s{};
         s.occupied = true;
@@ -96,9 +96,9 @@ Result<NodeId> Graph::add_node_named(std::string_view type_name, std::string_vie
         return Result<NodeId>{ErrorCode::duplicate_connection};
     }
 
-    // 内联 add_node 的槽位分配，以便在**同一处**完成名字设置与版本递增。
-    // 早先写成"调用 add_node 再补设名字"，补设那一步漏了版本号递增，
-    // 于是"改名字"不会让缓存失效——由 failed_mutation_is_noop 抓出。
+    // Inline add_node's slot allocation so that setting the name and bumping the version happen in **one place**.
+    // The earlier form called add_node and then set the name, and that second step forgot the version
+    // bump, so "renaming" did not invalidate the cache -- caught by failed_mutation_is_noop.
     NodeId id{};
     for (std::size_t i = 1; i < slots_.size(); ++i) {
         NodeSlot& s = slots_[i];
@@ -129,8 +129,8 @@ Result<NodeId> Graph::add_node_named(std::string_view type_name, std::string_vie
 }
 
 Result<NodeId> Graph::reserve_node() {
-    // 空类型名即 pending。与 add_node 的唯一差别是**不做类型名校验**——
-    // 预留的语义就是"我要占一个 id，类型稍后告诉你"。
+    // An empty type name means pending. The only difference from add_node is **no type-name validation** --
+    // reserving means exactly "I want to hold an id; I will tell you the type later".
     for (std::size_t i = 1; i < slots_.size(); ++i) {
         NodeSlot& s = slots_[i];
         if (s.occupied) continue;
@@ -165,7 +165,7 @@ Result<void> Graph::fill_reserved(NodeId id, std::string_view type_name) {
         return Result<void>{ErrorCode::unknown_node};
     }
     if (!n->type_name.empty()) {
-        // 已补全过：重复 fill 是调用方的错误
+        // Already filled in once: a repeated fill is the caller's error
         return Result<void>{ErrorCode::duplicate_connection};
     }
     n->type_name = std::string{type_name};
@@ -181,7 +181,7 @@ Result<void> Graph::remove_node(NodeId id) {
     }
     const bool was_pending = n->type_name.empty();
 
-    // 先删相关边（应用阶段不失败）
+    // Delete the related edges first (the apply phase cannot fail)
     edges_.erase(std::remove_if(edges_.begin(), edges_.end(),
                                 [id](const Edge& e) {
                                     return e.from.node == id || e.to.node == id;
@@ -191,16 +191,16 @@ Result<void> Graph::remove_node(NodeId id) {
     NodeSlot& s = slots_[id.index];
     s.node = Node{};
     s.occupied = false;
-    // **释放时也要递增世代**。
+    // **The generation is bumped on release too**.
     //
-    // 世代的两个用途都要求这一步：
-    //   1. 老句柄永不复活——它记录的是**上一任**占用的世代；
-    //   2. 撤销"删除"需要把节点恢复到**同一个 id**，而 restore_node
-    //      靠比较"槽位世代 vs 恢复目标世代"来判断该 id 是否还能用。
-    //      若释放时不递增，槽位世代会与刚被删节点的世代相同，
-    //      restore_node 的 ABA 检查就会把一次**合法**的恢复判为冲突。
-    // 这条由 graph.mutate.undo_redo_roundtrip 抓出：
-    // 撤销再重做时 redo 失败于 duplicate_connection。
+    // Both uses of the generation require this step:
+    //   1. An old handle never comes back to life -- it records the generation of the **previous** occupant;
+    //   2. Undoing a "delete" must restore the node to **the same id**, and restore_node
+    //      decides whether that id is still usable by comparing "slot generation vs target generation".
+    //      Without a bump on release, the slot generation would equal the deleted node's generation,
+    //      and restore_node's ABA check would report one **legal** restore as a conflict.
+    // Caught by graph.mutate.undo_redo_roundtrip:
+    // undo followed by redo failed with duplicate_connection.
     ++s.generation;
     if (next_generation_ <= s.generation) {
         next_generation_ = s.generation + 1;
@@ -235,11 +235,11 @@ NodeId Graph::find_node_by_name(std::string_view name) const noexcept {
     return NodeId{};
 }
 
-// ── 边 ──────────────────────────────────────────────────────────────────────
+// -- Edges -------------------------------------------------------------------
 
 bool Graph::reaches(NodeId from, NodeId target) const noexcept {
     if (from == target) return true;
-    // 深度优先，沿边方向前进。图很小（通常 < 100 节点），不需要更聪明的算法。
+    // Depth-first, walking along the edge direction. Graphs are small (usually < 100 nodes), so no cleverer algorithm is needed.
     std::vector<NodeId> stack{from};
     std::vector<NodeId> seen;
     while (!stack.empty()) {
@@ -257,7 +257,7 @@ bool Graph::reaches(NodeId from, NodeId target) const noexcept {
 }
 
 Result<void> Graph::connect(PortRef from, PortRef to) {
-    // ── 1. 句柄有效 ──
+    // -- 1. Handles are valid --
     if (!from.valid() || !to.valid()) {
         return Result<void>{ErrorCode::unknown_node};
     }
@@ -265,29 +265,29 @@ Result<void> Graph::connect(PortRef from, PortRef to) {
         return Result<void>{ErrorCode::unknown_node};
     }
 
-    // ── 2. 方向 ──
+    // -- 2. Direction --
     if (from.direction != PortDirection::output || to.direction != PortDirection::input) {
         return Result<void>{ErrorCode::invalid_argument};
     }
 
-    // ── 3. 输入端口至多一条入边 ──
+    // -- 3. At most one incoming edge per input port --
     for (const auto& e : edges_) {
         if (e.to == to) {
             return Result<void>{ErrorCode::duplicate_connection};
         }
     }
 
-    // ── 4. 自环 ──
+    // -- 4. Self-loop --
     if (from.node == to.node) {
         return Result<void>{ErrorCode::cycle_detected};
     }
 
-    // ── 5. 环检测：若 to.node 已经能到达 from.node，则加这条边会成环 ──
+    // -- 5. Cycle check: if to.node already reaches from.node, this edge would close a cycle --
     if (reaches(to.node, from.node)) {
         return Result<void>{ErrorCode::cycle_detected};
     }
 
-    // ── 应用（此后不可能失败）──
+    // -- Apply (no failure possible from here on) --
     edges_.push_back(Edge{from, to});
     ++version_;
     return Result<void>{};
@@ -320,39 +320,39 @@ Result<void> Graph::restore_node(const Node& snapshot) {
     }
     const SlotIndex idx = snapshot.id.index;
 
-    // 先把槽位扩到够大
+    // Grow the slot array far enough first
     if (idx >= slots_.size()) {
         slots_.resize(static_cast<std::size_t>(idx) + 1);
     }
     NodeSlot& s = slots_[idx];
     if (s.occupied) {
-        // 槽位被占用。若占用者的世代正好就是目标世代，说明这个 id
-        // 已经在本槽位上活着——重复恢复是调用方的错误。
-        // 若占用者的世代更高，那是后来的节点，同样不能覆盖。
+        // The slot is occupied. If the occupant's generation is exactly the target generation, this id
+        // is already live in this slot -- a repeated restore is the caller's error.
+        // If the occupant's generation is higher, it is a later node, and it must not be overwritten either.
         if (s.generation >= snapshot.id.generation) {
             return Result<void>{ErrorCode::duplicate_connection};
         }
         return Result<void>{ErrorCode::duplicate_connection};
     }
 
-    // 槽位空闲：**没有 id 拥有它**，因此恢复是安全的。
+    // The slot is free: **no id owns it**, so restoring is safe.
     //
-    // 这里刻意**不比较世代**。曾经的写法是 `if (gen >= target) reject`，
-    // 那是错的：删除操作会递增空闲槽位的世代，于是"撤销一次删除再恢复"
-    // 会把自己的槽位世代推到目标世代之上，然后被自己的检查拒绝。
-    // 世代比较只在**占用**路径上有意义（占用者是谁），
-    // 空闲路径上不存在"另一个 id"可言。这条由
-    // graph.mutate.undo_redo_roundtrip 抓出。
+    // Generations are deliberately **not compared** here. The old form was `if (gen >= target) reject`,
+    // which was wrong: deleting bumps the generation of the freed slot, so "undo a delete, then restore"
+    // pushed its own slot generation above the target generation and was then rejected by its own check.
+    // Generation comparison is meaningful only on the **occupied** path (who the occupant is);
+    // on the free path there is no "other id" to speak of. Caught by
+    // graph.mutate.undo_redo_roundtrip.
     s.occupied = true;
     s.generation = snapshot.id.generation;
     s.node = snapshot;
-    // 防御：世代计数器必须始终领先于任何已分配的世代
+    // Defensive: the generation counter must always stay ahead of any allocated generation
     if (next_generation_ <= snapshot.id.generation) {
         next_generation_ = snapshot.id.generation + 1;
     }
     ++live_nodes_;
     if (snapshot.type_name.empty()) {
-        ++pending_nodes_;   // 恢复的也可以是一个 pending 节点
+        ++pending_nodes_;   // what is restored may be a pending node too
     }
     ++version_;
     return Result<void>{};

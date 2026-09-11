@@ -1,36 +1,36 @@
 /**
  * @file evaluator.hpp
- * @brief 求值：拉取式调度 + 内容寻址缓存。
+ * @brief Evaluation: pull-based scheduling + content-addressed cache.
  *
- * ## 为什么是"拉取式"而不是"推送式"
+ * ## Why pull-based rather than push-based
  *
- * 推送式（从源节点沿边往下算）会算出**整张图**，包括当前视图根本不看的
- * 分支。一张图里通常只有少数几个节点是"被声明的输出"，
- * 拉取式只算到达它们的子图。
+ * Push-based evaluation (walk down the edges from the source nodes) computes the **whole
+ * graph**, including branches the current view never looks at. Usually only a few nodes in a
+ * graph are "declared outputs", and a pull-based walk evaluates only the subgraph reaching them.
  *
- * 课堂现场的意义：老师调一个参数，只有真正影响当前画面的分支被重算。
+ * In a lecture: the teacher turns one knob and only the branches feeding the current view recompute.
  *
- * ## 求值必须确定性
+ * ## Evaluation must be deterministic
  *
- * 同一张图、同一批参数，两次求值给出**逐位相同**的结果（章程 R2 的精神）。
- * 因此：
- *   - 拓扑序在有多个可选顺序时按槽位索引打破平局（顺序固定）；
- *   - 缓存键不含地址、时间、随机数；
- *   - 节点实现被要求是纯函数（`INodeEvaluator` 的契约）。
+ * The same graph with the same parameters must give **bit-identical** results on two runs
+ * (the spirit of charter R2). Hence:
+ *   - the topological order breaks ties by slot index when several orders are possible (fixed order);
+ *   - the cache key holds no address, time, or random number;
+ *   - node implementations are required to be pure functions (the `INodeEvaluator` contract).
  *
- * ## 单线程
+ * ## Single-threaded
  *
- * 求值在**主线程**进行。多线程求值是后续的事（需要每节点独立的上下文），
- * 现在不做——把并发问题留到有真实性能需求时再解决，
- * 而不是提前引入无法验证的复杂度。
+ * Evaluation runs on the **main thread**. Multi-threaded evaluation comes later (it needs a
+ * per-node context); we do not do it now -- concurrency is left until there is a real
+ * performance need, instead of importing complexity we cannot verify up front.
  *
- * @ownership   owns（缓存与统计）
+ * @ownership   owns (cache and statistics)
  * @thread      main
  * @pre         none
  * @post        none
- * @invariant   求值不修改图与版本号
- * @errors      失败走 Result，不抛
- * @frozen      否
+ * @invariant   Evaluation never modifies the graph or its version numbers
+ * @errors      Failures travel as Result, nothing is thrown
+ * @frozen      no
  */
 #pragma once
 
@@ -49,16 +49,16 @@ namespace qp::graph {
 using qp::diag::Result;
 
 /**
- * @brief 节点实现的接口。
+ * @brief The interface of a node implementation.
  *
- * 契约（与 `INodeEvaluator` 的实现者之间的约定）：
- *   - **纯函数**：同输入同输出；不依赖时间、随机数、全局状态。
- *   - **不得修改输入**。
- *   - **不得访问图**：它只看到自己的输入值与参数。
- *   - **不得抛异常**（热路径禁异常；失败用 `Result` 表达）。
+ * Contract (the agreement with implementers of `INodeEvaluator`):
+ *   - **Pure function**: same inputs, same outputs; no reliance on time, randomness, or globals.
+ *   - **Must not modify its inputs**.
+ *   - **Must not touch the graph**: it sees only its own input values and parameters.
+ *   - **Must not throw** (no exceptions on the hot path; failures are expressed with `Result`).
  *
- * 这些约束不是"建议"：缓存的存在**要求**纯函数性——
- * 一个依赖隐藏状态的节点会命中错误的缓存条目。
+ * These constraints are not "advice": the existence of the cache **requires** purity --
+ * a node that depends on hidden state will hit the wrong cache entry.
  */
 class INodeEvaluator {
 public:
@@ -68,24 +68,24 @@ public:
     INodeEvaluator& operator=(const INodeEvaluator&) = delete;
 
     /**
-     * @brief 计算一个节点的输出。
+     * @brief Computes the outputs of one node.
      *
-     * @ownership   pure（不得保留对 inputs 的引用）
+     * @ownership   pure (must not retain references to inputs)
      * @thread      main
-     * @pre         节点类型与 desc 一致
-     * @post        返回该节点全部输出端口的值
-     * @invariant   同 inputs 必得同 outputs
-     * @errors      Result；失败时返回错误码，不抛
-     * @complexity  由实现决定
-     * @nondet      **必须 none**——否则缓存会给出错误结果
-     * @frozen      是
+     * @pre         The node type matches desc
+     * @post        Returns the values of all of the node's output ports
+     * @invariant   Same inputs always give the same outputs
+     * @errors      Result; on failure it returns an error code and does not throw
+     * @complexity  Determined by the implementation
+     * @nondet      **must be none** -- otherwise the cache returns wrong results
+     * @frozen      yes
      */
     [[nodiscard]] virtual Result<std::vector<std::pair<PortNumber, qp::ports::Value>>> evaluate(
         NodeId id, const NodeDesc& desc,
         const std::vector<std::pair<PortNumber, qp::ports::Value>>& inputs) = 0;
 };
 
-/// @brief 求值所需的外部依赖。
+/// @brief The external dependencies evaluation needs.
 struct EvalContext final {
     const INodeCatalog* catalog = nullptr;
     const qp::ports::PortTypeRegistry* types = nullptr;
@@ -97,16 +97,16 @@ struct EvalContext final {
     }
 };
 
-/// @brief 一次求值的统计。用于性能观察与"为什么这么慢"的回答。
+/// @brief Statistics of one evaluation. For watching performance and answering "why so slow".
 struct EvalStats final {
-    std::size_t nodes_visited = 0;    ///< 拓扑序里被访问的节点数
-    std::size_t nodes_computed = 0;   ///< 真正调用实现的次数
-    std::size_t cache_hits = 0;       ///< 命中缓存的次数
-    std::size_t nodes_skipped = 0;    ///< 被绕过（bypass）的节点数
+    std::size_t nodes_visited = 0;    ///< nodes visited in topological order
+    std::size_t nodes_computed = 0;   ///< number of calls into a real implementation
+    std::size_t cache_hits = 0;       ///< number of cache hits
+    std::size_t nodes_skipped = 0;    ///< number of nodes skipped because they are bypassed
 };
 
 /**
- * @brief 一次求值的结果：按 (节点, 端口) 索引的全部输出。
+ * @brief The result of one evaluation: every output indexed by (node, port).
  */
 class EvalResult final {
 public:
@@ -120,7 +120,7 @@ public:
         outputs_.push_back(Output{node, port, std::move(v)});
     }
 
-    /// @brief 查询某个输出端口的值。未求值返回无效值。
+    /// @brief Looks up the value of one output port. An unevaluated port yields an invalid value.
     [[nodiscard]] qp::ports::Value get(NodeId node, PortNumber port) const noexcept;
 
     [[nodiscard]] std::size_t size() const noexcept { return outputs_.size(); }
@@ -131,25 +131,25 @@ private:
 };
 
 /**
- * @brief 求值整张图。
+ * @brief Evaluates the whole graph.
  *
- * 关键行为：
- *   - 只算"有下游或自身为终点的子图"？**不**——当前实现算全图。
- *     拉取式剪枝是后续优化（需要"声明输出"信息，见 `core/graph/domain`）。
- *     现在算全图，但**缓存**确保无关分支只在第一次付出代价。
- *   - 节点的参数与输入共同构成缓存键；任何一项变化都会导致重算。
- *   - `bypassed` 的节点不调用实现：把第 1 个输入直接透传到第 1 个输出。
+ * Key behaviors:
+ *   - Only the subgraph with a downstream user or itself a sink? **No** -- we evaluate the
+ *     whole graph today. Pull-based pruning is a later optimization needing declared
+ *     outputs (see `core/graph/domain`); the **cache** keeps unrelated branches paid for once.
+ *   - A node's parameters and its inputs together form the cache key; a change in either recomputes.
+ *   - A `bypassed` node does not call its implementation: input 1 is passed straight to output 1.
  *
- * @ownership   borrows（只读 g 与 ctx）
+ * @ownership   borrows (reads g and ctx only)
  * @thread      main
  * @pre         ctx.valid()
- * @post        成功时返回全部节点的输出；图与版本号不变
- * @post        失败时返回值未定义，但图未被修改
- * @invariant   确定性：同一图同一参数两次求值结果逐位相同
- * @errors      Result；节点实现失败或类型未注册时返回错误码
- * @complexity  O(V + E) 加各节点实现的开销
+ * @post        On success returns the outputs of every node; graph and version numbers unchanged
+ * @post        On failure the return value is undefined, but the graph itself is unmodified
+ * @invariant   Determinism: the same graph and parameters give bit-identical results
+ * @errors      Result; an error code when a node implementation fails or a type is unregistered
+ * @complexity  O(V + E) plus the cost of each node implementation
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       graph.eval.single_node, graph.eval.chain_propagates,
  *              graph.eval.deterministic_across_runs,
  *              graph.eval.cache_hit_on_second_run,

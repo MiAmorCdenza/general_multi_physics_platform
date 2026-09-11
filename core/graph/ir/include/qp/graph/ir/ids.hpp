@@ -1,23 +1,23 @@
 /**
  * @file ids.hpp
- * @brief 图元素的标识：**句柄 + 世代**，不是裸整数。
+ * @brief Identity of graph elements: **handle + generation**, not a bare integer.
  *
- * ## 为什么不用裸索引，也不用字符串 ID
+ * ## Why neither bare indices nor string IDs
  *
- * 裸索引：删掉节点 n3 后再加一个新节点会复用索引 3，于是所有指向老 n3 的
- * 引用（撤销栈、缓存键、UI 选中状态、诊断记录）会**静默指向新节点**。
- * 这是最难查的一类 bug——它不崩溃，只是改错了对象。
+ * Bare indices: deleting node n3 and adding a new node reuses index 3, so every reference
+ * to the old n3 (undo stack, cache key, UI selection, diagnostics) **silently points at the
+ * new node**. That is the hardest bug class to chase: nothing crashes, the wrong object changes.
  *
- * 字符串 ID：学生手册里的 `n3` 应当稳定且可读，但字符串做键会让每次
- * 求值都付出哈希与比较成本，而且容易在重命名时破坏引用。
+ * String IDs: the `n3` in a student's notebook should be stable and readable, but string
+ * keys make every evaluation pay hashing and comparison, and renaming easily breaks references.
  *
- * 因此：内部用 `(index, generation)`，世代在槽位复用时递增。
- * 老引用因而变成"可检测的失效"而不是"静默指向别人"。
+ * Hence: internally use `(index, generation)`, and bump the generation when a slot is reused.
+ * Old references thus become a "detectable invalidation" instead of "silently pointing elsewhere".
  *
- * 面向用户与 YAML 的稳定名字是**另一层**（`NodeDesc::name`），
- * 不参与内部寻址。
+ * The stable name shown to users and to YAML is **another layer** (`NodeDesc::name`) that
+ * takes no part in internal addressing.
  *
- * @frozen 是（`index`/`generation` 的语义与零值含义冻结）
+ * @frozen yes (the semantics of `index`/`generation` and their zero values are frozen)
  */
 #pragma once
 
@@ -25,28 +25,28 @@
 
 namespace qp::graph {
 
-/// @brief 槽位索引。0 表示"无"。
+/// @brief Slot index. 0 means "none".
 using SlotIndex = std::uint32_t;
 
-/// @brief 世代号。槽位每次复用时递增，用于识别失效句柄。
+/// @brief Generation number. Bumped each time a slot is reused, to spot dead handles.
 using Generation = std::uint32_t;
 
-/// @brief 无效索引。
+/// @brief Invalid index.
 inline constexpr SlotIndex kNoSlot = 0;
 
-/// @brief 无效世代。
+/// @brief Invalid generation.
 inline constexpr Generation kNoGeneration = 0;
 
 /**
- * @brief 图节点句柄。
+ * @brief Handle of a graph node.
  *
- * @ownership   pure（值类型，可随意复制）
+ * @ownership   pure (a value type, freely copyable)
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   默认构造的句柄无效
+ * @invariant   A default-constructed handle is invalid
  * @errors      noexcept
- * @frozen      是
+ * @frozen      yes
  * @tests       graph.ids.node_default_is_invalid, graph.ids.node_equality,
  *              graph.ids.node_generation_matters
  */
@@ -64,36 +64,36 @@ struct NodeId final {
     [[nodiscard]] friend constexpr bool operator!=(NodeId a, NodeId b) noexcept {
         return !(a == b);
     }
-    /// @brief 供有序容器使用。仅比较数值，**不代表语义顺序**。
+    /// @brief For ordered containers. Compares numbers only and **implies no semantic order**.
     [[nodiscard]] friend constexpr bool operator<(NodeId a, NodeId b) noexcept {
         return a.index != b.index ? a.index < b.index : a.generation < b.generation;
     }
 };
 
-/// @brief 节点内端口的序号。0 表示"无"。
+/// @brief Number of a port inside a node. 0 means "none".
 ///
-/// 端口序号在节点类型内**稳定**：`NodeDesc::inputs[i]` 的序号就是 `i + 1`。
-/// 这样端口名可以改（面向用户），而内部引用不变。
+/// A port number is **stable** within a node type: the number of `NodeDesc::inputs[i]` is `i + 1`.
+/// So a port name can change (it faces the user) while internal references stay put.
 using PortIndex = std::uint32_t;
 
 inline constexpr PortIndex kNoPort = 0;
 
-/// @brief 端口方向。
+/// @brief Port direction.
 enum class PortDirection : std::uint8_t {
     input = 0,
     output = 1,
 };
 
 /**
- * @brief 指向某个节点某个端口的位置。
+ * @brief A location: one port of one node.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   默认构造的位置无效
+ * @invariant   A default-constructed location is invalid
  * @errors      noexcept
- * @frozen      是
+ * @frozen      yes
  * @tests       graph.ids.port_ref_default_is_invalid, graph.ids.port_ref_equality
  */
 struct PortRef final {
@@ -113,9 +113,9 @@ struct PortRef final {
     }
 };
 
-/// @brief 图的版本号。任何结构性变异都递增。
+/// @brief Version number of the graph. Bumped by any structural mutation.
 ///
-/// 用途：缓存失效判定、撤销栈、UI 增量刷新、"这份快照对应哪一版图"。
+/// Uses: cache invalidation, the undo stack, incremental UI refresh, "which graph version is this snapshot?"
 using GraphVersion = std::uint64_t;
 
 }  // namespace qp::graph

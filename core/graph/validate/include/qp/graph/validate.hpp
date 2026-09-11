@@ -1,38 +1,38 @@
 /**
  * @file qp/graph/validate.hpp
- * @brief validate 模块的唯一入口：加载期校验。
+ * @brief The single entry point of the validate module: load-time validation.
  *
- * ## 这个模块存在的唯一理由
+ * ## The only reason this module exists
  *
- * 类型与量纲错误若推迟到求值期，症状是"学生算了十分钟，结果荒谬"。
- * 加载期拒绝的代价是"打开实验时弹一个错误框"。
- * 两者对课堂的影响差一个数量级。
+ * Deferring a type or dimension error to evaluation looks like "ten minutes, absurd result".
+ * Rejecting it at load time costs "an error dialog when the experiment opens".
+ * The two differ by an order of magnitude in classroom impact.
  *
- * ## 它包含一件不显然的事：量纲解析
+ * ## It contains one non-obvious thing: dimension resolution
  *
- * 端口描述里的 `same_as_input`（"我的输出量纲跟输入一样"）在端口层
- * **无法判定**——它需要图的上下文。校验层沿拓扑序把它解析成具体量纲，
- * 然后才可能判定一条边的两端是否真的同量纲。
+ * `same_as_input` ("my output dimension equals the input's") cannot be decided at
+ * the port layer -- it needs graph context. The validation layer resolves it to a concrete
+ * dimension along the topological order, and only then can an edge's ends be compared.
  *
- * 因此本模块不只是"调用 ports 的检查函数"，它还补上了
- * **只有看到整张图才能完成的那一步**。
+ * So this module is not just "calling the ports check functions": it adds the step
+ * **that is only possible with the whole graph in view**.
  *
- * ## 与相邻模块的边界
+ * ## Boundary with neighbouring modules
  *
- * | 不做 | 归谁 |
- * |---|---|
- * | 无环、端口占用等结构性约束 | `core/graph/structure`（连接时就拒绝了） |
- * | 类型兼容的**单点**判定 | `core/ports` |
- * | 求值 | `core/graph/eval` |
- * | 在 UI 上展示问题 | 视图层 |
+ * | Not done                                     | Owned by                                     |
+ * |----------------------------------------------|----------------------------------------------|
+ * | structural constraints (cycles, port use)    | `core/graph/structure` (rejected on connect) |
+ * | the **single-point** type-compatibility test | `core/ports`                                 |
+ * | evaluation                                   | `core/graph/eval`                            |
+ * | showing a problem in the UI                  | the view layer                               |
  *
- * @ownership   pure（只读图）
+ * @ownership   pure (reads the graph only)
  * @thread      main
  * @pre         none
  * @post        none
- * @invariant   校验不修改图：调用前后图与版本号完全不变
- * @errors      noexcept（问题以 Report 表达）
- * @frozen      否
+ * @invariant   Validation does not modify the graph: graph and version are unchanged
+ * @errors      noexcept (problems are expressed as a Report)
+ * @frozen      no
  * @tests       graph.validate.issue_text, graph.validate.issue_location,
  *              graph.validate.report_ok, graph.validate.report_collects_all,
  *              graph.validate.report_worst_severity,
@@ -70,7 +70,7 @@
 
 namespace qp::graph {
 
-/// @brief validate 模块的版本。Issue/Severity 或校验规则集变更时递增。
+/// @brief Version of the validate module. Bumped when Issue/Severity or the rules change.
 inline constexpr int kValidateVersion = 1;
 
 }  // namespace qp::graph

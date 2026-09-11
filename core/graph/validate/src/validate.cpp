@@ -1,9 +1,9 @@
 /**
  * @file validate.cpp
- * @brief 加载期校验的实现。
+ * @brief Implementation of load-time validation.
  *
- * 五个层次的检查**全部执行完再返回**，不在第一个错误处停下：
- * 用户要改 N 次才能打开一个实验，这在课堂现场是不可接受的。
+ * All five layers of checking **run to completion before returning**, rather than stopping at
+ * the first error: fixing and retrying N times to open one experiment is unacceptable in class.
  */
 #include <qp/graph/validate/validate.hpp>
 
@@ -20,7 +20,7 @@ using qp::diag::ErrorCode;
     return ctx.catalog->find(n->type_name);
 }
 
-/// @brief 面向用户的节点称号：优先用用户名字，其次用类型名。
+/// @brief User-facing name for a node: prefer the user name, then the type name.
 [[nodiscard]] std::string node_label(const Graph& g, NodeId id) {
     const Node* n = g.find_node(id);
     if (n == nullptr) return "<已删除>";
@@ -29,7 +29,7 @@ using qp::diag::ErrorCode;
     return "<未命名>";
 }
 
-/// @brief 把 e 转换为可读的端点描述。
+/// @brief Turn e into a readable endpoint description.
 [[nodiscard]] std::string port_label(const NodeDesc* d, PortNumber port, bool is_output) {
     const PortDesc* p = d == nullptr ? nullptr : d->find_port(port, is_output);
     if (p == nullptr) return "#" + std::to_string(port);
@@ -45,7 +45,7 @@ Report validate_graph(const Graph& g, const ResolveContext& ctx, const ValidateO
         return report;
     }
 
-    // ── 1. 结构：节点类型必须已注册 ──────────────────────────────────────────
+    // -- 1. Structure: node types must be registered --------------------------
     for (const auto& s : g.slots()) {
         if (!s.occupied) continue;
         const NodeId id = s.node.id;
@@ -62,18 +62,31 @@ Report validate_graph(const Graph& g, const ResolveContext& ctx, const ValidateO
             continue;
         }
 
-        // ── 5. 域许可 ────────────────────────────────────────────────────────
-        if (options.domain == Domain::field && !d->allow_in_field_domain) {
-            report.error(ErrorCode::plugin_capability_missing,
-                         "节点类型「" + d->type_name + "」不允许出现在烘焙域", id, 0, false);
-        }
-        if (options.domain == Domain::particle && !d->allow_in_particle_domain) {
-            report.error(ErrorCode::plugin_capability_missing,
-                         "节点类型「" + d->type_name + "」不允许出现在实时域", id, 0, false,
-                         "实时域每帧执行，禁止阻塞与分配");
+        // -- 5. Domain permission ---------------------------------------------
+        //
+        // Domain semantics (the Domain enum) belong to core/graph/domain. This code reads only the
+        // flags the caller passes, so the two modules stay independent (domain uses our Report).
+        //
+        // `domain_allows_field` / `domain_allows_particle` mean "**the current domain** is
+        // that domain", and **exactly one of the two is true**. The test is therefore "the
+        // current domain is not allowed", **not** "either domain is not allowed" -- the latter
+        // would flag normal baked-domain nodes (the early OR form made exactly that mistake).
+        if (options.check_domain) {
+            const bool violates =
+                (options.domain_allows_field && !d->allow_in_field_domain) ||
+                (options.domain_allows_particle && !d->allow_in_particle_domain);
+            if (violates) {
+                report.error(ErrorCode::plugin_capability_missing,
+                             "节点类型「" + d->type_name + "」不允许出现在 " +
+                                 options.domain_name + " 域",
+                             id, 0, false,
+                             options.domain_runs_every_frame
+                                 ? std::string{"实时域每帧执行，禁止阻塞与分配"}
+                                 : std::string{});
+            }
         }
 
-        // ── 4. 必需参数 ──────────────────────────────────────────────────────
+        // -- 4. Required params -----------------------------------------------
         if (options.require_required_params) {
             for (const auto& in_port : d->inputs) {
                 const bool connected =
@@ -95,7 +108,7 @@ Report validate_graph(const Graph& g, const ResolveContext& ctx, const ValidateO
         }
     }
 
-    // ── 2. 端口存在性 + 3. 连接兼容 ──────────────────────────────────────────
+    // -- 2. Port existence + 3. Connection compatibility ----------------------
     const DimensionMap dims = resolve_dimensions(g, ctx);
 
     for (const auto& e : g.edges()) {
@@ -103,7 +116,7 @@ Report validate_graph(const Graph& g, const ResolveContext& ctx, const ValidateO
         const NodeDesc* to_desc = desc_of(g, ctx, e.to.node);
 
         if (from_desc == nullptr || to_desc == nullptr) {
-            // 上游第 1 层已经报过"未知节点类型"，这里不重复刷屏
+            // Layer 1 above already reported "unknown node type"; do not repeat it here
             continue;
         }
 
@@ -135,7 +148,7 @@ Report validate_graph(const Graph& g, const ResolveContext& ctx, const ValidateO
             continue;
         }
 
-        // 把 `same_as_input` 解析成具体量纲后再判定
+        // Resolve `same_as_input` into a concrete dimension before judging
         qp::ports::PortTypeDesc resolved_from = *from_type;
         qp::ports::PortTypeDesc resolved_to = *to_type;
         if (const ResolvedDimension* r = dims.find(e.from.node, e.from.port);
@@ -144,7 +157,7 @@ Report validate_graph(const Graph& g, const ResolveContext& ctx, const ValidateO
             resolved_from.dimension = r->dimension;
         }
         if (resolved_to.constraint == qp::ports::DimensionConstraint::same_as_input) {
-            // 输入端的 same_as_input 意味着"跟着上游走"，因此与上游天然一致
+            // same_as_input on an input means "follow the upstream", so it matches by construction
             resolved_to.constraint = qp::ports::DimensionConstraint::any;
         }
 
@@ -180,7 +193,7 @@ Report validate_graph(const Graph& g, const ResolveContext& ctx, const ValidateO
             continue;
         }
 
-        // `any` 端口会让类型检查失效 —— 允许但必须留痕
+        // An `any` port defeats type checking -- allowed, but it must leave a trace
         if (chk.has_any) {
             report.warn(ErrorCode::type_mismatch,
                         "连接「" + port_label(from_desc, e.from.port, true) + "」→「" +
@@ -190,7 +203,7 @@ Report validate_graph(const Graph& g, const ResolveContext& ctx, const ValidateO
         }
     }
 
-    // ── 附加：未连接的必需输入（在非 required 情况下给出警告）───────────────
+    // -- Extra: unconnected required inputs (warned in the non-required case) --
     if (options.warn_unconnected_outputs) {
         for (const auto& s : g.slots()) {
             if (!s.occupied) continue;

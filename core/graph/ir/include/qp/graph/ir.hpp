@@ -1,36 +1,36 @@
 /**
  * @file qp/graph/ir.hpp
- * @brief 图中间表示（IR）的唯一入口。
+ * @brief The single entry point of the graph intermediate representation (IR).
  *
- * ## IR 是插件 API 本身
+ * ## The IR is the plugin API itself
  *
- * 这个模块定义的形状就是**插件作者要面对的契约**。因此它必须：
- *   - 足够小：太多概念会让"写一个节点"变成学习负担；
- *   - 足够稳：改动会波及每一个已发布的插件；
- *   - 只描述**结构与类型**，不含求值、缓存、布局坐标。
+ * The shapes this module defines are exactly **the contract a plugin author faces**. It therefore must be:
+ *   - Small enough: too many concepts turn "write a node" into a learning burden;
+ *   - Stable enough: a change ripples into every plugin already published;
+ *   - **Structure and types** only, with no evaluation, caching, or layout coordinates.
  *
- * ## 明确不做的事
+ * ## What it deliberately does not do
  *
- * | 不做 | 归谁 |
+ * | not done here | owner |
  * |---|---|
- * | 求值 | `core/graph/eval` |
- * | 缓存 | `core/graph/eval` |
- * | 无环校验 | `core/graph/structure` |
- * | 节点坐标 | 视图层（`view_layouts`，按视图 id 分槽） |
- * | 参数校验逻辑 | `core/graph/validate` |
+ * | evaluation | `core/graph/eval` |
+ * | caching | `core/graph/eval` |
+ * | acyclicity validation | `core/graph/structure` |
+ * | node coordinates | view layer (`view_layouts`, slotted by view id) |
+ * | parameter validation logic | `core/graph/validate` |
  *
- * 最后一条尤其重要：**节点的 x/y 是布局算法的输出，不是图的性质**。
- * 旧工程把它塞进了 `Graph.auto_layout()`，导致一种布局算法被焊进内核。
+ * The last row matters most: **a node's x/y is the output of a layout algorithm, not a property of the graph**.
+ * An older project stuffed it into `Graph.auto_layout()`, which welded one layout algorithm into the kernel.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   本模块不依赖 core/graph 内的其他子模块
+ * @invariant   this module depends on no other submodule inside core/graph
  * @errors      noexcept
- * @complexity  —
+ * @complexity  n/a
  * @nondet      none
- * @frozen      是（IR 形状冻结；改动需 ADR）
+ * @frozen      yes (the IR shape is frozen; changes need an ADR)
  * @tests       graph.ids.node_default_is_invalid, graph.ids.node_equality,
  *              graph.ids.node_generation_matters, graph.ids.port_ref_default_is_invalid,
  *              graph.ids.port_ref_equality,
@@ -54,7 +54,7 @@
 
 namespace qp::graph {
 
-/// @brief IR 的版本。`NodeDesc` 形状或 ID 语义变更时必须递增。
+/// @brief Version of the IR. Must be incremented when the `NodeDesc` shape or the ID semantics change.
 inline constexpr int kIrVersion = 1;
 
 }  // namespace qp::graph

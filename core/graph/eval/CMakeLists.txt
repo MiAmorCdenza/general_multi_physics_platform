@@ -1,7 +1,7 @@
-# core/graph/eval：求值调度 + 内容寻址缓存。
+# core/graph/eval: evaluation scheduling + content-addressed cache.
 #
-# 依赖规则：eval 依赖 ir / structure / ports。
-# 它不认识 validate（校验是加载期的事，求值不该重复校验）。
+# Dependency rule: eval depends on ir / structure / ports.
+# It does not know validate (validation happens at load time; evaluation must not repeat it).
 
 add_library(qp_graph_eval STATIC
     src/value_key.cpp

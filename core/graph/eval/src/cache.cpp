@@ -1,6 +1,6 @@
 /**
  * @file cache.cpp
- * @brief 内容寻址缓存的实现。
+ * @brief Implementation of the content-addressed cache.
  */
 #include <qp/graph/eval/cache.hpp>
 
@@ -34,7 +34,7 @@ void EvalCache::put(CacheKey key,
         return;
     }
 
-    // 先淘汰再插入：保证插入后不会短暂超限
+    // Evict before inserting, so the map is never briefly over capacity
     while (entries_.size() >= capacity_) {
         evict_one();
     }

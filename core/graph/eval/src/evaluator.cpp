@@ -1,11 +1,11 @@
 /**
  * @file evaluator.cpp
- * @brief 求值的实现：Kahn 拓扑序 + 内容寻址缓存。
+ * @brief Evaluation: Kahn topological order + content-addressed cache.
  *
- * 顺序上有一处必须小心：**节点被求值之前，它的全部输入必须已经就绪**。
- * 这由拓扑序保证，而拓扑序在同一层内有多个可选节点时按**槽位索引**
- * 打破平局——这是"确定性"的一部分：不固定平局规则，
- * 两次运行的调用顺序就可能不同，而任何有隐藏状态的实现都会因此给出不同结果。
+ * One ordering detail needs care: **all of a node's inputs must be ready before the
+ * node is evaluated**. The topological order ensures this, breaking ties inside one
+ * layer by **slot index** -- part of "deterministic": without a fixed tie-break two
+ * runs could call in a different order, and hidden state would then give different results.
  */
 #include <qp/graph/eval/evaluator.hpp>
 
@@ -40,13 +40,13 @@ Result<EvalStats> evaluate_graph(const Graph& g, const EvalContext& ctx, EvalRes
 
     const std::size_t n = g.slots().size();
 
-    // 拓扑序（Kahn），平局按槽位索引
+    // Topological order (Kahn), ties broken by slot index
     std::vector<std::size_t> indegree(n, 0);
     for (const auto& e : g.edges()) {
         if (e.to.node.index < n) ++indegree[e.to.node.index];
     }
 
-    // 本轮已算出的全部输出，供下游取用
+    // Everything computed this round, for downstream nodes to read
     std::vector<EvalResult::Output> values;
 
     const auto lookup = [&values](NodeId node, PortNumber port) -> qp::ports::Value {
@@ -56,7 +56,7 @@ Result<EvalStats> evaluate_graph(const Graph& g, const EvalContext& ctx, EvalRes
         return qp::ports::Value{};
     };
 
-    // 按槽位索引入队：保证同层节点的处理顺序确定
+    // Enqueue by slot index: makes the processing order within a layer deterministic
     std::deque<NodeId> ready;
     for (std::size_t i = 1; i < g.slots().size(); ++i) {
         const auto& s = g.slots()[i];
@@ -76,26 +76,26 @@ Result<EvalStats> evaluate_graph(const Graph& g, const EvalContext& ctx, EvalRes
             return Result<EvalStats>{ErrorCode::unknown_node};
         }
 
-        // ── 收集输入 ────────────────────────────────────────────────────────
+        // -- Collect inputs --------------------------------------------------
         std::vector<std::pair<PortNumber, qp::ports::Value>> inputs;
         for (const auto& in_port : desc->inputs) {
             const Edge* e = g.incoming(PortRef{id, in_port.number, PortDirection::input});
             if (e != nullptr) {
                 inputs.emplace_back(in_port.number, lookup(e->from.node, e->from.port));
             } else {
-                // 未连线 → 用参数值；参数也没有 → 用默认构造的无效值
+                // Unconnected -> use the parameter value; no parameter either -> invalid default
                 const qp::ports::Value p = node->param(in_port.number);
                 if (p.valid()) inputs.emplace_back(in_port.number, p);
             }
         }
 
-        // 输出端口号列表（升序，保证顺序确定）
+        // Output port numbers (ascending, so the order is deterministic)
         std::vector<PortNumber> out_ports;
         out_ports.reserve(desc->outputs.size());
         for (const auto& o : desc->outputs) out_ports.push_back(o.number);
         std::sort(out_ports.begin(), out_ports.end());
 
-        // ── 绕过：把第 1 个输入直接透传到第 1 个输出 ────────────────────────
+        // -- Bypass: pass the first input straight to the first output -------
         if (node->bypassed) {
             ++stats.nodes_skipped;
             if (!out_ports.empty()) {
@@ -108,9 +108,9 @@ Result<EvalStats> evaluate_graph(const Graph& g, const EvalContext& ctx, EvalRes
                 values.push_back(EvalResult::Output{id, out_ports.front(), passthrough});
             }
         } else {
-            // ── 缓存键：节点身份（含世代）+ 类型 + 参数 + 输入 ──────────────
+            // -- Cache key: node identity (with generation) + type + params + inputs ---
             CacheKey key{};
-            key.node = id;                    // 含世代：槽位复用不会命中别人的结果
+            key.node = id;                    // With generation: slot reuse cannot hit another node's result
             key.type_name = node->type_name;
 
             std::string text;
@@ -119,7 +119,7 @@ Result<EvalStats> evaluate_graph(const Graph& g, const EvalContext& ctx, EvalRes
             h = mix_u64(h, static_cast<std::uint64_t>(id.index));
             h = mix_u64(h, static_cast<std::uint64_t>(id.generation));
 
-            // 参数按端口号排序后混入（节点内部存储顺序不参与语义）
+            // Parameters are mixed in sorted by port number (internal storage order is not semantic)
             std::vector<std::pair<PortNumber, qp::ports::Value>> params;
             params.reserve(node->params.size());
             for (const auto& p : node->params) {
@@ -136,7 +136,7 @@ Result<EvalStats> evaluate_graph(const Graph& g, const EvalContext& ctx, EvalRes
                 text += ';';
             }
 
-            // 输入同理
+            // Inputs likewise
             std::vector<std::pair<PortNumber, qp::ports::Value>> sorted_inputs = inputs;
             std::sort(sorted_inputs.begin(), sorted_inputs.end(),
                       [](const auto& a, const auto& b) { return a.first < b.first; });
@@ -151,7 +151,7 @@ Result<EvalStats> evaluate_graph(const Graph& g, const EvalContext& ctx, EvalRes
             key.content = h;
             key.content_text = std::move(text);
 
-            // ── 查缓存 ──────────────────────────────────────────────────────
+            // -- Look up the cache -------------------------------------------
             const CacheEntry* hit = ctx.cache == nullptr ? nullptr : ctx.cache->find(key);
             if (hit != nullptr) {
                 ++stats.cache_hits;
@@ -174,7 +174,7 @@ Result<EvalStats> evaluate_graph(const Graph& g, const EvalContext& ctx, EvalRes
             }
         }
 
-        // ── 推进下游 ────────────────────────────────────────────────────────
+        // -- Advance downstream ----------------------------------------------
         for (const auto& e : g.edges()) {
             if (e.from.node != id) continue;
             if (e.to.node.index >= n) continue;
@@ -186,7 +186,7 @@ Result<EvalStats> evaluate_graph(const Graph& g, const EvalContext& ctx, EvalRes
     }
 
     if (processed < g.node_count()) {
-        // 有环（结构层已保证不会发生，但求值器不假设这一点）
+        // A cycle: the structure layer forbids it, but the evaluator does not assume that
         return Result<EvalStats>{ErrorCode::cycle_detected};
     }
 

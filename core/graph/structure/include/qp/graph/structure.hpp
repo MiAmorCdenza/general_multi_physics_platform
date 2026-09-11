@@ -1,25 +1,25 @@
 /**
  * @file qp/graph/structure.hpp
- * @brief 图结构模块的唯一入口。
+ * @brief The single entry point of the graph structure module.
  *
- * 这个模块只回答四个问题：
- *   1. 图里有哪些节点与边？
- *   2. 加/删/连/断之后，图变成了什么样？
- *   3. 当前版本号是多少？
- *   4. 这个操作能不能做（会不会成环、会不会撞端口）？
+ * This module answers exactly four questions:
+ *   1. Which nodes and edges does the graph hold?
+ *   2. After add/remove/connect/disconnect, what does the graph look like?
+ *   3. What is the current version number?
+ *   4. May this operation happen (would it create a cycle or clash on a port)?
  *
- * 它**不**回答"这个图算出来是什么"（→ `eval`），
- * 也**不**回答"节点该画在哪"（→ 视图层的 `view_layouts`）。
+ * It does **not** answer "what does this graph compute" (-> `eval`),
+ * and it does **not** answer "where should a node be drawn" (-> the view layer's `view_layouts`).
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   任何成功变异后图仍无环、每个输入端口至多一条入边
- * @errors      noexcept（失败走 Result）
+ * @invariant   After any successful mutation the graph is still acyclic, and each input port has at most one incoming edge
+ * @errors      noexcept (failures travel as Result)
  * @complexity  —
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       graph.structure.empty_graph, graph.structure.add_node,
  *              graph.structure.add_node_uses_fresh_generation,
  *              graph.structure.remove_node_invalidates_handle,
@@ -46,7 +46,7 @@
 
 namespace qp::graph {
 
-/// @brief structure 模块的版本。Graph 的公开接口变更时递增。
+/// @brief Version of the structure module. Bump when Graph's public interface changes.
 inline constexpr int kStructureVersion = 1;
 
 }  // namespace qp::graph

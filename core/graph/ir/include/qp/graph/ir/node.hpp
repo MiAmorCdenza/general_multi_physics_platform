@@ -1,23 +1,23 @@
 /**
  * @file node.hpp
- * @brief 图中的节点实例：类型 + 参数值 + 位置无关的身份。
+ * @brief A node instance in the graph: type + parameter values + location-independent identity.
  *
- * ## 关键区分：`NodeDesc` 是类型，`Node` 是实例
+ * ## The key distinction: `NodeDesc` is the type, `Node` is the instance
  *
- * `NodeDesc`（见 descriptor.hpp）描述"偶极场节点长什么样"，
- * 全图只有一份。`Node` 描述"图里第 3 个偶极场节点，参数是这些值"，
- * 每个实例一份。
+ * `NodeDesc` (see descriptor.hpp) describes "what a dipole-field node looks like";
+ * there is exactly one per graph. `Node` describes "the third dipole-field node in
+ * the graph, with these parameter values"; there is one per instance.
  *
- * 把两者混为一谈是常见错误：它会导致"改一个节点的端口定义，全图所有
- * 同类型节点一起变"，而用户完全无法理解发生了什么。
+ * Confusing the two is a common mistake: it leads to "editing one node's port
+ * definition changes every same-type node in the graph", which the user cannot understand.
  *
- * ## 节点不持有状态
+ * ## A node holds no state
  *
- * `Node` 里只有**声明**：类型、参数、是否绕过。
- * 求值中间态属于求值上下文，时间步进属于运行，缓存属于缓存存储。
- * 一个持有可变状态的节点会让缓存失效判定变成不可解的问题。
+ * A `Node` holds **declarations** only: type, parameters, bypass flag.
+ * Evaluation intermediates belong to the evaluation context, time stepping to the run,
+ * and cache to the cache store. A node holding mutable state would make cache invalidation unsolvable.
  *
- * @frozen 否（可扩；已有字段语义冻结）
+ * @frozen no (extensible; the semantics of existing fields are frozen)
  */
 #pragma once
 
@@ -29,22 +29,22 @@
 
 namespace qp::graph {
 
-/// @brief 节点的一个参数值（按端口号索引）。
+/// @brief One parameter value of a node (indexed by port number).
 struct ParamValue final {
     PortNumber number = 0;
     qp::ports::Value value{};
 };
 
 /**
- * @brief 图中的一个节点实例。
+ * @brief A node instance in the graph.
  *
  * @ownership   owns
- * @thread      main（图的变异与读取都在主线程；求值线程读快照）
+ * @thread      main (both mutation and reading happen on the main thread; eval threads read a snapshot)
  * @pre         none
  * @post        none
- * @invariant   `type_name` 在实例存续期内不变（改类型 = 删旧建新）
+ * @invariant   `type_name` does not change while the instance lives (changing type = delete + add)
  * @errors      noexcept
- * @frozen      否
+ * @frozen      no
  * @tests       graph.node.construction, graph.node.param_lookup,
  *              graph.node.set_param_replaces, graph.node.bypass_flag,
  *              graph.node.user_name_is_separate_from_id
@@ -52,27 +52,27 @@ struct ParamValue final {
 struct Node final {
     NodeId id{};
 
-    /// 类型名。指向 `NodeDesc::type_name` 的**副本**——描述可能被热重载，
-    /// 而实例应当记住自己当初是哪种类型。
+    /// Type name. A **copy** of `NodeDesc::type_name` -- the descriptor may be hot-reloaded,
+    /// while an instance should remember which type it was created as.
     std::string type_name;
 
-    /// 面向用户的稳定名字（YAML 里的键、报告里的引用）。
+    /// Stable user-facing name (the key in YAML, the reference in reports).
     ///
-    /// 与 `id` 分开：`id` 是内部寻址句柄（含世代，会因删除而失效），
-    /// `name` 是给人看的标签。两者都可为空/默认，但只有 `id` 参与寻址。
+    /// Separate from `id`: `id` is the internal addressing handle (it carries a generation
+    /// and goes stale on delete), `name` is the label for humans. Both may be empty, but only `id` addresses.
     std::string name;
 
     std::vector<ParamValue> params;
 
-    /// 绕过该节点：求值时直接把匹配的输入透传到输出。
-    /// 用于"临时禁用某个滤波节点"而不必断开连线。
+    /// Bypass this node: evaluation passes the matching input straight through to the output.
+    /// Used to "temporarily disable a filter node" without cutting the wires.
     bool bypassed = false;
 
-    /// 求值顺序提示。仅在拓扑排序有多解时作为次要判据，
-    /// **不改变拓扑约束**（图永远无环）。
+    /// Evaluation-order hint. Only a secondary criterion when the topological sort is ambiguous,
+    /// it **does not relax the topological constraint** (the graph is always acyclic).
     std::int32_t order_hint = 0;
 
-    /// @brief 取参数值。未设置返回无效 Value。
+    /// @brief Get a parameter value. Returns an invalid Value when unset.
     [[nodiscard]] qp::ports::Value param(PortNumber number) const noexcept {
         for (const auto& p : params) {
             if (p.number == number) return p.value;
@@ -80,17 +80,17 @@ struct Node final {
         return qp::ports::Value{};
     }
 
-    /// @brief 设置参数值。已存在则替换，否则追加。
+    /// @brief Set a parameter value. Replaces an existing entry, otherwise appends.
     ///
-    /// @ownership   owns（复制值）
+    /// @ownership   owns (copies the value)
     /// @thread      main
     /// @pre         number != 0
     /// @post        `param(number) == value`
-    /// @invariant   同一 number 至多出现一次
+    /// @invariant   The same number appears at most once
     /// @errors      noexcept
     /// @complexity  O(n)
     /// @nondet      none
-    /// @frozen      否
+    /// @frozen      no
     /// @tests       graph.node.set_param_replaces
     void set_param(PortNumber number, qp::ports::Value value) {
         for (auto& p : params) {
@@ -102,7 +102,7 @@ struct Node final {
         params.push_back(ParamValue{number, std::move(value)});
     }
 
-    /// @brief 删除参数值。返回是否确实删除。
+    /// @brief Erase a parameter value. Returns whether it was actually erased.
     bool erase_param(PortNumber number) noexcept {
         for (auto it = params.begin(); it != params.end(); ++it) {
             if (it->number == number) {

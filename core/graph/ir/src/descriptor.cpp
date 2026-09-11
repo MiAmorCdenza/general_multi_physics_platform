@@ -1,6 +1,6 @@
 /**
  * @file descriptor.cpp
- * @brief `NodeDesc` 的查找辅助实现。
+ * @brief Lookup-helper implementation for `NodeDesc`.
  */
 #include <qp/graph/ir/descriptor.hpp>
 

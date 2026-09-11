@@ -1,8 +1,8 @@
 /**
  * @file test_ir.cpp
- * @brief core/graph/ir 的单元与性质测试。
+ * @brief Unit and property tests for core/graph/ir.
  *
- * 用例 id 与 core/graph/ir/include/qp/graph/ir.hpp 的 @tests 字段逐字对应。
+ * The case ids correspond word for word to the @tests field of core/graph/ir/include/qp/graph/ir.hpp.
  */
 #include <catch2/catch_test_macros.hpp>
 
@@ -15,9 +15,9 @@
 using namespace qp::graph;
 using qp::ports::Value;
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // ids.hpp
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 
 TEST_CASE("graph.ids.node_default_is_invalid", "[graph][ir]") {
     const NodeId n;
@@ -25,7 +25,7 @@ TEST_CASE("graph.ids.node_default_is_invalid", "[graph][ir]") {
     REQUIRE(n.index == kNoSlot);
     REQUIRE(n.generation == kNoGeneration);
 
-    // 只有一半有效也是无效：0 索引或 0 世代都不构成合法句柄
+    // Half-valid is invalid too: neither a 0 index nor a 0 generation is a legal handle
     REQUIRE_FALSE((NodeId{0, 5}.valid()));
     REQUIRE_FALSE((NodeId{5, 0}.valid()));
     REQUIRE((NodeId{5, 1}.valid()));
@@ -41,11 +41,11 @@ TEST_CASE("graph.ids.node_equality", "[graph][ir]") {
 }
 
 TEST_CASE("graph.ids.node_generation_matters", "[graph][ir]") {
-    // 世代是这套 ID 方案存在的**唯一理由**：
-    // 槽位复用后，老句柄必须能与新句柄区分开，
-    // 否则撤销栈/缓存键/UI 选中状态会静默指向别的节点。
+    // The generation is the **only reason** this ID scheme exists:
+    // once a slot is reused, an old handle must be distinguishable from a new one,
+    // or the undo stack / cache key / UI selection would silently point at another node.
     const NodeId old_handle{3, 1};
-    const NodeId new_handle{3, 2};   // 同一个槽位，被复用
+    const NodeId new_handle{3, 2};   // the same slot, reused
     REQUIRE(old_handle != new_handle);
     REQUIRE(old_handle.index == new_handle.index);
     REQUIRE(old_handle.generation != new_handle.generation);
@@ -57,8 +57,8 @@ TEST_CASE("graph.ids.port_ref_default_is_invalid", "[graph][ir]") {
     REQUIRE(r.port == kNoPort);
     REQUIRE(r.direction == PortDirection::input);
 
-    REQUIRE_FALSE((PortRef{NodeId{}, 1, PortDirection::output}.valid()));   // 无节点
-    REQUIRE_FALSE((PortRef{NodeId{1, 1}, 0, PortDirection::output}.valid())); // 无端口
+    REQUIRE_FALSE((PortRef{NodeId{}, 1, PortDirection::output}.valid()));   // no node
+    REQUIRE_FALSE((PortRef{NodeId{1, 1}, 0, PortDirection::output}.valid())); // no port
     REQUIRE((PortRef{NodeId{1, 1}, 1, PortDirection::output}.valid()));
 }
 
@@ -67,13 +67,13 @@ TEST_CASE("graph.ids.port_ref_equality", "[graph][ir]") {
     const PortRef b{NodeId{1, 1}, 2, PortDirection::input};
     const PortRef c{NodeId{1, 1}, 2, PortDirection::output};
     REQUIRE(a == b);
-    REQUIRE(a != c);   // 方向不同即不同
-    REQUIRE(a != PortRef{NodeId{1, 2}, 2, PortDirection::input});   // 世代不同
+    REQUIRE(a != c);   // a different direction is a different ref
+    REQUIRE(a != PortRef{NodeId{1, 2}, 2, PortDirection::input});   // a different generation
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // descriptor.hpp
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 
 namespace {
 
@@ -106,18 +106,18 @@ TEST_CASE("graph.desc.port_basic", "[graph][ir]") {
     p.name = "mass";
     REQUIRE(p.valid());
     REQUIRE(p.label.empty());
-    REQUIRE(p.connectable);      // 默认可连线
-    REQUIRE_FALSE(p.required);   // 默认非必需
-    REQUIRE(p.unit_factor == 1.0);   // 默认 1.0：用户直接填 SI 值
+    REQUIRE(p.connectable);      // connectable by default
+    REQUIRE_FALSE(p.required);   // not required by default
+    REQUIRE(p.unit_factor == 1.0);   // default 1.0: the user types SI values
 }
 
 TEST_CASE("graph.desc.port_connectable_flag", "[graph][ir]") {
-    // Param 与 Port 统一的落点：同一个结构，一个标志区分。
-    // 这消除了"校验/UI/序列化各写两遍"的重复实现。
+    // Port and Param unified in one place: the same struct, one flag to tell them apart.
+    // This removes the duplicate work of validating / drawing / serializing each of them twice.
     PortDesc param{};
     param.number = 1;
     param.name = "density";
-    param.connectable = false;   // 只能填值
+    param.connectable = false;   // value only
     REQUIRE(param.valid());
 
     PortDesc socket{};
@@ -126,7 +126,7 @@ TEST_CASE("graph.desc.port_connectable_flag", "[graph][ir]") {
     socket.connectable = true;
     REQUIRE(socket.valid());
 
-    // 两者的结构完全相同——只有标志不同
+    // Both have exactly the same layout -- only the flag differs
     REQUIRE(sizeof(param) == sizeof(socket));
 }
 
@@ -140,7 +140,7 @@ TEST_CASE("graph.desc.port_numeric_bounds", "[graph][ir]") {
     p.max_value = 180.0;
     p.step = 1.0;
     p.unit_factor = 1.0;
-    p.unit_symbol = "deg";   // 显示用；量纲仍由端口类型决定
+    p.unit_symbol = "deg";   // display only; the dimension still comes from the port type
 
     REQUIRE(p.has_range);
     REQUIRE(p.min_value == -180.0);
@@ -167,12 +167,12 @@ TEST_CASE("graph.desc.input_view_lookup", "[graph][ir]") {
 
     REQUIRE(in.f64(1) == 2.5);
     REQUIRE(in.i64(2) == 7);
-    // 缺失端口返回兜底值，不崩
+    // A missing port returns a fallback value instead of crashing
     REQUIRE(in.f64(99) == 0.0);
     REQUIRE(in.i64(99) == 0);
     REQUIRE_FALSE(in.boolean(99));
     REQUIRE(in.text(99).empty());
-    // 类型不符也返回兜底值
+    // A wrong type also returns the fallback value
     REQUIRE(in.i64(1) == 0);
 }
 
@@ -184,7 +184,7 @@ TEST_CASE("graph.desc.node_basic", "[graph][ir]") {
     REQUIRE(d.inputs.size() == 2);
     REQUIRE(d.outputs.size() == 1);
     REQUIRE(d.has_compute);
-    // 默认域策略：烘焙域允许，实时域**拒绝**（保守）
+    // Default domain policy: allowed in the baked domain, **denied** in the real-time one
     REQUIRE(d.allow_in_field_domain);
     REQUIRE_FALSE(d.allow_in_particle_domain);
 }
@@ -198,16 +198,16 @@ TEST_CASE("graph.desc.node_port_lookup", "[graph][ir]") {
 
     REQUIRE(d.find_port(2, false) != nullptr);
     REQUIRE(d.find_port(3, false) == nullptr);
-    REQUIRE(d.find_port(1, true) != nullptr);          // 输出端口 1
+    REQUIRE(d.find_port(1, true) != nullptr);          // output port 1
     REQUIRE(d.find_port(2, true) == nullptr);
-    REQUIRE(d.find_port(0, false) == nullptr);         // 0 号端口不存在
+    REQUIRE(d.find_port(0, false) == nullptr);         // port 0 does not exist
 
     const PortDesc* by_name = d.find_by_name("tilt", false);
     REQUIRE(by_name != nullptr);
     REQUIRE(by_name->number == 2);
     REQUIRE(d.find_by_name("nope", false) == nullptr);
     REQUIRE(d.find_by_name("field", true) != nullptr);
-    REQUIRE(d.find_by_name("field", false) == nullptr);   // 输出名不在输入里
+    REQUIRE(d.find_by_name("field", false) == nullptr);   // an output name is not in the inputs
     REQUIRE(d.find_by_name("", false) == nullptr);
 }
 
@@ -215,22 +215,22 @@ TEST_CASE("graph.desc.node_output_count", "[graph][ir]") {
     NodeDesc d = make_node();
     REQUIRE(d.output_count() == 1);
     d.outputs.clear();
-    REQUIRE(d.output_count() == 0);   // 无输出 → 无需求值
+    REQUIRE(d.output_count() == 0);   // no outputs -> nothing to evaluate
 }
 
 TEST_CASE("graph.desc.node_has_hooks", "[graph][ir]") {
-    // 节点只有五个字段级的"能力声明"，没有生命周期钩子。
-    // 这是**上限**：加第六个之前必须走 ADR。
+    // A node has only five field-level "capability declarations" and no lifecycle hooks.
+    // This is a **ceiling**: a sixth requires an ADR first.
     const NodeDesc d = make_node();
     REQUIRE(d.has_compute);
-    // 三个可选钩子的能力由 has_compute + 两个域标志表达，不含状态
+    // The three optional hooks are expressed by has_compute + the two domain flags, no state
     REQUIRE(d.allow_in_field_domain);
     REQUIRE_FALSE(d.allow_in_particle_domain);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // node.hpp
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 
 TEST_CASE("graph.node.construction", "[graph][ir]") {
     Node n{};
@@ -250,7 +250,7 @@ TEST_CASE("graph.node.param_lookup", "[graph][ir]") {
 
     REQUIRE(n.param(1).as_f64() == 3.5);
     REQUIRE(n.param(2).as_i64() == 4);
-    // 未设置的参数返回无效值
+    // A parameter that was never set returns an invalid value
     REQUIRE_FALSE(n.param(99).valid());
     REQUIRE_FALSE(n.param(0).valid());
 }
@@ -258,18 +258,18 @@ TEST_CASE("graph.node.param_lookup", "[graph][ir]") {
 TEST_CASE("graph.node.set_param_replaces", "[graph][ir]") {
     Node n{};
     n.set_param(1, Value{1.0});
-    n.set_param(1, Value{2.0});      // 替换，不是追加
+    n.set_param(1, Value{2.0});      // replace, not append
     REQUIRE(n.params.size() == 1);
     REQUIRE(n.param(1).as_f64() == 2.0);
 
-    // 替换可以改变类型
+    // Replacing may change the type
     n.set_param(1, Value{std::string{"text"}});
     REQUIRE(n.params.size() == 1);
     REQUIRE(n.param(1).as_text() == "text");
 
-    // 删除
+    // Erase
     REQUIRE(n.erase_param(1));
-    REQUIRE_FALSE(n.erase_param(1));   // 已不存在
+    REQUIRE_FALSE(n.erase_param(1));   // no longer present
     REQUIRE(n.params.empty());
     REQUIRE_FALSE(n.param(1).valid());
 }
@@ -279,14 +279,14 @@ TEST_CASE("graph.node.bypass_flag", "[graph][ir]") {
     REQUIRE_FALSE(n.bypassed);
     n.bypassed = true;
     REQUIRE(n.bypassed);
-    // 绕过是**运行期语义**，不改结构：节点仍在图里，边仍然存在
+    // Bypass is **run-time semantics** and changes no structure: node and edges remain
     REQUIRE(n.params.empty());
 }
 
 TEST_CASE("graph.node.user_name_is_separate_from_id", "[graph][ir]") {
-    // id 是内部寻址句柄（含世代，删除后失效）；
-    // name 是给人看的标签（YAML 键、报告引用、错误信息）。
-    // 两者必须分开：改名不应影响任何内部引用。
+    // id is the internal addressing handle (with generation; invalid after deletion);
+    // name is the human-facing label (YAML key, report reference, error message).
+    // The two must stay separate: renaming must not affect any internal reference.
     Node n{};
     n.id = NodeId{7, 3};
     n.name = "spring_1";
@@ -296,13 +296,13 @@ TEST_CASE("graph.node.user_name_is_separate_from_id", "[graph][ir]") {
     REQUIRE(n.name == "spring_1");
 
     const NodeId id_before = n.id;
-    n.name = "春天的弹簧";           // 改名
-    REQUIRE(n.id == id_before);      // 内部句柄不变
+    n.name = "春天的弹簧";           // rename
+    REQUIRE(n.id == id_before);      // the internal handle is unchanged
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // edge.hpp
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 
 TEST_CASE("graph.edge.construction", "[graph][ir]") {
     const Edge e{PortRef{NodeId{1, 1}, 1, PortDirection::output},
@@ -320,16 +320,16 @@ TEST_CASE("graph.edge_equality", "[graph][ir]") {
     b.to.port = 2;
     REQUIRE(a != b);
     b = a;
-    b.from.node.generation = 2;   // 源节点世代变了 → 是另一条边
+    b.from.node.generation = 2;   // the source generation changed -> a different edge
     REQUIRE(a != b);
     b = a;
-    b.to.direction = PortDirection::output;   // 方向变了 → 是另一条边
+    b.to.direction = PortDirection::output;   // the direction changed -> a different edge
     REQUIRE(a != b);
 }
 
 TEST_CASE("graph.edge_direction_invariant", "[graph][ir]") {
-    // 不变量：from 必须是输出，to 必须是输入。
-    // 方向反了不是"另一种合法的边"，而是错误。
+    // Invariant: from must be an output and to must be an input.
+    // A reversed direction is not "another legal edge", it is an error.
     const Edge reversed{PortRef{NodeId{1, 1}, 1, PortDirection::input},
                         PortRef{NodeId{2, 1}, 1, PortDirection::output}};
     REQUIRE_FALSE(reversed.valid());

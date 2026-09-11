@@ -1,39 +1,39 @@
 /**
  * @file cache.hpp
- * @brief 节点级内容寻址缓存。
+ * @brief Node-level content-addressed cache.
  *
- * ## 为什么是"内容寻址"而不是"版本号失效"
+ * ## Why "content addressing" and not "invalidate by version number"
  *
- * 版本号失效（图上任何改动 → 清空缓存）在课堂现场是不可用的：
- * 老师调一个节点的参数，整张图的烘焙结果全被丢掉，于是每次调节都要重算。
+ * Version-number invalidation (any graph edit -> clear the cache) is unusable in class:
+ * a teacher tweaks one parameter, all bake results are lost, and every tweak recomputes.
  *
- * 内容寻址的语义是"**同样的输入 → 同样的输出**"：
- *   - 改一个参数 → 只有下游的键变了，无关分支照旧命中；
- *   - 撤销回上一步 → 之前的键重新出现，**立刻命中**（不需要重算）。
+ * Content addressing means "**same input -> same output**":
+ *   - change one parameter -> only downstream keys change; unrelated branches still hit;
+ *   - undo back one step -> the earlier keys reappear and **hit immediately** (no recompute).
  *
- * 第二条尤其重要：撤销/重做在课堂演示里是高频操作，
- * 若每次撤销都触发重算，演示节奏就断了。
+ * The second point matters most: undo/redo is a high-frequency action in a lecture,
+ * and recomputing on every undo would break the demonstration's rhythm.
  *
- * ## 键里必须有世代号
+ * ## The key must carry the generation
  *
- * `NodeId` 是 `(index, generation)`。删掉槽位 3 的节点再新建一个，
- * 新节点也占槽位 3 但世代不同。若键里只放 index，
- * **新节点会命中旧节点的缓存**——这是最难查的一类错误：
- * 它不崩溃，只是算出别人的结果。
+ * `NodeId` is `(index, generation)`. Delete the node in slot 3, create a new one, and
+ * the new node also occupies slot 3 but with a different generation. If the key held
+ * only the index, **the new node would hit the old node's cache** -- the hardest kind
+ * of bug to find: it does not crash, it just returns someone else's results.
  *
- * ## 淘汰
+ * ## Eviction
  *
- * 缓存有容量上限。超限时按"最久未使用"淘汰。
- * 上限存在的理由：参数扫描会持续产生新键，
- * 无上限的缓存会在长时间运行后吃掉整台机器的内存。
+ * The cache has a capacity limit and evicts least-recently-used entries beyond it.
+ * The limit exists because parameter sweeps keep producing new keys, and an unbounded
+ * cache would eat the whole machine's memory after a long run.
  *
- * @ownership   owns（拥有缓存的全部值副本）
- * @thread      main（求值在单线程进行；见 EvalContext 的说明）
+ * @ownership   owns (owns every cached copy of a value)
+ * @thread      main (evaluation is single-threaded; see EvalContext)
  * @pre         none
  * @post        none
- * @invariant   缓存不改变任何值；命中与未命中对调用方语义相同
- * @errors      noexcept（容量为 0 即禁用缓存）
- * @frozen      否
+ * @invariant   The cache never changes a value; a hit and a miss mean the same to callers
+ * @errors      noexcept (capacity 0 disables the cache)
+ * @frozen      no
  */
 #pragma once
 
@@ -48,27 +48,27 @@
 namespace qp::graph {
 
 /**
- * @brief 缓存键：内容寻址 + 世代 + 端口号。
+ * @brief Cache key: content address + generation + port number.
  *
  * @ownership   owns
- * @thread      any（构造后只读）
+ * @thread      any (read-only after construction)
  * @pre         none
  * @post        none
- * @invariant   `equals` 为真 ⟹ 两条键描述同一次计算
+ * @invariant   `equals` being true means both keys describe the same computation
  * @errors      noexcept
- * @frozen      否
+ * @frozen      no
  * @tests       graph.eval.cache_key_equality, graph.eval.cache_key_generation_matters,
  *              graph.eval.cache_key_param_change_differs
  */
 struct CacheKey final {
-    /// 节点身份（含世代）。**必须含世代**，否则槽位复用会命中别人的结果。
+    /// Node identity (with generation). **Required**: otherwise slot reuse hits another node.
     NodeId node{};
-    /// 节点类型名（同一个槽位可能被改类型——虽然当前设计不允许，
-    /// 但键里带上它成本极低而收益明确）。
+    /// Node type name (the same slot could be retyped -- the current design forbids
+    /// it, but carrying the name in the key costs almost nothing and pays off).
     std::string type_name;
-    /// 参数与输入的内容哈希。
+    /// Content hash of parameters and inputs.
     ValueHash content = kFnvOffsetBasis;
-    /// 参数与输入的规范化文本。用于哈希碰撞时的精确判定。
+    /// Canonical text of parameters and inputs. Exact test when hashes collide.
     std::string content_text;
 
     [[nodiscard]] bool equals(const CacheKey& other) const noexcept {
@@ -77,15 +77,15 @@ struct CacheKey final {
     }
 };
 
-/// @brief `CacheKey` 的哈希适配（用内容哈希，不需要再算一遍文本）。
+/// @brief Hash adapter for `CacheKey` (uses the content hash, no second pass over text).
 struct CacheKeyHash final {
     [[nodiscard]] std::size_t operator()(const CacheKey& k) const noexcept {
-        // 直接复用内容哈希：它已经把节点身份混进去了
+        // Reuse the content hash directly: node identity is already mixed into it
         return static_cast<std::size_t>(k.content);
     }
 };
 
-/// @brief `CacheKey` 的相等适配（精确比较，不只比哈希）。
+/// @brief Equality adapter for `CacheKey` (exact compare, not just the hash).
 struct CacheKeyEq final {
     [[nodiscard]] bool operator()(const CacheKey& a, const CacheKey& b) const noexcept {
         return a.equals(b);
@@ -93,7 +93,7 @@ struct CacheKeyEq final {
 };
 
 /**
- * @brief 一个缓存条目：键 + 值 + 使用序号（用于 LRU）。
+ * @brief One cache entry: key + value + use sequence number (for LRU).
  */
 struct CacheEntry final {
     CacheKey key{};
@@ -102,15 +102,15 @@ struct CacheEntry final {
 };
 
 /**
- * @brief 节点级内容寻址缓存。
+ * @brief Node-level content-addressed cache.
  *
  * @ownership   owns
  * @thread      main
  * @pre         none
  * @post        none
- * @invariant   命中数与未命中数之和等于查询次数
+ * @invariant   hits + misses equals the number of lookups
  * @errors      noexcept
- * @frozen      否
+ * @frozen      no
  * @tests       graph.eval.cache_store_and_fetch, graph.eval.cache_miss_on_first_lookup,
  *              graph.eval.cache_eviction_lru, graph.eval.cache_disabled_when_zero,
  *              graph.eval.cache_clear, graph.eval.cache_stats_are_consistent,
@@ -118,43 +118,43 @@ struct CacheEntry final {
  */
 class EvalCache final {
 public:
-    /// @brief 构造。`capacity == 0` 表示禁用缓存（每次都未命中）。
+    /// @brief Constructs. `capacity == 0` disables the cache (every lookup misses).
     explicit EvalCache(std::size_t capacity = 256) noexcept : capacity_(capacity) {}
 
     /**
-     * @brief 查询。命中返回条目指针，未命中返回 nullptr。
+     * @brief Looks up. Returns the entry pointer on a hit, nullptr on a miss.
      *
-     * @ownership   observes（返回指针指向缓存内部，**下一次 put 之后可能失效**）
+     * @ownership   observes (points inside the cache; **may dangle after the next put**)
      * @thread      main
      * @pre         none
-     * @post        命中时该条目的 last_used 被更新
-     * @invariant   不修改缓存的内容集合
+     * @post        The entry's last_used is updated on a hit
+     * @invariant   Does not modify the cache's content set
      * @errors      noexcept
-     * @complexity  O(1) 摊销
+     * @complexity  O(1) amortized
      * @nondet      none
-     * @frozen      否
+     * @frozen      no
      * @tests       graph.eval.cache_store_and_fetch, graph.eval.cache_miss_on_first_lookup
      */
     [[nodiscard]] const CacheEntry* find(const CacheKey& key) noexcept;
 
     /**
-     * @brief 存入（或覆盖）一个条目。超限时按 LRU 淘汰。
+     * @brief Stores (or overwrites) one entry. Evicts LRU when over capacity.
      *
-     * @ownership   owns（复制键与值）
+     * @ownership   owns (copies the key and the values)
      * @thread      main
      * @pre         none
-     * @post        之后 `find(key)` 必然命中
-     * @invariant   条目数不超过 capacity（capacity 为 0 时恒为 0）
-     * @errors      noexcept；分配失败即 std::terminate
-     *              （缓存不是失败源：它自己失败时不应把错误掺进求值结果）
-     * @complexity  O(1) 摊销；淘汰时 O(n)
+     * @post        A later `find(key)` necessarily hits
+     * @invariant   The entry count never exceeds capacity (always 0 when capacity is 0)
+     * @errors      noexcept; allocation failure calls std::terminate
+     *              (the cache is not a failure source: its own failure must not leak into results)
+     * @complexity  O(1) amortized; O(n) when evicting
      * @nondet      none
-     * @frozen      否
+     * @frozen      no
      * @tests       graph.eval.cache_eviction_lru, graph.eval.cache_disabled_when_zero
      */
     void put(CacheKey key, std::vector<std::pair<PortNumber, qp::ports::Value>> outputs) noexcept;
 
-    /// @brief 清空全部条目（统计量保留）。
+    /// @brief Clears every entry (statistics are kept).
     void clear() noexcept;
 
     [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }

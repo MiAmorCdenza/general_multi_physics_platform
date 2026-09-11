@@ -1,6 +1,6 @@
 /**
  * @file value_key.cpp
- * @brief 确定性哈希与规范化文本的实现。
+ * @brief Implementation of deterministic hashing and canonical text.
  */
 #include <qp/graph/eval/value_key.hpp>
 
@@ -14,7 +14,7 @@
 namespace qp::graph {
 namespace {
 
-/// @brief 量纲的规范化文本（七个指数，逗号分隔）。
+/// @brief Canonical text for a dimension (seven exponents, comma separated).
 [[nodiscard]] std::string dim_text(qp::units::Dim d) {
     static constexpr std::array<const char*, 7> kNames{"L", "M", "T", "I", "Th", "N", "J"};
     const std::array<qp::units::DimExp, 7> exps{d.L, d.M, d.T, d.I, d.Th, d.N, d.J};
@@ -28,32 +28,32 @@ namespace {
     return out;
 }
 
-/// @brief double 的**精确**文本。
+/// @brief The **exact** text for a double.
 ///
-/// 用 `%a`（十六进制浮点）而不是 `%.17g`：
+/// Use `%a` (hexadecimal float) rather than `%.17g`:
 ///
-/// `%.17g` 只保证"能被解析回同一个值"，**不保证不同值给出不同文本**。
-/// 实测：`0.1 + 0.2` 与字面量 `0.3` 是两个不同的 double
-/// （…0444 与 …9988），但 `%.17g` 把两者都输出成 `"0.3"`。
-/// 那会让缓存键的精确比较**把两个不同的计算当成同一次**——
-/// 这是最危险的一类缓存缺陷：不崩溃，只是算出别人的结果。
+/// `%.17g` only guarantees "parses back to the same value"; it does **not guarantee that
+/// different values produce different text**. Measured: `0.1 + 0.2` and the literal `0.3`
+/// are two different doubles (...0444 and ...9988), yet `%.17g` prints both as `"0.3"`.
+/// That would let the exact cache-key comparison treat **two different computations as one** --
+/// the most dangerous class of cache defect: no crash, just someone else's result.
 ///
-/// `%a` 用足够的十六进制位精确表示该 double，因此
-/// "文本不同 ⟺ 值不同"成立。它同时也不受 locale 小数分隔符影响。
+/// `%a` represents the double exactly with enough hex digits, so "different text <=>
+/// different value" holds. It is also unaffected by the locale decimal separator.
 ///
-/// **但 `%a` 的实现输出不一致**：GCC 输出最短形式 `0x1.8p+0`，
-/// MSVC 输出补零形式 `0x1.8000000000000p+0`。
-/// 不做归一化时，缓存在两个编译器之间**无法互换**，测试期望也会分平台。
-/// 因此这里把尾数小数部分的尾随零去掉
-/// （`0x1.8000…p+0` → `0x1.8p+0`，`0x1.0000…p+0` → `0x1p+0`）。
-/// 归一化不改变所表示的值，文本仍然精确。
+/// **But `%a` output is not consistent across implementations**: GCC prints the shortest
+/// form `0x1.8p+0`, MSVC the zero-padded form `0x1.8000000000000p+0`.
+/// Without normalization the cache is **not interchangeable** between the two compilers,
+/// and test expectations would differ per platform. So the trailing zeros of the
+/// mantissa fraction are stripped here (`0x1.8000...p+0` -> `0x1.8p+0`,
+/// `0x1.0000...p+0` -> `0x1p+0`). Normalization does not change the value; text stays exact.
 [[nodiscard]] std::string f64_text(double v) {
     char buf[64];
     std::snprintf(buf, sizeof(buf), "%a", v);
 
     std::string s{buf};
     const std::size_t dot = s.find('.');
-    if (dot == std::string::npos) return s;   // 无小数部分
+    if (dot == std::string::npos) return s;   // no fractional part
     const std::size_t p = s.find('p', dot);
     const std::size_t end = (p == std::string::npos) ? s.size() : p;
 
@@ -61,9 +61,9 @@ namespace {
     while (last > dot + 1 && s[last - 1] == '0') --last;
 
     if (last == dot + 1) {
-        s.erase(dot, end - dot);              // 小数全零 → 连点一起去掉
+        s.erase(dot, end - dot);              // all-zero fraction -> drop the point too
     } else if (last < end) {
-        s.erase(last, end - last);            // 只去尾随零
+        s.erase(last, end - last);            // drop trailing zeros only
     }
     return s;
 }
@@ -81,7 +81,7 @@ ValueHash mix_bytes(ValueHash seed, const void* data, std::size_t len) noexcept 
 }
 
 ValueHash mix_u64(ValueHash seed, std::uint64_t v) noexcept {
-    // 按小端序逐字节混入：保证大小端平台给出同一哈希
+    // Mix in byte by byte, little-endian: little- and big-endian hosts hash identically
     unsigned char buf[8];
     for (int i = 0; i < 8; ++i) {
         buf[i] = static_cast<unsigned char>((v >> (8 * i)) & 0xFFU);
@@ -90,7 +90,7 @@ ValueHash mix_u64(ValueHash seed, std::uint64_t v) noexcept {
 }
 
 ValueHash hash_value(ValueHash seed, const qp::ports::Value& v) noexcept {
-    // 种类标签先行混入：不同种类的值绝不能给出同一哈希
+    // Mix the kind tag in first: values of different kinds must never hash the same
     seed = mix_u64(seed, static_cast<std::uint64_t>(v.kind()));
     switch (v.kind()) {
         case qp::ports::ValueKind::invalid:
@@ -116,8 +116,8 @@ ValueHash hash_value(ValueHash seed, const qp::ports::Value& v) noexcept {
             return mix_bytes(seed, &d, sizeof(d));
         }
         case qp::ports::ValueKind::field_handle: {
-            // 大对象走标识：按格子描述符的字节混入，不逐字节哈希数据。
-            // "同一格子 = 同一份数据"由 core/abi 的发布方保证。
+            // Large objects hash by identity: mix the lattice descriptor bytes, not the data.
+            // "Same lattice = same data" is guaranteed by the core/abi publisher.
             const qp::abi::LatticeDesc l = v.as_field();
             return mix_bytes(seed, &l, sizeof(l));
         }
@@ -143,7 +143,7 @@ std::string canonical_text(const qp::ports::Value& v) noexcept {
         case qp::ports::ValueKind::f64:
             return "f64:" + f64_text(v.as_f64());
         case qp::ports::ValueKind::f32:
-            // 与 f64 共用同一个归一化文本函数（f32 升到 double 后仍精确）
+            // Shares the f64 normalization function (f32 is exact once widened to double)
             return "f32:" + f64_text(static_cast<double>(v.as_f32()));
         case qp::ports::ValueKind::i64:
             return "i64:" + std::to_string(v.as_i64());

@@ -1,6 +1,6 @@
 /**
  * @file report.cpp
- * @brief 校验报告的实现。
+ * @brief Implementation of the validation report.
  */
 #include <qp/graph/validate/report.hpp>
 

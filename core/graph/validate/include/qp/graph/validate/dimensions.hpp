@@ -1,38 +1,38 @@
 /**
  * @file dimensions.hpp
- * @brief 量纲解析：把端口上的 `same_as_input` 约束**解析成具体量纲**。
+ * @brief Dimension resolution: **resolve the `same_as_input` constraint on a port into a concrete dimension**.
  *
- * ## 为什么需要解析
+ * ## Why resolution is needed
  *
- * 端口层（`core/ports`）对 `DimensionConstraint::same_as_input` 是**不判定**的
- * ——它需要图的上下文。典型例子：加法节点
- * "输出量纲 = 两个输入的共同量纲"，而节点描述是静态的，
- * 它只能声明"我跟输入一样"。
+ * The port layer (`core/ports`) does **not** decide `DimensionConstraint::same_as_input`
+ * -- that needs graph context. A typical example: an adder node means
+ * "output dimension = the common dimension of the two inputs", while a node description is static, so
+ * it can only declare "I am the same as my input".
  *
- * 解析必须沿图的**拓扑顺序**推进：一个节点的输出量纲可能取决于
- * 上游节点的输出量纲，而上游又取决于更上游。
+ * Resolution must advance along the graph's **topological order**: a node's output dimension may depend on
+ * an upstream node's output dimension, and that upstream depends on one further upstream.
  *
- * ## 环怎么办
+ * ## What about cycles
  *
- * `core/graph/structure` 已经保证图无环，因此拓扑顺序必然存在。
- * 但解析器**不能假设这一点**：它可能被用在别的容器上，
- * 或者被用在"结构校验还没跑"的时刻。
- * 因此遇到无法解析的量纲时**标记为未知并继续**，而不是崩溃或死循环。
+ * `core/graph/structure` already guarantees the graph is acyclic, so a topological order must exist.
+ * But the resolver **must not assume that**: it may be used on another container,
+ * or at a moment when "structural validation has not run yet".
+ * So an unresolvable dimension is **marked unknown and resolution continues**, never a crash or an endless loop.
  *
- * ## 未知量纲不是错误
+ * ## An unknown dimension is not an error
  *
- * `unknown` 有两种成因，都是合法的：
- *   - 上游是个尚未定量的源（例如"由用户输入长度"）
- *   - `same_as_input` 的输入端口没有连线（此时应由别的校验报错）
- * 因此解析结果里 unknown 只是信息，是否报错由校验层决定。
+ * `unknown` has two causes, both legitimate:
+ *   - The upstream is a source whose dimension is not fixed yet (for example "length entered by the user")
+ *   - The input port feeding `same_as_input` has no connection (another check should report that)
+ * So unknown in the result is information only; whether to report an error is the validation layer's call.
  *
  * @ownership   owns
- * @thread      any（构造后只读）
+ * @thread      any (read-only after construction)
  * @pre         none
  * @post        none
- * @invariant   同一张图两次解析得到相同结果（确定性）
+ * @invariant   resolving the same graph twice gives the same result (determinism)
  * @errors      noexcept
- * @frozen      否
+ * @frozen      no
  */
 #pragma once
 
@@ -45,28 +45,28 @@
 
 namespace qp::graph {
 
-/// @brief 一个输出端口的解析结果。
+/// @brief Resolution result of one output port.
 struct ResolvedDimension final {
     NodeId node{};
     PortNumber port = 0;
-    /// 解析出的量纲。`known == false` 时无意义。
+    /// The resolved dimension. Meaningless when `known == false`.
     qp::units::Dim dimension{};
-    /// 是否成功解析。
+    /// Whether resolution succeeded.
     bool known = false;
 
     [[nodiscard]] bool valid() const noexcept { return node.valid() && port != 0; }
 };
 
 /**
- * @brief 量纲解析的完整结果。
+ * @brief The complete result of dimension resolution.
  *
  * @ownership   owns
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   对同一 (node, port) 至多一条记录
+ * @invariant   at most one record per (node, port)
  * @errors      noexcept
- * @frozen      否
+ * @frozen      no
  * @tests       graph.validate.dimensions_lookup, graph.validate.dimensions_unknown_for_unset
  */
 class DimensionMap final {
@@ -78,7 +78,7 @@ public:
         entries_.push_back(ResolvedDimension{node, port, {}, false});
     }
 
-    /// @brief 查询某个输出端口的解析结果。查不到返回 nullptr。
+    /// @brief Look up the resolution result of an output port. Returns nullptr when absent.
     [[nodiscard]] const ResolvedDimension* find(NodeId node, PortNumber port) const noexcept;
 
     [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }
@@ -89,9 +89,9 @@ private:
 };
 
 /**
- * @brief 量纲解析所需的上下文：节点类型目录 + 端口类型注册表。
+ * @brief Context needed for dimension resolution: node type catalog + port type registry.
  *
- * 两者都是只读的，因此按引用传入而不是拷贝。
+ * Both are read-only, so they are passed by reference rather than copied.
  */
 struct ResolveContext final {
     const INodeCatalog* catalog = nullptr;
@@ -101,18 +101,18 @@ struct ResolveContext final {
 };
 
 /**
- * @brief 解析全图所有输出端口的量纲。
+ * @brief Resolve the dimensions of every output port in the graph.
  *
- * @ownership   borrows（只读 ctx，不保留引用到返回之后）
+ * @ownership   borrows (ctx is read-only; no reference is kept past the return)
  * @thread      main
  * @pre         ctx.valid()
- * @post        为每个"有输出端口且类型已注册"的节点给出解析结果；
- *              无法解析的端口也会以 `known == false` 出现（而不是缺失）
- * @invariant   确定性：同一张图两次调用得到相同结果
- * @errors      noexcept（解析失败不抛，以 unknown 表达）
+ * @post        every node with output ports and a registered type gets a result;
+ *              ports that cannot be resolved still appear with `known == false` (rather than missing)
+ * @invariant   determinism: two calls on the same graph give the same result
+ * @errors      noexcept (a failed resolution does not throw; it is expressed as unknown)
  * @complexity  O(V + E)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       graph.validate.resolve_dimension_from_port_type,
  *              graph.validate.resolve_same_as_input_chain,
  *              graph.validate.resolve_unknown_when_input_missing,

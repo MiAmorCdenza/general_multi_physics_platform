@@ -1,38 +1,38 @@
 ﻿/**
  * @file qp/graph/mutate.hpp
- * @brief mutate 模块的唯一入口：命令总线与撤销栈。
+ * @brief The single entry point of the mutate module: the command bus and the undo stack.
  *
- * ## 这个模块存在的唯一理由
+ * ## The only reason this module exists
  *
- * 用户可以在节点编辑器、YAML 文本视图、积木视图里改**同一张图**。
- * 如果每个视图各自直接改 `Graph`：
- *   - 没有地方能统一校验（同一个非法操作要在三处各挡一次）；
- *   - 没有地方能统一失效（缓存与 UI 刷新各写一套）；
- *   - 撤销栈只能住在某个视图里，于是 YAML 视图的修改无法被撤销，
- *     或者两个视图各撤各的让文档来回跳。
+ * A user can edit **the same graph** in the node editor, the YAML text view, or the block view.
+ * If every view changed `Graph` directly:
+ *   - nothing could validate in one place (the same illegal edit blocked in three places);
+ *   - nothing could invalidate in one place (cache and UI refresh each rolling their own);
+ *   - the undo stack would live inside one view, so edits made in the YAML view could not be
+ *     undone, or the two views would undo independently and make the document jump around.
  *
- * 因此：**一个图，一条编辑通道，一个撤销栈。**
+ * Hence: **one graph, one edit path, one undo stack.**
  *
- * ## 与相邻模块的边界
+ * ## Boundaries with neighbouring modules
  *
- * | 不做 | 归谁 |
+ * | not here | whose job |
  * |---|---|
- * | 图的结构语义（槽位、世代、环） | `core/graph/structure` |
- * | 类型与量纲校验 | `core/graph/validate` |
- * | 手势识别、快捷键、拖拽 | 视图层 |
- * | 序列化 | 视图层 / IO 插件 |
+ * | graph structure semantics (slots, generations, cycles) | `core/graph/structure` |
+ * | type and dimension checking | `core/graph/validate` |
+ * | gesture recognition, shortcuts, dragging | the view layer |
+ * | serialization | the view layer / IO plugins |
  *
- * 撤销栈**在这里**而不是在视图层——这是本模块最容易被放错的东西。
+ * The undo stack belongs **here**, not in the view layer -- the piece most easily misplaced.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   任何结构变更都必须经过 CommandBus
- * @errors      noexcept（失败走 Result）
+ * @invariant   Every structural change must go through CommandBus
+ * @errors      noexcept (failures travel as Result)
  * @complexity  —
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       graph.mutate.undo_set_param, graph.mutate.redo_restores,
  *              graph.mutate.undo_redo_roundtrip, graph.mutate.new_edit_clears_redo,
  *              graph.mutate.merge_consecutive_set_param,
@@ -59,7 +59,7 @@
 
 namespace qp::graph {
 
-/// @brief mutate 模块的版本。Command 变体集合或 API 变更时递增。
+/// @brief Version of the mutate module. Bump when the Command variant set or the API changes.
 inline constexpr int kMutateVersion = 1;
 
 }  // namespace qp::graph

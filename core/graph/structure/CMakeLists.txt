@@ -1,6 +1,6 @@
-# core/graph/structure：图结构。增删连接、版本号、无环校验。
+# core/graph/structure: graph structure. Add/remove connections, version, acyclicity.
 #
-# 依赖规则：structure 依赖 ir，不依赖 core/graph 内其他子模块。
+# Dependency rule: structure depends on ir and on no other submodule of core/graph.
 
 add_library(qp_graph_structure STATIC
     src/graph.cpp)

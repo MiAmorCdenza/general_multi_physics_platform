@@ -1,29 +1,29 @@
 /**
  * @file report.hpp
- * @brief 校验结果：**带位置的**诊断集合。
+ * @brief Validation result: a set of diagnostics **that carry a location**.
  *
- * ## 为什么校验必须返回可定位的问题，而不是一个布尔值
+ * ## Why validation must return locatable problems instead of one boolean
  *
- * 一次校验会同时发现多个问题（三个节点缺参数、两条线量纲不符）。
- * 若只返回"不合法"，用户就得逐个试——在课堂现场那是灾难。
- * 若在第一个问题处停下，用户要修 N 次才能打开一个实验。
+ * One validation pass finds several problems at once (three nodes missing parameters, two wires whose
+ * dimensions disagree). Returning only "invalid" would force the user to try them one by one -- a disaster
+ * in front of a class. Stopping at the first problem would cost the user N fixes to open one experiment.
  *
- * 因此：**一次给全部问题，每条都带足够定位的信息**（节点句柄 + 端口号 +
- * 面向用户的描述）。定位信息用稳定的句柄而不是指针：
- * 报告会被缓存、被打印、被发到 UI 线程，任何 live 引用都会悬垂。
+ * Hence: **give every problem at once, each with enough information to locate it** (node handle +
+ * port number + user-facing description). Locations use stable handles rather than pointers:
+ * a report gets cached, printed, and sent to the UI thread, so any live reference would dangle.
  *
- * ## 三个严重级别
+ * ## The three severity levels
  *
- * `error` 阻止加载；`warning` 允许加载但应提示（例如用了 `any` 端口，
- * 类型检查已失效）；`info` 纯说明（例如"这个节点处于绕过状态"）。
+ * `error` blocks loading; `warning` allows loading but should be surfaced (for example an `any` port,
+ * where type checking is already void); `info` is purely explanatory (for example "this node is bypassed").
  *
  * @ownership   owns
- * @thread      any（构造后只读）
+ * @thread      any (read-only after construction)
  * @pre         none
  * @post        none
- * @invariant   `ok()` 等价于"没有 error 级别的问题"
+ * @invariant   `ok()` is equivalent to "there is no problem at error level"
  * @errors      noexcept
- * @frozen      否
+ * @frozen      no
  */
 #pragma once
 
@@ -37,7 +37,7 @@
 
 namespace qp::graph {
 
-/// @brief 问题的严重级别。
+/// @brief Severity level of a problem.
 enum class Severity : std::uint8_t {
     info = 0,
     warning = 1,
@@ -54,47 +54,47 @@ enum class Severity : std::uint8_t {
 }
 
 /**
- * @brief 一条校验问题。
+ * @brief One validation problem.
  *
- * @ownership   owns（自持字符串与句柄，不引用图）
+ * @ownership   owns (holds its own string and handles, references no graph)
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   同一问题每次 `to_text()` 返回同一字符串
+ * @invariant   the same problem returns the same string from `to_text()` every time
  * @errors      noexcept
- * @frozen      否
+ * @frozen      no
  * @tests       graph.validate.issue_text, graph.validate.issue_location
  */
 struct Issue final {
     Severity severity = Severity::error;
     qp::diag::ErrorCode code = qp::diag::ErrorCode::invalid_argument;
-    /// 问题所在节点。无效表示问题不属于某个具体节点（例如整图级别）。
+    /// Node the problem belongs to. Invalid means it belongs to no single node (graph level, for example).
     NodeId node{};
-    /// 问题所在端口。0 表示不属于某个具体端口。
+    /// Port the problem belongs to. 0 means it belongs to no single port.
     PortNumber port = 0;
-    /// 是否为输出端口。仅在 port != 0 时有意义。
+    /// Whether it is an output port. Meaningful only when port != 0.
     bool is_output = false;
-    /// 面向用户的一句话。
+    /// A one-line user-facing message.
     std::string message;
-    /// 可选的修复建议。有则用户更容易自己解决。
+    /// Optional repair hint. When present, users can solve it themselves more easily.
     std::string hint;
 
     [[nodiscard]] bool is_error() const noexcept { return severity == Severity::error; }
 
-    /// @brief 构造用户可见的一行文本（含位置）。
+    /// @brief Build the one user-visible line of text (including the location).
     [[nodiscard]] std::string to_text() const;
 };
 
 /**
- * @brief 一次校验的完整结果。
+ * @brief The complete result of one validation run.
  *
  * @ownership   owns
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   一旦 `ok()` 为真，之后不会再变为假（结果不可变）
+ * @invariant   once `ok()` is true it never becomes false again (the result is immutable)
  * @errors      noexcept
- * @frozen      否
+ * @frozen      no
  * @tests       graph.validate.report_ok, graph.validate.report_collects_all,
  *              graph.validate.report_worst_severity
  */
@@ -102,28 +102,28 @@ class Report final {
 public:
     void add(Issue issue) { issues_.push_back(std::move(issue)); }
 
-    /// @brief 添加快捷方式：错误。
+    /// @brief Convenience adder: error.
     void error(qp::diag::ErrorCode code, std::string message, NodeId node = {},
                PortNumber port = 0, bool is_output = false, std::string hint = {});
 
-    /// @brief 添加快捷方式：警告。
+    /// @brief Convenience adder: warning.
     void warn(qp::diag::ErrorCode code, std::string message, NodeId node = {},
               PortNumber port = 0, bool is_output = false, std::string hint = {});
 
-    /// @brief 是否没有 error 级别的问题。
+    /// @brief Whether there is no problem at error level.
     [[nodiscard]] bool ok() const noexcept;
 
     [[nodiscard]] const std::vector<Issue>& issues() const noexcept { return issues_; }
     [[nodiscard]] std::size_t size() const noexcept { return issues_.size(); }
     [[nodiscard]] bool empty() const noexcept { return issues_.empty(); }
 
-    /// @brief 指定级别的问题数量。
+    /// @brief Number of problems at the given severity.
     [[nodiscard]] std::size_t count(Severity s) const noexcept;
 
-    /// @brief 最严重的级别。无问题时返回 info。
+    /// @brief The worst severity present. Returns info when there are no problems.
     [[nodiscard]] Severity worst() const noexcept;
 
-    /// @brief 把所有问题拼成多行文本（一行一条）。
+    /// @brief Join all problems into multi-line text (one per line).
     [[nodiscard]] std::string to_text() const;
 
     void clear() noexcept { issues_.clear(); }

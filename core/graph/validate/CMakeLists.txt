@@ -1,7 +1,7 @@
-# core/graph/validate：加载期校验。
+# core/graph/validate: load-time validation.
 #
-# 依赖规则：validate 依赖 ir / structure / ports。
-# 它把端口层的单点类型判定，扩展成"看到整张图才能完成"的量纲解析与全图校验。
+# Dependency rule: validate depends on ir / structure / ports.
+# It extends the ports layer's pointwise type check into whole-graph dimension
 
 add_library(qp_graph_validate STATIC
     src/report.cpp
