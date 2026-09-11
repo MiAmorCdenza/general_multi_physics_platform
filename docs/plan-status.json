@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "P4 完成（core/plugin + core/authoring 五模块全部 verified）；下一步 L2（core/runtime）",
+  "updated": "L2 起步（runtime/run + runtime/store 完成）+ views 骨架打通（MSVC x64 + Qt 6.8.3 Widgets）",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -13,7 +13,7 @@
     "contract_completeness": {
       "tool": "scripts/check_contracts.py",
       "state": "passing",
-      "detail": "244 个契约 / 403 个用例 / 0 违规 / 0 孤儿。@tests 的 id 与 tests/ 下的 TEST_CASE 逐字对应。"
+      "detail": "270 个契约 / 418 个用例 / 0 违规 / 0 孤儿。@tests 的 id 与 tests/ 下的 TEST_CASE 逐字对应。"
     },
     "gate_self_test": {
       "tool": "tests/meta/check_contract_checker.py",
@@ -54,7 +54,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 436,
+    "ctest_registered": 453,
     "compilers_green": [
       "gcc-15.2.0-i686",
       "msvc-19.51-x64"
@@ -148,14 +148,14 @@
     {
       "path": "core/runtime/run",
       "layer": "L2",
-      "state": "planned",
-      "note": "挡住章程 R2/C1；须记录 seed + 参数集 + 图版本 + 插件版本 + 工具链 + 优化级别（U7）"
+      "state": "verified",
+      "note": "运行身份：**一次实验运行**的 seed + 参数集 + 图版本 + 插件版本 + 工具链 + 优化级别。plan-tree §4 明确说这一层是「上一轮分析中发现缺失的部分」——旧工程只有「图 + 版本号 + 槽位」，没有「一次运行」这个概念；没有它，章程 R2 与 C1 整条可追溯链无处安放。复现是**全有或全无**的属性：任何一项没钉住，这次运行就不可复现，别处的谨慎补不回来。诚实的部分是**缺口被报告而不是被掩盖**：RunRecord 说明自己到底有哪几项，因为一条**声称**可复现却缺工具链的记录，比一条承认缺口的记录更糟——前者让学生去自己的物理里找差异，后者告诉他换回同一台机器重跑。两个问题被刻意分开：is_complete() 是**事实**（输入是否都记了），numerics_are_reproducible() 是**声明**（作者是否断言跨机器逐位一致）——平台无法自己发现后者，所以它问、它记、它永不推断。"
     },
     {
       "path": "core/runtime/store",
       "layer": "L2",
-      "state": "planned",
-      "note": "dataset/fit_result 结构"
+      "state": "verified",
+      "note": "测量数据的**形状**：值 + 不确定度 + 数据集 + 拟合结果。算法**一个都没有**。这就是整个平台围绕的那个模块——差异化卖点是「测量→记录→不确定度→报告」闭环，而闭环只有一种坏法：如果每个插件自己发明携带不确定度的方式，那么一个人写的回归就消费不了另一个人产出的序列，实验课最终回到 Excel。不确定度是**变体而不是 double**，因为真实发生的是三种状态：unknown（没人量化过误差）、exact（定义量或计数量，u=0 是真的）、standard（量化过的标准不确定度 u）。把 unknown 折进 exact 是本模块可用的简化里破坏力最大的一种：它把「我们没测误差」变成「没有误差」，此后每一次传播都产出一个自信的错数。所以三态在类型里是分开的，遇到 unknown 的传播必须报告它答不出来——这正是 is_usable() 的用途。三个统计量（均值、样本标准差、均值标准误）留在地基，因为它们是**定义性**的而非方法性的，且章程 R3 把 A 类不确定度定为平台承诺而不是分析选择；此外一切都归 plugins/analysis/。样本标准差用 Welford 而非 sum(x^2)-n*mean^2：后者在读数远离零而离散很小时灾难性丢精度——而那正是实验读数的常态。"
     },
     {
       "path": "core/runtime/trace",
@@ -202,8 +202,8 @@
     {
       "path": "views",
       "layer": "consumer",
-      "state": "planned",
-      "note": "可整体删除；core 独立性门禁依赖这点。authoring 五模块（document/capability/commands/layout/portui）是**视图服务**而非视图本身：这一层存在的唯一理由是让多个视图共存于同一个编辑会话。"
+      "state": "implemented",
+      "note": "Qt 视图层骨架（`QP_BUILD_VIEWS=ON`，仅 MSVC x64）。已打通的是**风险最高的那一环**：Qt 能被找到、moc 会跑、core 能链进一个同时链 Qt 的进程、窗口能起来。这一环与面板长什么样无关，而它现在退役比在调节点编辑器时才发现便宜得多。窗口显示的是 **core 的真实状态**（节点数、图版本、变更数、运行数、缺失的复现输入）而不是占位文本——因为一个显示硬编码数字的 demo 会在 core 链接已经断掉之后继续通过。决策见 docs/adr/ADR-0006：维持 Qt 但改为 QWidgets 为主（不是 QML），不引入 Qt Charts（GPL 而非 LGPL，会让「分发二进制」这个目标直接失效），绘图改用 QCustomPlot(MIT) 或 QWT(LGPL)。工具链后果：Qt 6 无 32 位包，所以 GUI 不能用本项目的 MinGW i686 构建；core 仍双编译器验证且完全不依赖 Qt。"
     },
     {
       "path": "plugins",

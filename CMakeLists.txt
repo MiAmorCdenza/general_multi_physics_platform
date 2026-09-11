@@ -108,6 +108,47 @@ if(QP_BUILD_TESTS)
     endif()
 endif()
 
+# -- Qt discovery -------------------------------------------------------------
+#
+# Qt is searched for here rather than inside views/ for one reason: to fail with a
+# useful message. A missing Qt inside views/ produces a `find_package` error that
+# names a package, while the actual problem is usually "the GUI is a consumer and
+# you have not pointed the build at a Qt yet".
+#
+# Two facts worth knowing before configuring with QP_BUILD_VIEWS=ON:
+#
+#   1. **The MSVC kit only.** Qt 6 ships `win64_msvc2022_64` and a 64-bit MinGW
+#      kit; there is no 32-bit Qt 6 at all. This project's GCC toolchain is MinGW
+#      i686, so the view layer cannot be built with it -- the GUI is an MSVC x64
+#      target. That is a property of Qt, not a compromise in the architecture:
+#      core stays compiler-agnostic and is verified on both compilers.
+#
+#   2. **Not QML.** Qt Quick lives in the `qtdeclarative` module, which is a
+#      separate download. The decision recorded in ADR-0006 is Widgets, so the
+#      required components below are Core, Gui and Widgets only.
+#
+# Acquisition is scripted: scripts/fetch_deps.ps1 -WithQt installs Qt into
+# external/Qt via aqtinstall. Override the location with -DQP_QT_ROOT=<path>.
+set(QP_QT_ROOT "${CMAKE_SOURCE_DIR}/external/Qt" CACHE PATH
+    "Root under which Qt kits are installed (qp fetch_deps.ps1 -WithQt)")
+
+if(QP_BUILD_VIEWS)
+    # Prefer an explicit QP_QT_ROOT; also accept an existing CMAKE_PREFIX_PATH or
+    # the conventional C:/Qt location, so a machine with Qt already installed works
+    # without being told twice.
+    set(QP_QT_KIT "${QP_QT_ROOT}/6.8.3/msvc2022_64")
+    if(EXISTS "${QP_QT_KIT}/lib/cmake/Qt6/Qt6Config.cmake")
+        list(APPEND CMAKE_PREFIX_PATH "${QP_QT_KIT}")
+        message(STATUS "Qt: using kit ${QP_QT_KIT}")
+    elseif(EXISTS "C:/Qt/6.8.3/msvc2022_64/lib/cmake/Qt6/Qt6Config.cmake")
+        list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.8.3/msvc2022_64")
+        message(STATUS "Qt: using kit C:/Qt/6.8.3/msvc2022_64")
+    else()
+        message(STATUS "Qt: no kit under QP_QT_ROOT (${QP_QT_ROOT}); "
+                       "falling back to find_package's own search")
+    endif()
+endif()
+
 # -- Directories --------------------------------------------------------------
 # Note: the core layer is always present; views / plugins are consumers, switchable off
 add_subdirectory(core)

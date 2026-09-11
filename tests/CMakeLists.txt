@@ -243,3 +243,9 @@ qp_add_test(qp_test_authoring_layout
 qp_add_test(qp_test_authoring_portui
     SOURCES unit/authoring/test_port_ui.cpp
     LIBS qp::authoring_portui)
+qp_add_test(qp_test_runtime_run
+    SOURCES unit/runtime/test_run.cpp
+    LIBS qp::runtime_run)
+qp_add_test(qp_test_runtime_store
+    SOURCES unit/runtime/test_store.cpp
+    LIBS qp::runtime_store)
