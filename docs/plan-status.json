@@ -1,13 +1,13 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "P3 进行中：graph ir/structure/mutate/validate/eval/domain 完成（6/8）；L0 补 diag 日志层",
+  "updated": "P3 完成（core/graph 八个模块全部 verified）；下一步 P4（core/plugin + core/authoring）",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": ["planned", "contract", "specified", "implemented", "verified"],
   "gates": {
     "contract_completeness": {
       "tool": "scripts/check_contracts.py",
       "state": "passing",
-      "detail": "142 个契约 / 334 个用例 / 0 违规 / 0 孤儿。@tests 的 id 与 tests/ 下的 TEST_CASE 逐字对应。"
+      "detail": "177 个契约 / 360 个用例 / 0 违规 / 0 孤儿。@tests 的 id 与 tests/ 下的 TEST_CASE 逐字对应。"
     },
     "gate_self_test": {
       "tool": "tests/meta/check_contract_checker.py",
@@ -17,26 +17,26 @@
     "layer_dependency": {
       "tool": "scripts/check_layers.py",
       "state": "passing",
-      "detail": "L1 允许方向 / L2 禁 Qt / L3 Eigen 受限 / L4 禁反向依赖 / L5 未登记模块。由 tests/meta/check_layer_checker.py 用 4 反例 + 1 正例验证：只测反例会漏掉『把一切都报错』的退化实现。"
+      "detail": "L1 允许方向 / L2 禁 Qt / L3 Eigen 受限 / L4 禁反向依赖 / L5 未登记模块。由 tests/meta/check_layer_checker.py 用 4 反例 + 1 正例验证：只测反例会漏掉『把一切都报错』的退化实现。本阶段把 kernels -> field 加入白名单（见该文件的注释：计划树原写 abi+domain，但批次要交给算子的是『一段被描述的采样』，把它在 kernels 里复制一份会造成平台对同一概念有两个互不兼容的答案）。"
     },
     "code_dialect": {
       "tool": "scripts/check_dialect.py",
-      "state": "in_progress",
-      "detail": "D1 象形字符 / D2 源码注释必须 ASCII 英文 / D3 注释内禁非 ASCII 图。见 standards/code-dialect.md。基线尚未清零（历史中文注释正在批量翻译，分批清单见 docs/translation-backlog.json 与 scripts/plan_translation.py），因此当前只注册自检 meta.dialect_checker；清零后才开 gate.dialect。理由：一个永远红的门禁会被忽略，而『门禁不存在』与『门禁红着』是两种不同的失败。"
+      "state": "passing",
+      "detail": "D1 象形字符全仓库禁 / D2 源码注释必须 ASCII 英文 / D3 源码注释内禁非 ASCII 图（箭头、制表符）。见 standards/code-dialect.md：箭头归 D3 而非 D1，因为散文里的图是正当的，同一张图出现在注释里才是会在非 UTF-8 控制台坏掉的东西。基线已清零，gate.dialect 作为强制门禁打开。由 tests/meta/check_dialect_gate.py 用 14 反例 + 10 正例验证。"
     },
     "file_encoding": {
       "tool": "scripts/check_encoding.py",
       "state": "passing",
-      "detail": "E1 全文本 UTF-8 / E2 换行 LF / E3 .ps1 必须带 UTF-8 BOM。E3 来自真实缺陷：无 BOM 的 .ps1 会被 Windows PowerShell 5.1 按 ANSI 解码，中文注释在解析期变乱码、中文字符串在运行期变错值。由 tests/meta/check_encoding_gate.py 用 8 反例 + 6 正例验证，另含二进制豁免与排除目录两项。"
+      "detail": "E1 全文本 UTF-8 / E2 换行 LF / E3 .ps1 必须带 UTF-8 BOM。E3 来自真实缺陷：无 BOM 的 .ps1 会被 Windows PowerShell 5.1 按 ANSI 解码，中文注释在解析期变乱码、中文字符串在运行期变错值（本阶段被编辑工具弄丢两次）。由 tests/meta/check_encoding_gate.py 用 8 反例 + 6 正例验证，另含二进制豁免与排除目录两项。"
     },
     "build_dependency_tracking": {
       "tool": "scripts/check_build_deps.ps1",
       "state": "passing",
-      "detail": "改一个头文件后必须触发消费者重编译。成因：CMake 用**控制台代码页**解码 cl.exe 的 UTF-8 /showIncludes 输出，旧代码页（437/936）会被记成乱码前缀，msvc_deps_prefix 于是永不匹配，依赖跟踪静默失效。修法是在配置前 chcp 65001（scripts/build.ps1）。VSLANG **无效**：实测 cl.exe 无论 VSLANG 取值都输出本地化前缀，语言由已安装的 MUI 语言包决定。"
+      "detail": "改一个头文件后必须触发消费者重编译。成因：CMake 用**控制台代码页**解码 cl.exe 的 UTF-8 /showIncludes 输出，旧代码页（437/936）会被记成乱码前缀，msvc_deps_prefix 于是永不匹配，依赖跟踪静默失效。修法是在配置前 chcp 65001（scripts/build.ps1）。VSLANG **无效**：实测 cl.exe 无论 VSLANG 取值都输出本地化前缀，语言由已安装的 MUI 语言包决定。现在 build-msvc 上报『改动 1 个头文件触发 27 个目标重编译』。"
     },
     "compiler_matrix": {
       "state": "passing",
-      "detail": "GCC 15.2.0 (MinGW i686) 与 MSVC 19.51 (x64) 双绿；见 ADR-0004"
+      "detail": "GCC 15.2.0 (MinGW i686) 与 MSVC 19.51 (x64) 双 387/387；见 ADR-0004"
     },
     "cmake_graph": {
       "state": "passing",
@@ -48,7 +48,8 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 360
+    "ctest_registered": 387,
+    "compilers_green": ["gcc-15.2.0-i686", "msvc-19.51-x64"]
   },
   "modules": [
     { "path": "core/units", "layer": "L0", "state": "verified",
@@ -75,9 +76,10 @@
       "note": "求值调度 + 内容寻址缓存。缓存键用 NodeId{index,generation}（修复旧工程用 id() 地址当键的缺陷）；确定性哈希（不用实现定义的 std::hash）；浮点文本用归一化的 %a 保证跨编译器一致。撤销回上一步立刻命中缓存。" },
     { "path": "core/graph/domain", "layer": "L1", "state": "verified",
       "note": "域声明与执行计划：Domain 枚举只在 domain 模块定义一次（validate 改为参数化，不再自己定义一份）。field 是烘焙语义（可阻塞、可分配），particle 是逐帧语义（不阻塞、不分配、不抛、无虚调用），render 是声明式（不求值）。计划把节点分到三条执行序列并按拓扑排序。" },
-    { "path": "core/graph/kernels", "layer": "L1", "state": "planned",
-      "note": "P3；契约在地基，Boris/蛙跳/RK4/Verlet 是插件" },
-    { "path": "core/graph/field", "layer": "L1", "state": "planned", "note": "P3" },
+    { "path": "core/graph/kernels", "layer": "L1", "state": "verified",
+      "note": "原生算子契约 + 注册表。**本模块不含任何积分器**：Boris / 蛙跳 / RK4 / Verlet 是插件，契约留在地基。形状由性能要求决定——宿主每个计划操作解析一次 IBatchAdvancer，然后每步调用一次 advance，因此虚调用是每算子每帧 5 次而不是每粒子一次；接口刻意不提供『每粒子回调宿主』，那种形状无法做快。确定性是契约而非质量目标：advance 不得分配/抛出/阻塞，随机性只能来自注入的 RNG（splitmix64 而非标准分布适配器——同一引擎在 libstdc++ 与 MSVC 上序列不同）。注册表两阶段提交：declare 预留、commit 安装、drop 释放，插件加载失败不留痕迹。重名拒绝而不是覆盖，因为覆盖会静默改掉所有按名引用它的已存图。" },
+    { "path": "core/graph/field", "layer": "L1", "state": "verified",
+      "note": "场的最小语义：是不是场、什么形状、哪些分量有效。偶极/磁尾/T04/包络全是插件。刻意不依赖 units：场携带 FieldDim（指数）而不是受检 Quantity——对 float32 场的每个采样做受检转换是热路径上的纯开销，而单位字符串是展示层的事。有效性**分成两个问题**：is_valid_field 只问形状是否可描述，is_readable 才要求指针非空、字节跨度够、f64 满足对齐（从紧凑缓冲区中间取视图是插件会做的事，而错位 f64 加载是未定义行为而不是错值）。越界分量访问返回 0.0 而不是读相邻采样——后者看起来像合理数据，因此更糟。" },
     { "path": "core/runtime/run", "layer": "L2", "state": "planned",
       "note": "挡住章程 R2/C1；须记录 seed + 参数集 + 图版本 + 插件版本 + 工具链 + 优化级别（U7）" },
     { "path": "core/runtime/store", "layer": "L2", "state": "planned", "note": "dataset/fit_result 结构" },
