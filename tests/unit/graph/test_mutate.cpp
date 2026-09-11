@@ -225,6 +225,46 @@ TEST_CASE("graph.mutate.apply_rejects_invalid", "[graph][mutate]") {
     REQUIRE(f.graph.is_stable());
 }
 
+TEST_CASE("graph.mutate.next_target_matches_history", "[graph][mutate]") {
+    // next_undo_target() and next_redo_target() feed "what changed" notifications,
+    // so they must agree with the labels the same stack reports. A stack that
+    // reported a label but no target would make a view unable to redraw the right
+    // node, and the mismatch would show up as a stale panel rather than an error.
+    Graph g;
+    CommandBus bus{g};
+
+    // Empty history: both targets are invalid, and no label is available either.
+    REQUIRE_FALSE(bus.can_undo());
+    REQUIRE_FALSE(bus.can_redo());
+    REQUIRE_FALSE(bus.history().next_undo_target().valid());
+    REQUIRE_FALSE(bus.history().next_redo_target().valid());
+    REQUIRE(bus.history().next_undo_label().empty());
+    REQUIRE(bus.history().next_redo_label().empty());
+
+    auto reserved = bus.reserve_node();
+    REQUIRE(reserved.has_value());
+    const NodeId id = reserved.value();
+    AddNode add;
+    add.id = id;
+    add.type_name = "spring";
+    REQUIRE(bus.apply(add).has_value());
+
+    // The target is the node the command was about, and it tracks the label: both
+    // non-empty or both empty, never one without the other.
+    REQUIRE(bus.history().next_undo_target() == id);
+    REQUIRE_FALSE(bus.history().next_undo_label().empty());
+
+    REQUIRE(bus.undo().has_value());
+    REQUIRE_FALSE(bus.history().next_undo_target().valid());
+    REQUIRE(bus.history().next_undo_label().empty());
+    REQUIRE(bus.history().next_redo_target() == id);
+    REQUIRE_FALSE(bus.history().next_redo_label().empty());
+
+    REQUIRE(bus.redo().has_value());
+    REQUIRE(bus.history().next_undo_target() == id);
+    REQUIRE_FALSE(bus.history().next_redo_target().valid());
+}
+
 TEST_CASE("graph.mutate.failed_apply_is_noop", "[graph][mutate]") {
     Fixture f;
     const NodeId a = f.add("a");

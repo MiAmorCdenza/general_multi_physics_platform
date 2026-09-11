@@ -1,13 +1,19 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "P4 进行中：core/plugin 完成（manifest 契约 + 兼容判定 + 加载顺序）；authoring 待做",
+  "updated": "P4 进行中：core/plugin + authoring/capability + authoring/commands 完成；authoring 余下 document/layout/portui",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
-  "statuses": ["planned", "contract", "specified", "implemented", "verified"],
+  "statuses": [
+    "planned",
+    "contract",
+    "specified",
+    "implemented",
+    "verified"
+  ],
   "gates": {
     "contract_completeness": {
       "tool": "scripts/check_contracts.py",
       "state": "passing",
-      "detail": "186 个契约 / 371 个用例 / 0 违规 / 0 孤儿。@tests 的 id 与 tests/ 下的 TEST_CASE 逐字对应。"
+      "detail": "213 个契约 / 387 个用例 / 0 违规 / 0 孤儿。@tests 的 id 与 tests/ 下的 TEST_CASE 逐字对应。"
     },
     "gate_self_test": {
       "tool": "tests/meta/check_contract_checker.py",
@@ -48,52 +54,162 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 399,
-    "compilers_green": ["gcc-15.2.0-i686", "msvc-19.51-x64"]
+    "ctest_registered": 417,
+    "compilers_green": [
+      "gcc-15.2.0-i686",
+      "msvc-19.51-x64"
+    ]
   },
   "modules": [
-    { "path": "core/units", "layer": "L0", "state": "verified",
-      "note": "P1 纵切完成并双编译器验证。类型契约冻结、黄金字符串、8 个真实缺陷已修。U6 由 ADR-0005 决策。" },
-    { "path": "core/diag", "layer": "L0", "state": "verified",
-      "note": "错误通道：ErrorCode（分域稳定编码）/ Consequence / Result<T> / Diagnostic / ISink。diag 是唯一无 core 依赖的模块。含死亡测试验证违反 @pre 必然终止。日志层已落地（P3 补）：JSON Lines、ISO 8601 UTC 定宽时间戳（定宽所以文本排序=时间排序）、级别由错误域导出而非各调用点自创、json_escape 对非法 UTF-8 做替换而不是放行。diag 因此从 INTERFACE 变为 STATIC。" },
-    { "path": "core/abi", "layer": "L0", "state": "verified",
-      "note": "跨边界内存布局：Version/兼容判定、FieldDim、LatticeDesc、FieldBuffer（seqlock）。唯一连 units 都不依赖的模块——ABI 必须能被外部语言绑定独立消费。布局重复用断言守而不靠依赖消除。tests/ABI_LAYOUT.md 是语言中立布局说明书。" },
-    { "path": "core/ports", "layer": "L0", "state": "verified",
-      "note": "端口类型注册表：Value（标签联合，量纲不进值）、PortTypeDesc、PortTypeRegistry（三态注册语义）、check_connection/check_value（加载期判定）。落地了 ADR-0005 的 scalar_f32/scalar_f64 双标签与『端口边界唯一一次拓宽』。" },
-    { "path": "core/plugin", "layer": "L0", "state": "verified",
-      "note": "插件契约：manifest schema + 兼容判定 + 加载顺序。**刻意不做两件事**——不解析文件（格式是序列化选择，属于适配器插件，与 plan-tree §2.2 对 ABI 的处理同理），不加载动态库（那是平台相关且需要文件系统与动态加载器，是插件系统里唯一真正每个 OS 都不同的部分）。留在这里的是**任何代码进入进程之前就能判定**的事：身份、版本、布局、能力、依赖顺序；早判定正是要点——版本错配在 dlopen 已经跑完构造函数之后才发现就太晚了。判定顺序是契约而非实现细节：多个问题同时存在时先报身份，因为无法命名的插件没有可操作的版本抱怨。能力位被宿主拒绝时**拒绝加载**而不是悄悄丢掉那一位：少了自己声明能力的插件会在别处、以无关的原因失败。" },
-    { "path": "core/reflect", "layer": "L0", "state": "planned",
-      "note": "units 已完成 unit_symbol 部分；type_name 随 ports 一并成型" },
-    { "path": "core/graph/ir", "layer": "L1", "state": "verified",
-      "note": "中间表示：NodeId 带世代（防槽位复用后静默指错对象）、PortDesc 统一 Param 与 Port（connectable 标志）、NodeDesc 三个可选钩子为上限、Edge 不可变且方向有硬不变量。IR 就是插件 API 本身。" },
-    { "path": "core/graph/structure", "layer": "L1", "state": "verified",
-      "note": "图结构：槽位含哨兵（index 0 = 无）、世代防句柄复活、变异失败强异常保证、版本号只在成功时递增、环检测在连边前完成。19 个用例覆盖全部失败分支。" },
-    { "path": "core/graph/mutate", "layer": "L1", "state": "verified",
-      "note": "命令总线 + 唯一撤销栈。命令是纯数据（可比较/可序列化）；撤销靠逆命令而非快照；同节点连续同类编辑合并（拖动滑块一次撤销）。撤销再重做**保持节点 id 不变**——这是整套设计最关键的性质。" },
-    { "path": "core/graph/validate", "layer": "L1", "state": "verified",
-      "note": "加载期校验：五层检查（结构/端口存在性/连接兼容/必需参数/域许可）一次报全部问题。含**量纲解析**——把 same_as_input 沿拓扑序解析成具体量纲，这是只有看到整张图才能完成的一步。校验只读，调用前后图与版本号不变。" },
-    { "path": "core/graph/eval", "layer": "L1", "state": "verified",
-      "note": "求值调度 + 内容寻址缓存。缓存键用 NodeId{index,generation}（修复旧工程用 id() 地址当键的缺陷）；确定性哈希（不用实现定义的 std::hash）；浮点文本用归一化的 %a 保证跨编译器一致。撤销回上一步立刻命中缓存。" },
-    { "path": "core/graph/domain", "layer": "L1", "state": "verified",
-      "note": "域声明与执行计划：Domain 枚举只在 domain 模块定义一次（validate 改为参数化，不再自己定义一份）。field 是烘焙语义（可阻塞、可分配），particle 是逐帧语义（不阻塞、不分配、不抛、无虚调用），render 是声明式（不求值）。计划把节点分到三条执行序列并按拓扑排序。" },
-    { "path": "core/graph/kernels", "layer": "L1", "state": "verified",
-      "note": "原生算子契约 + 注册表。**本模块不含任何积分器**：Boris / 蛙跳 / RK4 / Verlet 是插件，契约留在地基。形状由性能要求决定——宿主每个计划操作解析一次 IBatchAdvancer，然后每步调用一次 advance，因此虚调用是每算子每帧 5 次而不是每粒子一次；接口刻意不提供『每粒子回调宿主』，那种形状无法做快。确定性是契约而非质量目标：advance 不得分配/抛出/阻塞，随机性只能来自注入的 RNG（splitmix64 而非标准分布适配器——同一引擎在 libstdc++ 与 MSVC 上序列不同）。注册表两阶段提交：declare 预留、commit 安装、drop 释放，插件加载失败不留痕迹。重名拒绝而不是覆盖，因为覆盖会静默改掉所有按名引用它的已存图。" },
-    { "path": "core/graph/field", "layer": "L1", "state": "verified",
-      "note": "场的最小语义：是不是场、什么形状、哪些分量有效。偶极/磁尾/T04/包络全是插件。刻意不依赖 units：场携带 FieldDim（指数）而不是受检 Quantity——对 float32 场的每个采样做受检转换是热路径上的纯开销，而单位字符串是展示层的事。有效性**分成两个问题**：is_valid_field 只问形状是否可描述，is_readable 才要求指针非空、字节跨度够、f64 满足对齐（从紧凑缓冲区中间取视图是插件会做的事，而错位 f64 加载是未定义行为而不是错值）。越界分量访问返回 0.0 而不是读相邻采样——后者看起来像合理数据，因此更糟。" },
-    { "path": "core/runtime/run", "layer": "L2", "state": "planned",
-      "note": "挡住章程 R2/C1；须记录 seed + 参数集 + 图版本 + 插件版本 + 工具链 + 优化级别（U7）" },
-    { "path": "core/runtime/store", "layer": "L2", "state": "planned", "note": "dataset/fit_result 结构" },
-    { "path": "core/runtime/trace", "layer": "L2", "state": "planned", "note": "C3 时间轴" },
-    { "path": "core/runtime/io", "layer": "L2", "state": "planned", "note": "格式是插件" },
-    { "path": "core/authoring/document", "layer": "L3", "state": "planned", "note": "view_layouts 分槽" },
-    { "path": "core/authoring/capability", "layer": "L3", "state": "planned", "note": "P4" },
-    { "path": "core/authoring/commands", "layer": "L3", "state": "planned",
-      "note": "P4；多视图唯一入口 + 唯一撤销栈" },
-    { "path": "core/authoring/layout", "layer": "L3", "state": "planned", "note": "算法是插件" },
-    { "path": "core/authoring/portui", "layer": "L3", "state": "planned",
-      "note": "新端口类型自动获得 UI" },
-    { "path": "views", "layer": "consumer", "state": "planned",
-      "note": "可整体删除；core 独立性门禁依赖这点" },
-    { "path": "plugins", "layer": "content", "state": "planned", "note": "可整体删除" }
+    {
+      "path": "core/units",
+      "layer": "L0",
+      "state": "verified",
+      "note": "P1 纵切完成并双编译器验证。类型契约冻结、黄金字符串、8 个真实缺陷已修。U6 由 ADR-0005 决策。"
+    },
+    {
+      "path": "core/diag",
+      "layer": "L0",
+      "state": "verified",
+      "note": "错误通道：ErrorCode（分域稳定编码）/ Consequence / Result<T> / Diagnostic / ISink。diag 是唯一无 core 依赖的模块。含死亡测试验证违反 @pre 必然终止。日志层已落地（P3 补）：JSON Lines、ISO 8601 UTC 定宽时间戳（定宽所以文本排序=时间排序）、级别由错误域导出而非各调用点自创、json_escape 对非法 UTF-8 做替换而不是放行。diag 因此从 INTERFACE 变为 STATIC。"
+    },
+    {
+      "path": "core/abi",
+      "layer": "L0",
+      "state": "verified",
+      "note": "跨边界内存布局：Version/兼容判定、FieldDim、LatticeDesc、FieldBuffer（seqlock）。唯一连 units 都不依赖的模块——ABI 必须能被外部语言绑定独立消费。布局重复用断言守而不靠依赖消除。tests/ABI_LAYOUT.md 是语言中立布局说明书。"
+    },
+    {
+      "path": "core/ports",
+      "layer": "L0",
+      "state": "verified",
+      "note": "端口类型注册表：Value（标签联合，量纲不进值）、PortTypeDesc、PortTypeRegistry（三态注册语义）、check_connection/check_value（加载期判定）。落地了 ADR-0005 的 scalar_f32/scalar_f64 双标签与『端口边界唯一一次拓宽』。"
+    },
+    {
+      "path": "core/plugin",
+      "layer": "L0",
+      "state": "verified",
+      "note": "插件契约：manifest schema + 兼容判定 + 加载顺序。**刻意不做两件事**——不解析文件（格式是序列化选择，属于适配器插件，与 plan-tree §2.2 对 ABI 的处理同理），不加载动态库（那是平台相关且需要文件系统与动态加载器，是插件系统里唯一真正每个 OS 都不同的部分）。留在这里的是**任何代码进入进程之前就能判定**的事：身份、版本、布局、能力、依赖顺序；早判定正是要点——版本错配在 dlopen 已经跑完构造函数之后才发现就太晚了。判定顺序是契约而非实现细节：多个问题同时存在时先报身份，因为无法命名的插件没有可操作的版本抱怨。能力位被宿主拒绝时**拒绝加载**而不是悄悄丢掉那一位：少了自己声明能力的插件会在别处、以无关的原因失败。"
+    },
+    {
+      "path": "core/reflect",
+      "layer": "L0",
+      "state": "planned",
+      "note": "units 已完成 unit_symbol 部分；type_name 随 ports 一并成型"
+    },
+    {
+      "path": "core/graph/ir",
+      "layer": "L1",
+      "state": "verified",
+      "note": "中间表示：NodeId 带世代（防槽位复用后静默指错对象）、PortDesc 统一 Param 与 Port（connectable 标志）、NodeDesc 三个可选钩子为上限、Edge 不可变且方向有硬不变量。IR 就是插件 API 本身。"
+    },
+    {
+      "path": "core/graph/structure",
+      "layer": "L1",
+      "state": "verified",
+      "note": "图结构：槽位含哨兵（index 0 = 无）、世代防句柄复活、变异失败强异常保证、版本号只在成功时递增、环检测在连边前完成。19 个用例覆盖全部失败分支。"
+    },
+    {
+      "path": "core/graph/mutate",
+      "layer": "L1",
+      "state": "verified",
+      "note": "命令总线 + 唯一撤销栈。命令是纯数据（可比较/可序列化）；撤销靠逆命令而非快照；同节点连续同类编辑合并（拖动滑块一次撤销）。撤销再重做**保持节点 id 不变**——这是整套设计最关键的性质。"
+    },
+    {
+      "path": "core/graph/validate",
+      "layer": "L1",
+      "state": "verified",
+      "note": "加载期校验：五层检查（结构/端口存在性/连接兼容/必需参数/域许可）一次报全部问题。含**量纲解析**——把 same_as_input 沿拓扑序解析成具体量纲，这是只有看到整张图才能完成的一步。校验只读，调用前后图与版本号不变。"
+    },
+    {
+      "path": "core/graph/eval",
+      "layer": "L1",
+      "state": "verified",
+      "note": "求值调度 + 内容寻址缓存。缓存键用 NodeId{index,generation}（修复旧工程用 id() 地址当键的缺陷）；确定性哈希（不用实现定义的 std::hash）；浮点文本用归一化的 %a 保证跨编译器一致。撤销回上一步立刻命中缓存。"
+    },
+    {
+      "path": "core/graph/domain",
+      "layer": "L1",
+      "state": "verified",
+      "note": "域声明与执行计划：Domain 枚举只在 domain 模块定义一次（validate 改为参数化，不再自己定义一份）。field 是烘焙语义（可阻塞、可分配），particle 是逐帧语义（不阻塞、不分配、不抛、无虚调用），render 是声明式（不求值）。计划把节点分到三条执行序列并按拓扑排序。"
+    },
+    {
+      "path": "core/graph/kernels",
+      "layer": "L1",
+      "state": "verified",
+      "note": "原生算子契约 + 注册表。**本模块不含任何积分器**：Boris / 蛙跳 / RK4 / Verlet 是插件，契约留在地基。形状由性能要求决定——宿主每个计划操作解析一次 IBatchAdvancer，然后每步调用一次 advance，因此虚调用是每算子每帧 5 次而不是每粒子一次；接口刻意不提供『每粒子回调宿主』，那种形状无法做快。确定性是契约而非质量目标：advance 不得分配/抛出/阻塞，随机性只能来自注入的 RNG（splitmix64 而非标准分布适配器——同一引擎在 libstdc++ 与 MSVC 上序列不同）。注册表两阶段提交：declare 预留、commit 安装、drop 释放，插件加载失败不留痕迹。重名拒绝而不是覆盖，因为覆盖会静默改掉所有按名引用它的已存图。"
+    },
+    {
+      "path": "core/graph/field",
+      "layer": "L1",
+      "state": "verified",
+      "note": "场的最小语义：是不是场、什么形状、哪些分量有效。偶极/磁尾/T04/包络全是插件。刻意不依赖 units：场携带 FieldDim（指数）而不是受检 Quantity——对 float32 场的每个采样做受检转换是热路径上的纯开销，而单位字符串是展示层的事。有效性**分成两个问题**：is_valid_field 只问形状是否可描述，is_readable 才要求指针非空、字节跨度够、f64 满足对齐（从紧凑缓冲区中间取视图是插件会做的事，而错位 f64 加载是未定义行为而不是错值）。越界分量访问返回 0.0 而不是读相邻采样——后者看起来像合理数据，因此更糟。"
+    },
+    {
+      "path": "core/runtime/run",
+      "layer": "L2",
+      "state": "planned",
+      "note": "挡住章程 R2/C1；须记录 seed + 参数集 + 图版本 + 插件版本 + 工具链 + 优化级别（U7）"
+    },
+    {
+      "path": "core/runtime/store",
+      "layer": "L2",
+      "state": "planned",
+      "note": "dataset/fit_result 结构"
+    },
+    {
+      "path": "core/runtime/trace",
+      "layer": "L2",
+      "state": "planned",
+      "note": "C3 时间轴"
+    },
+    {
+      "path": "core/runtime/io",
+      "layer": "L2",
+      "state": "planned",
+      "note": "格式是插件"
+    },
+    {
+      "path": "core/authoring/document",
+      "layer": "L3",
+      "state": "planned",
+      "note": "view_layouts 分槽"
+    },
+    {
+      "path": "core/authoring/capability",
+      "layer": "L3",
+      "state": "verified",
+      "note": "能力协商：插件声明能力，宿主查询与协商。**声明与授予是两种不同的状态**——声明是主张，主张可能是假的；授予是决定，而且平台必须能基于插件无法影响 grounds 做出这个决定（用户关掉一项权限，或某个构建根本不允许文件访问）。把两者合成一个注册表，就会让『谁能写文件』的答案取决于插件怎么说自己，这是本末倒置。所以 negotiate 在任何实现可达之前就算出授予，declared 报告主张、granted 报告决定。能力 id 用命名空间字符串而不是整数：整数 id 必须有人分配，分配者就成了生态要等的瓶颈；字符串可以由引入它的插件自己铸造，不需要中央注册表，而且在日志里可读。"
+    },
+    {
+      "path": "core/authoring/commands",
+      "layer": "L3",
+      "state": "verified",
+      "note": "把 graph/mutate 的命令暴露给视图：**一个 Session 持有一张 Graph、一条 CommandBus、一个撤销栈**，而 Session 是唯一触碰它们的对象——视图持 Session 指针，绝不持图。这条规则是**结构性**的而非口头约定：一旦存在第二张图，两份副本就会分叉，而分叉不是崩溃——节点编辑器拖了滑块，属性面板还显示旧值，用户相信面板，于是记录下来的实验不是他配置的那个。变化通知只带 ChangeKind + 受影响节点，不带负载：负载要么是每加一条命令就长一个分支的 variant，要么是每个视图各自解析的自由文本。通知**不是**带优先级的订阅表：视图不能在自己的 on_change 里改图（那会递归，且顺序决定结果）；要改图就做成显式的用户动作。顺带修掉一个真实缺陷：CommandBus 的 SetParam 每次都 bump 版本，连把参数设成它已有的值也算一次编辑——那会让内容寻址缓存全量失效，于是『没在动的滑块拖动』或『每次重绘都重新应用当前值的界面』会逼整张图重算。"
+    },
+    {
+      "path": "core/authoring/layout",
+      "layer": "L3",
+      "state": "planned",
+      "note": "算法是插件"
+    },
+    {
+      "path": "core/authoring/portui",
+      "layer": "L3",
+      "state": "planned",
+      "note": "新端口类型自动获得 UI"
+    },
+    {
+      "path": "views",
+      "layer": "consumer",
+      "state": "planned",
+      "note": "可整体删除；core 独立性门禁依赖这点"
+    },
+    {
+      "path": "plugins",
+      "layer": "content",
+      "state": "planned",
+      "note": "可整体删除"
+    }
   ]
 }

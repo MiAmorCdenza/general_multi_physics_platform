@@ -88,6 +88,14 @@ const std::string& UndoStack::next_redo_label() const noexcept {
     return redo_.empty() ? kEmpty : redo_.back().label();
 }
 
+NodeId UndoStack::next_undo_target() const noexcept {
+    return undo_.empty() ? NodeId{} : undo_.back().target();
+}
+
+NodeId UndoStack::next_redo_target() const noexcept {
+    return redo_.empty() ? NodeId{} : redo_.back().target();
+}
+
 void UndoStack::clear() noexcept {
     undo_.clear();
     redo_.clear();
@@ -274,6 +282,18 @@ Result<ApplyOutcome> CommandBus::apply(const Command& c, bool allow_merge) {
                 // **Capture the old value first** (it cannot be read once applied)
                 const qp::ports::Value previous = n->param(cmd.port);
                 const bool had_value = previous.valid();
+
+                // Setting a parameter to the value it already holds is not an
+                // edit. Reporting one would bump the version, which invalidates
+                // every content-addressed cache entry downstream -- so a slider
+                // drag that is not moving, or a UI that re-applies the current
+                // value on every repaint, would force the whole graph to
+                // recompute for no reason. The caller still sees success: the
+                // postcondition "the parameter holds this value" is satisfied.
+                if (had_value && previous == cmd.value) {
+                    return Result<ApplyOutcome>{
+                        ApplyOutcome{cmd.id, graph_->version(), false}};
+                }
 
                 n->set_param(cmd.port, cmd.value);
                 graph_->bump_version();

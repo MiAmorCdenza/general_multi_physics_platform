@@ -228,3 +228,9 @@ qp_add_test(qp_test_graph_kernels
 qp_add_test(qp_test_plugin
     SOURCES unit/plugin/test_plugin.cpp
     LIBS qp::plugin)
+qp_add_test(qp_test_capability
+    SOURCES unit/authoring/test_capability.cpp
+    LIBS qp::authoring_capability)
+qp_add_test(qp_test_authoring_session
+    SOURCES unit/authoring/test_session.cpp
+    LIBS qp::authoring_commands)

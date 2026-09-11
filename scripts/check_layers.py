@@ -81,7 +81,11 @@ ALLOWED: dict[str, set[str]] = {
     "io": {"units", "diag", "abi", "store"},
     # L3 view services
     "document": {"units", "diag", "ir", "abi"},
-    "capability": {"units", "diag", "ports"},
+    # capability needs plugin, not ports: it negotiates what a plugin may
+    # contribute, which is a question about the manifest. It never touches a
+    # port type, and keeping it clear of ports means a capability query cannot
+    # accidentally depend on the type registry being populated.
+    "capability": {"units", "diag", "plugin"},
     "commands": {"units", "diag", "ir", "structure", "mutate"},
     "layout": {"units", "diag", "ir", "document"},
     "portui": {"units", "diag", "ports", "capability"},

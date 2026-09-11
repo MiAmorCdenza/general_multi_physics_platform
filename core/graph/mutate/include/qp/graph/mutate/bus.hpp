@@ -135,6 +135,42 @@ public:
     /// @brief Label of the next edit to redo. Empty string on an empty stack.
     [[nodiscard]] const std::string& next_redo_label() const noexcept;
 
+    /**
+     * @brief The node the next undo would affect. Invalid on an empty stack.
+     *
+     * Needed by a caller that has to say what changed **before** performing the
+     * undo: afterwards the record has moved to the other stack, so the moment for
+     * reading it has passed.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        Returns the target of the most recent edit, or an invalid id
+     * @invariant   Consistent with next_undo_label() being non-empty
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       graph.mutate.next_target_matches_history
+     */
+    [[nodiscard]] NodeId next_undo_target() const noexcept;
+
+    /**
+     * @brief The node the next redo would affect. Invalid on an empty stack.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        Returns the target of the most recently undone edit, or an invalid id
+     * @invariant   Consistent with next_redo_label() being non-empty
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       graph.mutate.next_target_matches_history
+     */
+    [[nodiscard]] NodeId next_redo_target() const noexcept;
+
     /// @brief Clear the history on both sides.
     void clear() noexcept;
 
