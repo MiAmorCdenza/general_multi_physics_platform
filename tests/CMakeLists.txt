@@ -225,3 +225,6 @@ qp_add_test(qp_test_graph_field
 qp_add_test(qp_test_graph_kernels
     SOURCES unit/graph/test_kernels.cpp
     LIBS qp::graph_kernels)
+qp_add_test(qp_test_plugin
+    SOURCES unit/plugin/test_plugin.cpp
+    LIBS qp::plugin)

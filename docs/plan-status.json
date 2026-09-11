@@ -1,13 +1,13 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "P3 完成（core/graph 八个模块全部 verified）；下一步 P4（core/plugin + core/authoring）",
+  "updated": "P4 进行中：core/plugin 完成（manifest 契约 + 兼容判定 + 加载顺序）；authoring 待做",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": ["planned", "contract", "specified", "implemented", "verified"],
   "gates": {
     "contract_completeness": {
       "tool": "scripts/check_contracts.py",
       "state": "passing",
-      "detail": "177 个契约 / 360 个用例 / 0 违规 / 0 孤儿。@tests 的 id 与 tests/ 下的 TEST_CASE 逐字对应。"
+      "detail": "186 个契约 / 371 个用例 / 0 违规 / 0 孤儿。@tests 的 id 与 tests/ 下的 TEST_CASE 逐字对应。"
     },
     "gate_self_test": {
       "tool": "tests/meta/check_contract_checker.py",
@@ -36,7 +36,7 @@
     },
     "compiler_matrix": {
       "state": "passing",
-      "detail": "GCC 15.2.0 (MinGW i686) 与 MSVC 19.51 (x64) 双 387/387；见 ADR-0004"
+      "detail": "GCC 15.2.0 (MinGW i686) 与 MSVC 19.51 (x64) 双绿（P3 收尾时双 387/387）；见 ADR-0004"
     },
     "cmake_graph": {
       "state": "passing",
@@ -48,7 +48,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 387,
+    "ctest_registered": 399,
     "compilers_green": ["gcc-15.2.0-i686", "msvc-19.51-x64"]
   },
   "modules": [
@@ -60,10 +60,10 @@
       "note": "跨边界内存布局：Version/兼容判定、FieldDim、LatticeDesc、FieldBuffer（seqlock）。唯一连 units 都不依赖的模块——ABI 必须能被外部语言绑定独立消费。布局重复用断言守而不靠依赖消除。tests/ABI_LAYOUT.md 是语言中立布局说明书。" },
     { "path": "core/ports", "layer": "L0", "state": "verified",
       "note": "端口类型注册表：Value（标签联合，量纲不进值）、PortTypeDesc、PortTypeRegistry（三态注册语义）、check_connection/check_value（加载期判定）。落地了 ADR-0005 的 scalar_f32/scalar_f64 双标签与『端口边界唯一一次拓宽』。" },
+    { "path": "core/plugin", "layer": "L0", "state": "verified",
+      "note": "插件契约：manifest schema + 兼容判定 + 加载顺序。**刻意不做两件事**——不解析文件（格式是序列化选择，属于适配器插件，与 plan-tree §2.2 对 ABI 的处理同理），不加载动态库（那是平台相关且需要文件系统与动态加载器，是插件系统里唯一真正每个 OS 都不同的部分）。留在这里的是**任何代码进入进程之前就能判定**的事：身份、版本、布局、能力、依赖顺序；早判定正是要点——版本错配在 dlopen 已经跑完构造函数之后才发现就太晚了。判定顺序是契约而非实现细节：多个问题同时存在时先报身份，因为无法命名的插件没有可操作的版本抱怨。能力位被宿主拒绝时**拒绝加载**而不是悄悄丢掉那一位：少了自己声明能力的插件会在别处、以无关的原因失败。" },
     { "path": "core/reflect", "layer": "L0", "state": "planned",
       "note": "units 已完成 unit_symbol 部分；type_name 随 ports 一并成型" },
-    { "path": "core/plugin", "layer": "L0", "state": "planned",
-      "note": "P4；兼容策略（abi::check_compatible 已就位）与模糊测试同时" },
     { "path": "core/graph/ir", "layer": "L1", "state": "verified",
       "note": "中间表示：NodeId 带世代（防槽位复用后静默指错对象）、PortDesc 统一 Param 与 Port（connectable 标志）、NodeDesc 三个可选钩子为上限、Edge 不可变且方向有硬不变量。IR 就是插件 API 本身。" },
     { "path": "core/graph/structure", "layer": "L1", "state": "verified",

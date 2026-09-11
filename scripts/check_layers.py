@@ -42,6 +42,12 @@ ALLOWED: dict[str, set[str]] = {
     # ports needs abi's LatticeDesc as the field-handle payload of Value --
     # a port must carry fields, and a field's layout is defined in abi. This dependency is intentional.
     "ports": {"units", "diag", "abi"},
+    # plugin judges a manifest and orders a plugin set. It does not parse a file
+    # and does not load a shared library: the file format is a serialisation
+    # choice and belongs to an adapter, and mapping code into the process is
+    # platform-specific. What is here is everything decidable before any code
+    # runs, which is the part that must not vary by OS.
+    "plugin": {"units", "diag", "abi", "ports", "reflect"},
     # L1 graph and execution
     "ir": {"units", "diag", "ports"},
     "structure": {"units", "diag", "ir"},
