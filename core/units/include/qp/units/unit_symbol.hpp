@@ -57,33 +57,75 @@ inline void append_exp(std::string& out, DimExp e) {
     out += std::to_string(static_cast<int>(e));
 }
 
-/// 生成一侧（分子或分母）的字符串。符号全部取绝对值，方向由 per 表达。
-///
-/// 分母含多个因子时必须加括号：`kg/(A*s^2)` 而不是有歧义的 `kg/A*s^2`。
+/// 单位符号按字母序排列时的轴索引：A K cd kg m mol s
+/// → 对应 Dim 的成员 I, Th, J, M, L, N, T
+inline constexpr std::array<int, 7> kSymbolAxisOrder{3, 4, 6, 1, 0, 5, 2};
+
+// 以下三个是**实现细节**（namespace detail），不构成模块契约面，
+// 因而不单独写契约、不单独点名测试。它们的行为通过公开的 unit_symbol()
+// 在黄金测试与性质测试中被完整覆盖——这是"测试可观察行为，而非实现细节"。
+namespace detail {
+
+/// 取出按符号序排列的七个指数。
+[[nodiscard]] inline std::array<DimExp, 7> symbol_order_exponents(Dim d) noexcept {
+    const std::array<DimExp, 7> by_member{d.L, d.M, d.T, d.I, d.Th, d.N, d.J};
+    std::array<DimExp, 7> out{};
+    for (std::size_t i = 0; i < 7; ++i) {
+        out[i] = by_member[static_cast<std::size_t>(kSymbolAxisOrder[i])];
+    }
+    return out;
+}
+
+/// 某一侧（分子 / 分母）实际会打印出几个因子。
+/// 分母侧数的是**负指数**：压强 kg/(m*s^2) 的分母是 m 与 s^2，共 2 个。
+/// 早期版本把"取负之后为正"当作判据，等于把分子也数了进去——由黄金测试抓出。
+[[nodiscard]] inline int count_factors(Dim d, bool denominator) noexcept {
+    int n = 0;
+    for (DimExp e : symbol_order_exponents(d)) {
+        const DimExp shown = denominator ? static_cast<DimExp>(-e) : e;
+        if (shown > 0) ++n;
+    }
+    return n;
+}
+
+/// 分母侧是否需要括号：含多个因子时必须有括号，否则语义有歧义。
+[[nodiscard]] inline bool needs_parentheses(Dim d) noexcept {
+    return count_factors(d, true) > 1;
+}
+
+}  // namespace detail
+
+/**
+ * @brief 生成一侧（分子或分母）的字符串。符号取绝对值，方向由 `per` 表达。
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        向 out 追加该侧的符号串；无因子时追加 "1"
+ * @invariant   分母多因子时自动加括号（与 count_factors 一致）
+ * @errors      noexcept；分配失败即 std::terminate
+ * @complexity  O(7)
+ * @nondet      none
+ * @frozen      否
+ * @tests       units.symbol.short_forms, units.symbol.long_form,
+ *              units.symbol.denominator_parenthesized
+ */
 template <std::size_t N>
 inline void append_side(std::string& out, const std::array<std::string_view, N>& names, Dim d,
-                        bool denominator) {
-    // 与 kShortNumerator 的字母序一一对应：A K cd kg m mol s
-    const std::array<DimExp, 7> exps{d.I, d.Th, d.J, d.M, d.L, d.N, d.T};
-    int factor_count = 0;
-    for (DimExp e : exps) {
-        const DimExp signed_e = denominator ? static_cast<DimExp>(-e) : e;
-        if (signed_e > 0) ++factor_count;
-    }
-    const bool parenthesize = denominator && factor_count > 1;
-    if (parenthesize) out += '(';
+                        bool denominator) noexcept {
+    const auto exps = detail::symbol_order_exponents(d);
+    const bool parenthesize = denominator && detail::needs_parentheses(d);    if (parenthesize) out += '(';
 
     bool first = true;
     for (std::size_t i = 0; i < 7; ++i) {
-        DimExp e = exps[i];
-        if (denominator) e = static_cast<DimExp>(-e);
-        if (e <= 0) continue;
+        const DimExp shown = denominator ? static_cast<DimExp>(-exps[i]) : exps[i];
+        if (shown <= 0) continue;
         if (!first) out += '*';
         out += names[i];
-        append_exp(out, e);
+        append_exp(out, shown);
         first = false;
     }
-    if (first) out += '1';  // 例如 s^-1 的分子侧
+    if (first) out += '1';  // 例如频率的分子侧
     if (parenthesize) out += ')';
 }
 

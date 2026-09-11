@@ -292,7 +292,8 @@ namespace detail {
  * @nondet      none
  * @frozen      否
  * @tests       units.quantity.pow_two, units.quantity.pow_zero,
- *              units.quantity.pow_constexpr
+ *              units.quantity.pow_constexpr, units.quantity.pow_is_deterministic,
+ *              units.quantity.pow_matches_repeated_multiplication
  */
 template <int P, auto D>
 [[nodiscard]] constexpr Quantity<dim_pow<P>(D)> pow(Quantity<D> a) noexcept {

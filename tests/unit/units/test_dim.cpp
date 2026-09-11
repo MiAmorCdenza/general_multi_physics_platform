@@ -39,13 +39,30 @@ TEST_CASE("units.dim.equality", "[units]") {
 }
 
 TEST_CASE("units.dim.dimensionless_predicate", "[units]") {
+    // 真正无量纲：全部指数为 0
     STATIC_REQUIRE(Dim{}.is_dimensionless());
     STATIC_REQUIRE(Dim::none().is_dimensionless());
-    STATIC_REQUIRE((Dim{1, -1, 0, 0, 0, 0, 0}.is_dimensionless()) == false);
-    STATIC_REQUIRE((Dim{1, 0, -1, 0, 0, 0, 0}.is_dimensionless()) == false);
-    STATIC_REQUIRE((Dim{-1, 1, 0, 0, 0, 0, 0}.is_dimensionless() == true);  // 指数和为 0
     STATIC_REQUIRE(dims::length.is_dimensionless() == false);
     STATIC_REQUIRE(dims::area.is_dimensionless() == false);
+    // 指数相互抵消**不等于**无量纲：L^1 * T^-1 是有量纲的（速度）
+    STATIC_REQUIRE((Dim{1, 0, -1, 0, 0, 0, 0}.is_dimensionless()) == false);
+    STATIC_REQUIRE((Dim{1, -1, 0, 0, 0, 0, 0}.is_dimensionless()) == false);
+    STATIC_REQUIRE((Dim{-1, 1, 0, 0, 0, 0, 0}.is_dimensionless()) == false);
+}
+
+TEST_CASE("units.dim.zero_exponent_sum", "[units]") {
+    STATIC_REQUIRE(Dim{}.has_zero_exponent_sum());
+    // 速度：L=1, T=-1 → 和 0
+    STATIC_REQUIRE((Dim{1, 0, -1, 0, 0, 0, 0}.has_zero_exponent_sum()));
+    // L*M/T^2：1+1-2 = 0 → 也判为和为零，但这显然是力，有量纲
+    STATIC_REQUIRE((Dim{1, 1, -2, 0, 0, 0, 0}.has_zero_exponent_sum()));
+    STATIC_REQUIRE(dims::force.has_zero_exponent_sum());
+    // 单向蕴含：真正无量纲 ⟹ 和为零
+    STATIC_REQUIRE(Dim{}.is_dimensionless());
+    STATIC_REQUIRE(Dim{}.has_zero_exponent_sum());
+    // 反例：和有零但非无量纲 —— 证明二者不可互换
+    STATIC_REQUIRE(dims::force.has_zero_exponent_sum());
+    STATIC_REQUIRE(dims::force.is_dimensionless() == false);
 }
 
 TEST_CASE("units.dim.representable", "[units]") {

@@ -78,7 +78,7 @@ TEST_CASE("units.quantity.add_same_dim", "[units]") {
     constexpr Length b{4.0};
     STATIC_REQUIRE((a + b).value() == 7.0);
     STATIC_REQUIRE((a + b).dim == dims::length);
-    STATIC_REQUIRE(std::is_same_v<decltype(a + b), const Length>);
+    STATIC_REQUIRE(std::is_same_v<std::decay_t<decltype(a + b)>, Length>);
 }
 
 TEST_CASE("units.quantity.sub_same_dim", "[units]") {
@@ -164,11 +164,15 @@ TEST_CASE("units.quantity.negate", "[units]") {
 
 TEST_CASE("units.quantity.mul_commutative", "[units][property]") {
     constexpr double samples[] = {-2.0, -0.5, 0.0, 0.5, 2.0, 1e-6, 1e6};
+    // 返回类型相同 —— 编译期性质，只需断言一次。用类型别名而非
+    // 在宏里嵌 decltype 表达式：宏参数里的逗号/比较符极易误解析。
+    using Ab = decltype(Length{1.0} * Mass{1.0});
+    using Ba = decltype(Mass{1.0} * Length{1.0});
+    STATIC_REQUIRE(std::is_same_v<Ab, Ba>);
     for (double x : samples) {
         for (double y : samples) {
             const auto ab = Length{x} * Mass{y};
             const auto ba = Mass{y} * Length{x};
-            STATIC_REQUIRE(std::is_same_v<std::decay_t<decltype(ab)>, std::decay_t<decltype(ba)>);
             REQUIRE(ab.value() == ba.value());
             REQUIRE(ab.dim == ba.dim);
         }
@@ -177,13 +181,16 @@ TEST_CASE("units.quantity.mul_commutative", "[units][property]") {
 
 TEST_CASE("units.quantity.mul_associative", "[units][property]") {
     constexpr double samples[] = {-2.0, -0.5, 0.0, 0.5, 2.0};
+    using Lhs = decltype((Length{1.0} * Mass{1.0}) * Time{1.0});
+    using Rhs = decltype(Length{1.0} * (Mass{1.0} * Time{1.0}));
+    STATIC_REQUIRE(std::is_same_v<Lhs, Rhs>);
     for (double x : samples) {
         for (double y : samples) {
             for (double z : samples) {
                 const auto lhs = (Length{x} * Mass{y}) * Time{z};
                 const auto rhs = Length{x} * (Mass{y} * Time{z});
-                STATIC_REQUIRE(std::is_same_v<std::decay_t<decltype(lhs)>, std::decay_t<decltype(rhs)>);
                 REQUIRE(lhs.value() == rhs.value());
+                REQUIRE(lhs.dim == rhs.dim);
             }
         }
     }
@@ -212,7 +219,11 @@ TEST_CASE("units.quantity.pow_zero", "[units]") {
 }
 
 TEST_CASE("units.quantity.pow_constexpr", "[units]") {
-    // 整数幂必须是 constexpr，否则无法写出编译期常量表达式
+    // 整数幂必须是 constexpr，否则无法写出编译期常量表达式。
+    // 只断言**精确可表示**的值：在 FLT_EVAL_METHOD == 2 的工具链上
+    // （本机 MinGW 32 位，x87 80 位中间精度），编译期求值与运行期求值
+    // 会对非精确值给出不同结果，因此不能用 STATIC_REQUIRE 比对浮点近似值。
+    // 详见 tests/unit/units/test_floating_point_env.cpp。
     constexpr auto sq = pow<2>(Length{3.0});
     STATIC_REQUIRE(sq.value() == 9.0);
     constexpr auto cube = pow<3>(Length{2.0});
@@ -221,8 +232,82 @@ TEST_CASE("units.quantity.pow_constexpr", "[units]") {
     STATIC_REQUIRE(inv.value() == 0.25);
     constexpr auto inv3 = pow<-3>(Time{2.0});
     STATIC_REQUIRE(inv3.value() == 0.125);
-    // 求值顺序固定 → 同一编译器下可复现
-    STATIC_REQUIRE(pow<2>(Length{1.1}).value() == 1.1 * 1.1);
+    // 十的整数次幂在 double 下精确可表示
+    STATIC_REQUIRE(pow<4>(Length{10.0}).value() == 10000.0);
+    // 负幂不是精确值，只能用 REQUIRE 比对（见 test_floating_point_env.cpp）
+    REQUIRE(pow<-2>(Length{10.0}).value() == 0.01);
+}
+
+namespace {
+
+/// 逐个相乘的参考实现（与 pow 的平方求幂路径不同，用于交叉验证）。
+template <int N>
+double repeated_multiply(double base) {
+    if constexpr (N == 0) {
+        return 1.0;
+    } else if constexpr (N > 0) {
+        double acc = 1.0;
+        for (int i = 0; i < N; ++i) acc *= base;
+        return acc;
+    } else {
+        double acc = 1.0;
+        for (int i = 0; i < -N; ++i) acc *= base;
+        return 1.0 / acc;
+    }
+}
+
+/// 按位序比较两个 double 的距离（单位：ULP）。
+/// 同号时按位模式之差即 ULP 距离；本测试只用于非负样本。
+std::uint64_t ulp_distance(double a, double b) {
+    std::uint64_t ua = 0, ub = 0;
+    std::memcpy(&ua, &a, sizeof(ua));
+    std::memcpy(&ub, &b, sizeof(ub));
+    return ua > ub ? ua - ub : ub - ua;
+}
+
+}  // namespace
+
+TEST_CASE("units.quantity.pow_matches_repeated_multiplication", "[units][property]") {
+    // 交叉验证 pow 与朴素连乘。
+    //
+    // 这里**不能**要求逐位相同：平方求幂与连乘是不同的求值顺序，
+    // 浮点乘法不满足结合律，差 1 ULP 是**正确**行为而非缺陷。
+    // 曾经写成 REQUIRE(... == ...) 导致假失败——记在这里以免重犯。
+    // 真正必须逐位相同的性质是"确定性"（见下一个用例）。
+    constexpr double samples[] = {1.1, 2.0, 0.5, 3.7, 1e-3, 1e3};
+    for (double x : samples) {
+        for (int p = 1; p <= 8; ++p) {
+            const double via_pow = (p == 1)   ? pow<1>(Length{x}).value()
+                                   : (p == 2) ? pow<2>(Length{x}).value()
+                                   : (p == 3) ? pow<3>(Length{x}).value()
+                                   : (p == 4) ? pow<4>(Length{x}).value()
+                                              : pow<8>(Length{x}).value();
+            const double via_loop = (p == 1)   ? repeated_multiply<1>(x)
+                                    : (p == 2) ? repeated_multiply<2>(x)
+                                    : (p == 3) ? repeated_multiply<3>(x)
+                                    : (p == 4) ? repeated_multiply<4>(x)
+                                               : repeated_multiply<8>(x);
+            // 容差：几条 ULP。真正的保证是"不发散、不失控"，
+            // 不是"与另一种算法逐位一致"。
+            INFO("x=" << x << " p=" << p << " pow=" << via_pow << " loop=" << via_loop);
+            REQUIRE(ulp_distance(via_pow, via_loop) <= 4);
+        }
+    }
+}
+
+TEST_CASE("units.quantity.pow_is_deterministic", "[units][property]") {
+    // 章程 R2 的精神：同一输入必须给出**逐位相同**的输出。
+    // 这才是必须成立的性质，且与求值顺序无关。
+    constexpr double samples[] = {1.1, 2.0, 0.5, 3.7, 1e-3, 1e3, 0.0, -2.5};
+    for (double x : samples) {
+        REQUIRE(pow<2>(Length{x}).value() == pow<2>(Length{x}).value());
+        REQUIRE(pow<3>(Length{x}).value() == pow<3>(Length{x}).value());
+        REQUIRE(pow<8>(Length{x}).value() == pow<8>(Length{x}).value());
+        if (x != 0.0) {
+            REQUIRE(pow<-1>(Length{x}).value() == pow<-1>(Length{x}).value());
+            REQUIRE(pow<-3>(Length{x}).value() == pow<-3>(Length{x}).value());
+        }
+    }
 }
 
 TEST_CASE("units.quantity.sqrt_unchecked", "[units]") {

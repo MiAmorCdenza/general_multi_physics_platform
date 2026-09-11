@@ -60,15 +60,32 @@ TEST_CASE("units.symbol.short_forms", "[units][golden]") {
 }
 
 TEST_CASE("units.symbol.denominator_parenthesized", "[units][golden]") {
-    // 分母含多个因子必须加括号，否则语义有歧义
-    REQUIRE(short_of(dims::force).find("kg/(") != std::string::npos);
+    // 分母含多个因子必须加括号，否则语义有歧义。
+    // 这里只断言**可观察输出**，不碰 detail:: 下的实现细节——
+    // 曾经为内部辅助函数单独写测试，那是测试实现而非行为，已改回。
+    REQUIRE(short_of(dims::mass) == "kg");              // 分母 0 个因子
+    REQUIRE(short_of(dims::velocity) == "m/s");         // 分母 1 个
+    REQUIRE(short_of(dims::density) == "kg/m^3");       // 分母 1 个
+    REQUIRE(short_of(dims::frequency) == "1/s");        // 分子空 → "1"
+    REQUIRE(short_of(dims::force) == "kg*m/s^2");       // 分母 1 个 → 无括号
+    REQUIRE(short_of(dims::energy) == "kg*m^2/s^2");    // 分母 1 个 → 无括号
+    REQUIRE(short_of(dims::pressure) == "kg/(m*s^2)");  // 分母 2 个 → 有括号
     REQUIRE(short_of(dims::voltage) == "kg*m^2/(A*s^3)");
-    // 分母只有一个因子时不加括号
-    REQUIRE(short_of(dims::velocity) == "m/s");
-    REQUIRE(short_of(dims::density) == "kg/m^3");
-    REQUIRE(short_of(dims::frequency) == "1/s");
+    REQUIRE(short_of(dims::resistance) == "kg*m^2/(A^2*s^3)");
+    REQUIRE(short_of(dims::magnetic_flux_density) == "kg/(A*s^2)");
+    REQUIRE(short_of(dims::inductance) == "kg*m^2/(A^2*s^2)");
+
+    // 括号只在分母多因子时出现
     REQUIRE(short_of(dims::velocity).find('(') == std::string::npos);
     REQUIRE(short_of(dims::density).find('(') == std::string::npos);
+    REQUIRE(short_of(dims::force).find('(') == std::string::npos);
+    REQUIRE(short_of(dims::pressure).find('(') != std::string::npos);
+
+    // 长式规则与短式一致
+    REQUIRE(long_of(dims::pressure) == "kilogram per (meter*second^2)");
+    REQUIRE(long_of(dims::voltage) == "kilogram*meter^2 per (ampere*second^3)");
+    REQUIRE(long_of(dims::velocity) == "meter per second");
+    REQUIRE(long_of(dims::force) == "kilogram*meter per second^2");
 }
 
 TEST_CASE("units.symbol.area_uses_caret", "[units][golden]") {
@@ -103,8 +120,8 @@ TEST_CASE("units.symbol.long_form", "[units][golden]") {
     REQUIRE(long_of(dims::velocity) == "meter per second");
     REQUIRE(long_of(dims::force) == "kilogram*meter per second^2");
     REQUIRE(long_of(dims::energy) == "kilogram*meter^2 per second^2");
-    REQUIRE(long_of(dims::pressure) == "kilogram per meter*second^2");
-    REQUIRE(long_of(dims::voltage) == "kilogram*meter^2 per ampere*second^3");
+    REQUIRE(long_of(dims::pressure) == "kilogram per (meter*second^2)");
+    REQUIRE(long_of(dims::voltage) == "kilogram*meter^2 per (ampere*second^3)");
 }
 
 TEST_CASE("units.symbol.deterministic", "[units][property]") {

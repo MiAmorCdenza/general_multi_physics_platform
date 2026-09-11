@@ -95,6 +95,50 @@ static_assert(qp::abi::kAbiVersion == 1);
 断言里必须打印**全部**诊断点，而不是在第一个失败点停住——
 这样一次失败就能看到漂移的形状（是整体偏移还是单点爆炸）。
 
+### 5.1 浮点断言的铁律（P1 实测教训，必读）
+
+`STATIC_REQUIRE` 与 `REQUIRE` 在浮点上**不等价**，用错会产生假通过或假失败。
+
+**根因**：本机 MinGW 是 **32 位**目标（`i686-w64-mingw32`），因此
+`FLT_EVAL_METHOD == 2` —— 浮点表达式按 **x87 80 位扩展精度**求值。
+`static_assert` 里的算术在 80 位下算，运行期 `.value()` 是 64 位结果，
+两者最后几位**合法地**不同。
+
+**实测反例**（`pow<-2>(10.0)` 与字面量 `0.01` 在运行期同为 `0x3f847ae147ae147b`）：
+
+```cpp
+REQUIRE(pow<-2>(Length{10.0}).value() == 0.01);          // ✅ 通过
+STATIC_REQUIRE(pow<-2>(Length{10.0}).value() == 0.01);   // ❌ 失败
+```
+
+**规则**：
+
+| 断言对象 | 写法 |
+|---|---|
+| 整数、类型、`sizeof`、`offsetof` | `STATIC_REQUIRE` |
+| **精确可表示**的浮点值（0.25、9.0、10000.0、-1.0） | `STATIC_REQUIRE` 可用 |
+| 其余浮点值 | **必须** `REQUIRE` |
+| 跨算法一致性（平方求幂 vs 连乘） | `REQUIRE` + **ULP 容差**，禁止要求逐位相等 |
+| 确定性（同输入同输出） | `REQUIRE` + 逐位相等（这才是可要求的性质） |
+
+另有一条 C++ 语法陷阱：**模板实参里的逗号会被宏当作参数分隔符**。
+`STATIC_REQUIRE(std::is_same_v<A, B>)` 会解析错乱，必须用类型别名或加括号：
+
+```cpp
+using Ab = decltype(Length{1.0} * Mass{1.0});
+using Ba = decltype(Mass{1.0} * Length{1.0});
+STATIC_REQUIRE(std::is_same_v<Ab, Ba>);   // ✅ 清晰且不会踩宏的坑
+```
+
+**工具链前提必须被断言**：`tests/unit/units/test_floating_point_env.cpp`
+把 `FLT_EVAL_METHOD`、`sizeof(long double)`、`digits` 写成断言。
+换 64 位工具链时它会失败，提醒维护者重新审视所有浮点断言——这是刻意的摩擦。
+
+**推论（写数值内核时的重要后果）**：
+在 `FLT_EVAL_METHOD == 2` 的 32 位工具链上，**浮点结果依赖求值顺序与优化级别**。
+因此"逐位复现"（章程 R2）必须以**固定工具链 + 固定优化级别**为前提，
+运行身份必须记录这两项，否则复现承诺无法成立。
+
 ---
 
 ## 6. 第 5 类：确定性

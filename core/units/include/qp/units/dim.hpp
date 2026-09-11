@@ -61,13 +61,49 @@ struct Dim final {
     /// @brief 全零量纲（无量纲）。
     [[nodiscard]] static constexpr Dim none() noexcept { return Dim{}; }
 
-    /// @brief 编译期指数和。用于检查乘法是否溢出。
+    /// @brief 编译期指数和。用于检测"指数相互抵消"，**不是**无量纲判据。
     [[nodiscard]] constexpr int sum() const noexcept {
         return static_cast<int>(L) + M + T + I + Th + N + J;
     }
 
-    /// @brief 是否无量纲。
-    [[nodiscard]] constexpr bool is_dimensionless() const noexcept { return sum() == 0; }
+    /**
+     * @brief 是否真正无量纲：**全部七个指数均为 0**。
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        true 当且仅当 L==M==T==I==Th==N==J==0
+     * @invariant   与 `sum() == 0` **不等价**：速度的指数和为 -1，
+     *              而 `Dim{1,-1,0,0,0,0,0}` 的指数和为 0 却仍是有量纲的。
+     *              旧实现用 `sum() == 0` 会把这类量误判为无量纲——已修正。
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      否
+     * @tests       units.dim.dimensionless_predicate
+     */
+    [[nodiscard]] constexpr bool is_dimensionless() const noexcept {
+        return L == 0 && M == 0 && T == 0 && I == 0 && Th == 0 && N == 0 && J == 0;
+    }
+
+    /**
+     * @brief 指数和是否为零（各量纲相互抵消）。
+     *
+     * 保留本函数是为了诊断信息："你的量纲指数相互抵消了"。
+     * 它不是无量纲判据——见 is_dimensionless 的 @invariant。
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        返回 sum() == 0
+     * @invariant   is_dimensionless() ⟹ has_zero_exponent_sum()（单向成立）
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      否
+     * @tests       units.dim.zero_exponent_sum
+     */
+    [[nodiscard]] constexpr bool has_zero_exponent_sum() const noexcept { return sum() == 0; }
 
     /// @brief 该量纲是否由本结构表达得了（指数不越界）。
     [[nodiscard]] constexpr bool is_representable() const noexcept {

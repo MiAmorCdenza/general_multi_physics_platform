@@ -151,6 +151,16 @@ def build_type_index(lines: list[str]) -> list[str | None]:
     return owner
 
 
+def compute_depths(lines: list[str]) -> list[int]:
+    """每行**开头处**的花括号深度（0 = 文件最外层）。"""
+    depths: list[int] = []
+    depth = 0
+    for line in lines:
+        depths.append(depth)
+        depth += line.count("{") - line.count("}")
+    return depths
+
+
 def find_decl_start(lines: list[str], from_line: int, window: int = 4) -> int | None:
     """找文档块紧邻的声明起始行（0-based），找不到返回 None。
 
@@ -162,7 +172,14 @@ def find_decl_start(lines: list[str], from_line: int, window: int = 4) -> int | 
     1. **单行体误判**：`explicit constexpr Quantity(double v) noexcept : v_(v) {}`
        在同一行内闭合，必须原地识别，不能跳过。
     2. **控制流误判**：`if (style == ...) {` 形似声明，靠关键字黑名单排除。
+    3. **落进函数体**：声明跨多行时，搜索会继续往函数体里走，把
+       `const auto exps = ...;` 这种语句误当成声明。用**花括号深度**过滤。
     """
+    depths = compute_depths(lines)
+    if from_line >= len(lines):
+        return None
+    doc_depth = depths[from_line]
+
     i = from_line
     end = min(from_line + window, len(lines))
     while i < end:
@@ -172,6 +189,9 @@ def find_decl_start(lines: list[str], from_line: int, window: int = 4) -> int | 
             continue
         if stripped.startswith(("//", "/*", "*")):
             return None  # 另一个注释块 → 当前块不是函数契约
+        if depths[i] != doc_depth:
+            i += 1
+            continue  # 深度不符：这是更深层的语句，不是本契约的声明
         if stripped.split(" ", 1)[0].split("(", 1)[0] in CONTROL_KEYWORDS:
             return None
         if is_declaration_start(stripped):

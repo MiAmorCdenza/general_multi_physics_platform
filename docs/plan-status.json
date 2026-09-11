@@ -1,46 +1,53 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "P1",
+  "updated": "P1 完成",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": ["planned", "contract", "specified", "implemented", "verified"],
   "gates": {
     "contract_completeness": {
       "tool": "scripts/check_contracts.py",
       "state": "passing",
-      "detail": "31 个契约 / 55 个用例 / 0 违规 / 0 孤儿；10 个短体运算符按规则豁免"
+      "detail": "35 个契约 / 61 个用例 / 0 违规 / 0 孤儿；10 个短体运算符按规则豁免"
     },
     "gate_self_test": {
       "tool": "tests/meta/check_contract_checker.py",
       "state": "passing",
-      "detail": "C2/C3/C4/C5 四类违规必被抓到；合规样本无误报"
+      "detail": "C2/C3/C4/C5 四类违规必被抓到；合规样本无误报；模块级契约与函数契约正确区分"
     },
     "compiler_matrix": {
       "state": "passing",
-      "detail": "GCC 15.2.0 (MinGW-w64) 与 MSVC 19.51 均编译并运行通过；见 ADR-0004"
+      "detail": "GCC 15.2.0 (MinGW i686) 与 MSVC 19.51 (x64) 双 70/70；见 ADR-0004"
     },
     "cmake_graph": {
       "state": "passing",
-      "detail": "CMake 配置成功，7 个测试目标注册；gate.contracts 与 meta.contract_checker 经 CTest 双绿"
+      "detail": "catch_discover_tests 注册 70 项（62 个 TEST_CASE + 8 个聚合项）；按 tag 过滤可用"
     },
     "catch2_link": {
-      "state": "pending",
-      "detail": "Catch2 v3 尚未安装，qp_test_* 目标未在真实 Catch2 上链接过——P1 的唯一未完成项"
+      "state": "passing",
+      "detail": "external/Catch2 v3.5.2（由 scripts/fetch_deps.ps1 拉取）；配置阶段默认不联网"
     },
     "layer_dependency": {
       "tool": "scripts/check_layers.py",
       "state": "not_implemented",
-      "detail": "P2 起需要（core 一旦有第二个模块就必须挡住反向依赖）"
+      "detail": "P2 引入第二个 core 模块前必须补上"
     }
   },
+  "test_stats": {
+    "test_cases": 62,
+    "assertions": 1326,
+    "ctest_registered": 70
+  },
   "modules": [
-    { "path": "core/units", "layer": "L0", "state": "implemented",
-      "note": "P1 全深度纵切完成。类型契约冻结、31 个函数契约、黄金字符串、双编译器绿。缺陷修复记录见 ADR-0004。" },
+    { "path": "core/units", "layer": "L0", "state": "verified",
+      "note": "P1 纵切完成并双编译器验证。类型契约冻结、35 个函数契约、黄金字符串、8 个真实缺陷已修（含 is_dimensionless 物理错误、分母括号、MSVC NTTP）。U6 已由 ADR-0005 决策。" },
+    { "path": "core/diag", "layer": "L0", "state": "planned",
+      "note": "P2 首选：无依赖，是其他模块的错误通道" },
     { "path": "core/abi", "layer": "L0", "state": "planned",
-      "note": "P2 冻结；布局断言必须先于实现" },
-    { "path": "core/ports", "layer": "L0", "state": "planned", "note": "P2" },
+      "note": "P2；布局断言必须先于实现。量纲用 7 字节 Dim，绝不存单位字符串" },
+    { "path": "core/ports", "layer": "L0", "state": "planned",
+      "note": "P2；必须引入 scalar_f32/scalar_f64 两个标签（ADR-0005）" },
     { "path": "core/reflect", "layer": "L0", "state": "planned",
-      "note": "units 已完成 unit_symbol/type_name 的最小部分；剩余随 abi 一并成型" },
-    { "path": "core/diag", "layer": "L0", "state": "planned", "note": "无依赖，可随时先行" },
+      "note": "units 已完成 unit_symbol 部分；type_name 随 abi 一并成型" },
     { "path": "core/plugin", "layer": "L0", "state": "planned",
       "note": "P4；兼容策略与模糊测试同时" },
     { "path": "core/graph/ir", "layer": "L1", "state": "planned", "note": "P3 前置；插件 API 本身" },
@@ -54,7 +61,7 @@
       "note": "P3；契约在地基，Boris/蛙跳/RK4/Verlet 是插件" },
     { "path": "core/graph/field", "layer": "L1", "state": "planned", "note": "P3" },
     { "path": "core/runtime/run", "layer": "L2", "state": "planned",
-      "note": "挡住章程 R2/C1；三个基点中优先级最高" },
+      "note": "挡住章程 R2/C1；须记录 seed + 参数集 + 图版本 + 插件版本 + 工具链 + 优化级别（U7）" },
     { "path": "core/runtime/store", "layer": "L2", "state": "planned", "note": "dataset/fit_result 结构" },
     { "path": "core/runtime/trace", "layer": "L2", "state": "planned", "note": "C3 时间轴" },
     { "path": "core/runtime/io", "layer": "L2", "state": "planned", "note": "格式是插件" },

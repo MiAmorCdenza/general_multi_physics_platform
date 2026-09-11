@@ -11,6 +11,18 @@
 # 不使用 Catch2 的自动发现（Catch2Main 自行注册用例），因此每个可执行文件
 # 只需向 CTest 注册一次。
 
+# Catch2 的 extras 模块提供 catch_discover_tests
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/external/Catch2/extras")
+if(EXISTS "${CMAKE_SOURCE_DIR}/external/Catch2/extras/Catch.cmake")
+    include(Catch)
+else()
+    include(Catch OPTIONAL RESULT_VARIABLE _catch_included)
+    if(_catch_included STREQUAL "NOTFOUND")
+        message(FATAL_ERROR "找不到 Catch2 的 Catch.cmake（extras）。"
+            "若用系统安装的 Catch2，请确认 CMAKE_MODULE_PATH 含其 extras 目录。")
+    endif()
+endif()
+
 # ── Python 解释器（门禁脚本需要）────────────────────────────────────────────
 find_package(Python3 COMPONENTS Interpreter QUIET)
 
@@ -30,12 +42,32 @@ else()
 endif()
 
 # ── 测试目标 ─────────────────────────────────────────────────────────────────
+#
+# 用 catch_discover_tests 而不是 add_test(COMMAND <exe>)：
+#   注册到 CTest 的是**每个 TEST_CASE**，而不是整个可执行文件。
+#   收益：CI 日志直接点名失败用例；可按 [property] / [golden] 等 tag 过滤；
+#         失败粒度与契约 @tests 的粒度对齐（契约里写的就是 TEST_CASE id）。
+#
+# 每个可执行文件额外保留一个 <target>.all 聚合测试，便于本地快速全跑。
 function(qp_add_test target)
-    cmake_parse_arguments(ARG "" "" "SOURCES;LIBS" ${ARGN})
+    cmake_parse_arguments(ARG "" "" "SOURCES;LIBS;LABELS" ${ARGN})
+    if(NOT ARG_LABELS)
+        set(ARG_LABELS "unit")
+    endif()
+
     add_executable(${target} ${ARG_SOURCES})
     target_link_libraries(${target} PRIVATE qp::units Catch2::Catch2WithMain ${ARG_LIBS})
-    add_test(NAME ${target} COMMAND ${target})
-    set_tests_properties(${target} PROPERTIES LABELS "unit")
+
+    catch_discover_tests(${target}
+        TEST_PREFIX "${target}."
+        PROPERTIES LABELS "${ARG_LABELS}"
+        ADD_TAGS_AS_LABELS)          # [golden] / [property] 等 tag 直接成为 CTest 标签
+
+    # 聚合测试：一次跑完该可执行文件的全部用例
+    add_test(NAME "${target}.all" COMMAND ${target})
+    set_tests_properties("${target}.all" PROPERTIES
+        LABELS "${ARG_LABELS};aggregate"
+        RUN_SERIAL FALSE)
 endfunction()
 
 if(NOT TARGET Catch2::Catch2WithMain)
@@ -48,12 +80,15 @@ qp_add_test(qp_test_units_quantity
     SOURCES unit/units/test_quantity.cpp)
 qp_add_test(qp_test_units_conversion
     SOURCES unit/units/test_conversion.cpp)
+qp_add_test(qp_test_floating_point_env
+    SOURCES unit/units/test_floating_point_env.cpp
+    LABELS "golden")
 qp_add_test(qp_test_units_symbol_golden
-    SOURCES golden/units/test_unit_symbol.cpp)
+    SOURCES golden/units/test_unit_symbol.cpp
+    LABELS "golden")
 qp_add_test(qp_test_core_standalone
-    SOURCES smoke/test_core_standalone.cpp)
-
-set_tests_properties(qp_test_units_symbol_golden PROPERTIES LABELS "golden")
+    SOURCES smoke/test_core_standalone.cpp
+    LABELS "smoke")
 
 # ── 门禁自身的测试（enforcement.md §8）─────────────────────────────────────
 if(Python3_Interpreter_FOUND)

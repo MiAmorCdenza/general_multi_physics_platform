@@ -48,20 +48,44 @@ if(QP_SANITIZE)
 endif()
 
 # ── 测试依赖：Catch2 v3 ─────────────────────────────────────────────────────
+#
+# 三级探测，优先级从高到低：
+#   1. external/Catch2  —— 由 scripts/fetch_deps.ps1 显式拉取（推荐，离线可用）
+#   2. find_package     —— 系统/vcpkg 安装
+#   3. FetchContent     —— 仅当显式打开 QP_FETCH_DEPS
+#
+# 设计意图：**配置阶段默认不联网**。否则"能否配置成功"会取决于网络，
+# 这在离线开发和 CI 缓存场景下都不可接受。
 if(QP_BUILD_TESTS)
-    find_package(Catch2 3 QUIET)
-    if(NOT Catch2_FOUND AND QP_FETCH_DEPS)
-        include(FetchContent)
-        FetchContent_Declare(Catch2
-            GIT_REPOSITORY https://github.com/catchorg/Catch2.git
-            GIT_TAG        v3.5.2)
-        FetchContent_MakeAvailable(Catch2)
-        list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
+    set(QP_CATCH2_LOCAL "${CMAKE_SOURCE_DIR}/external/Catch2")
+
+    if(EXISTS "${QP_CATCH2_LOCAL}/CMakeLists.txt")
+        message(STATUS "Catch2: 使用本地副本 ${QP_CATCH2_LOCAL}")
+        add_subdirectory("${QP_CATCH2_LOCAL}" "${CMAKE_BINARY_DIR}/_deps/Catch2" EXCLUDE_FROM_ALL)
+        set(QP_CATCH2_SOURCE local)
+    else()
+        find_package(Catch2 3 QUIET)
+        if(Catch2_FOUND)
+            message(STATUS "Catch2: 使用系统安装 版本 ${Catch2_VERSION}")
+            set(QP_CATCH2_SOURCE package)
+        elseif(QP_FETCH_DEPS)
+            include(FetchContent)
+            FetchContent_Declare(Catch2
+                GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+                GIT_TAG        v3.5.2)
+            FetchContent_MakeAvailable(Catch2)
+            list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
+            message(STATUS "Catch2: 使用 FetchContent")
+            set(QP_CATCH2_SOURCE fetch)
+        endif()
     endif()
-    if(NOT Catch2_FOUND AND NOT TARGET Catch2::Catch2WithMain)
+
+    if(NOT TARGET Catch2::Catch2WithMain)
         message(FATAL_ERROR
-            "需要 Catch2 v3：vcpkg install catch2，或 -DCMAKE_PREFIX_PATH=<前缀>，"
-            "或加 -DQP_FETCH_DEPS=ON 让 CMake 自取。")
+            "需要 Catch2 v3，但三种途径都没有找到。\n"
+            "  推荐：pwsh scripts/fetch_deps.ps1\n"
+            "  或者：vcpkg install catch2 后加 -DCMAKE_PREFIX_PATH=<前缀>\n"
+            "  或者：-DQP_FETCH_DEPS=ON 让 CMake 在配置阶段联网自取")
     endif()
 endif()
 
