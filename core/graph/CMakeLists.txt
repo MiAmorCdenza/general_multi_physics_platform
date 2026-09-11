@@ -12,3 +12,4 @@
 
 add_subdirectory(ir)
 add_subdirectory(structure)
+add_subdirectory(mutate)

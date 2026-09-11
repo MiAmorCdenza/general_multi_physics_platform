@@ -143,6 +143,135 @@ public:
     Result<NodeId> add_node_named(std::string_view type_name, std::string_view name);
 
     /**
+     * @brief 预留一个槽位。返回的句柄**立即有效**，但类型名尚未确定。
+     *
+     * 为什么需要它：
+     *   命令总线（`core/graph/mutate`）必须**先把命令里携带的 NodeId 变成
+     *   有效句柄**，才能在应用与撤销两个方向都用同一个 id 引用节点。
+     *   撤销再重做时若 id 变了，所有引用该节点的边、缓存键、UI 选中状态
+     *   都会失效——这是不可接受的。
+     *
+     * 两阶段用法：
+     * ```
+     *   auto id = g.reserve_node();       // 立即有效，pending
+     *   g.fill_reserved(id, "dipole");    // 补全类型名，commit
+     * ```
+     * 两个阶段**各自递增版本号**：中间态虽短暂，却是一个真实且可被观察到的
+     * 状态（另一视图可能恰好在此刻刷新）。把中间态藏起来会让
+     * "版本号变了但内容没变"变成无法解释的现象。
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        成功时返回有效句柄，版本号递增，节点数 +1，`is_stable()` 变 false
+     * @post        失败时图与版本号均不变
+     * @invariant   返回句柄的世代与槽位当前世代一致
+     * @errors      Result<NodeId>；无参数可错，恒成功
+     * @complexity  O(1) 摊销
+     * @nondet      none
+     * @frozen      否
+     * @tests       graph.structure.reserve_and_fill, graph.structure.reserve_marks_pending
+     */
+    Result<NodeId> reserve_node();
+
+    /**
+     * @brief 补全一个预留槽位的类型名（commit 阶段）。
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         id 指向一个 pending 槽位；type_name 非空
+     * @post        成功时该节点类型名为 type_name、`is_stable()` 恢复 true，
+     *              版本号递增
+     * @post        失败时图与版本号均不变
+     * @invariant   同一槽位不会被 fill 两次
+     * @errors      Result<void>；id 无效 → unknown_node；type_name 为空 →
+     *              invalid_argument；槽位非 pending → duplicate_connection
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      否
+     * @tests       graph.structure.reserve_and_fill,
+     *              graph.structure.fill_rejects_non_pending
+     */
+    Result<void> fill_reserved(NodeId id, std::string_view type_name);
+
+    /// @brief 图中是否没有 pending 节点（即处于稳定状态）。
+    [[nodiscard]] bool is_stable() const noexcept { return pending_nodes_ == 0; }
+
+    /// @brief 当前 pending 节点数。
+    [[nodiscard]] std::size_t pending_count() const noexcept { return pending_nodes_; }
+
+    /**
+     * @brief 指定句柄是否指向一个**已预留但未补全**的槽位。
+     *
+     * 命令总线需要它来区分两种情形：
+     *   - `has_node(id) && !is_pending(id)` → 该 id 已被真实节点占用，拒绝
+     *   - `has_node(id) &&  is_pending(id)` → 调用方已按约定预留，可以补全
+     *
+     * 只有 `has_node` 一个谓词时，这两种情形无法区分，
+     * 于是"先 reserve 再 apply"这个**标准用法**会被误判为冲突。
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        句柄无效或不是 pending 时返回 false
+     * @invariant   `is_pending(id)` ⟹ `has_node(id)`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      否
+     * @tests       graph.structure.is_pending_predicate
+     */
+    [[nodiscard]] bool is_pending(NodeId id) const noexcept {
+        const Node* n = find_node(id);
+        return n != nullptr && n->type_name.empty();
+    }
+
+    /**
+     * @brief 按**指定的句柄**恢复一个节点（撤销"删除"专用）。
+     *
+     * 为什么需要它：撤销一次删除再重做，如果节点拿到新 id，
+     * 所有引用它的边、缓存键、UI 选中状态都会失效。撤销必须让
+     * **id 保持不变**，否则重做后的图在语义上不是同一张图。
+     *
+     * 调用方（`core/graph/mutate`）负责保证句柄曾属于本图且尚未被复用；
+     * 本函数仍会检查并拒绝冲突。
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         `id.generation != 0`；槽位当前为空且世代不大于 id.generation
+     * @post        成功时 `has_node(id)` 为真，节点内容为传入快照，版本号递增
+     * @post        失败时图与版本号均不变
+     * @invariant   恢复后 `find_node(id)->id == id`
+     * @errors      Result<void>；id 无效 → invalid_argument；
+     *              槽位被占用或世代冲突 → duplicate_connection
+     * @complexity  O(槽位数)
+     * @nondet      none
+     * @frozen      否
+     * @tests       graph.structure.restore_node_preserves_id,
+     *              graph.structure.restore_node_preserves_id
+     */
+    Result<void> restore_node(const Node& snapshot);
+
+    /**
+     * @brief 按**指定的端点**恢复一条边（撤销"断开"专用）。
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         两个端点节点都存在；方向为 output → input
+     * @post        成功时该边存在，版本号递增
+     * @post        失败时图与版本号均不变
+     * @invariant   恢复后图仍无环、该输入端口仍至多一条入边
+     * @errors      Result<void>；节点不存在 → unknown_node；方向错 →
+     *              invalid_argument；已有入边 → duplicate_connection；
+     *              成环 → cycle_detected
+     * @complexity  O(V + E)
+     * @nondet      none
+     * @frozen      否
+     * @tests       graph.structure.restore_edge_after_restore_node
+     */
+    Result<void> restore_edge(const Edge& e);
+
+    /**
      * @brief 删除节点，同时删除所有与之相连的边。
      *
      * @ownership   owns
@@ -165,6 +294,46 @@ public:
     [[nodiscard]] const Node* find_node(NodeId id) const noexcept;
     /// @brief 取节点（可写）。仅用于设置参数与标志；**不得改 type_name**。
     [[nodiscard]] Node* find_node_mutable(NodeId id) noexcept;
+
+    /**
+     * @brief 递增版本号。供"就地修改了节点内容"的调用方使用。
+     *
+     * 存在的理由：`find_node_mutable` 返回的指针允许改参数与标志，
+     * 而那类改动同样必须让缓存失效。若不给这个入口，调用方只有两条路：
+     * 绕过版本号（缓存返回过期结果），或者伪造一次无关变异（版本号乱跳）。
+     * 两条都更糟。
+     *
+     * @ownership   pure（只动版本号）
+     * @thread      main
+     * @pre         none
+     * @post        `version()` 严格大于调用前
+     * @invariant   版本号单调递增，永不回退
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      否
+     * @tests       graph.structure.bump_version_is_monotonic
+     */
+    void bump_version() noexcept { ++version_; }
+
+    /**
+     * @brief 设置节点的用户名字。
+     *
+     * @ownership   owns（复制名字）
+     * @thread      main
+     * @pre         id 有效；非空的 name 在本图内唯一
+     * @post        成功时 `find_node(id)->name == name`，版本号递增
+     * @post        失败时图与版本号均不变
+     * @invariant   非空的用户名字全图唯一
+     * @errors      Result<void>；id 无效 → unknown_node；名字冲突 →
+     *              duplicate_connection
+     * @complexity  O(n)
+     * @nondet      none
+     * @frozen      否
+     * @tests       graph.structure.set_node_name_enforces_uniqueness
+     */
+    Result<void> set_node_name(NodeId id, std::string_view name);
+
     /// @brief 按用户名字取节点。找不到返回无效句柄。
     [[nodiscard]] NodeId find_node_by_name(std::string_view name) const noexcept;
     /// @brief 节点句柄是否仍然有效（世代匹配）。
@@ -254,6 +423,7 @@ private:
     Generation next_generation_ = 1;
     GraphVersion version_ = 1;
     std::size_t live_nodes_ = 0;
+    std::size_t pending_nodes_ = 0;   ///< 已预留但未补全类型名的槽位数
 };
 
 }  // namespace qp::graph

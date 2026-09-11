@@ -443,3 +443,190 @@ TEST_CASE("graph.structure.clear_resets", "[graph][structure]") {
     REQUIRE(ch.g.version() > v);        // 清空也是一次变异
     REQUIRE_FALSE(ch.g.has_node(ch.a));
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 预留 / 恢复 / 版本号（命令总线依赖的底层能力）
+// ═══════════════════════════════════════════════════════════════════════════
+
+TEST_CASE("graph.structure.reserve_and_fill", "[graph][structure]") {
+    Graph g;
+    REQUIRE(g.is_stable());
+    REQUIRE(g.pending_count() == 0);
+
+    const auto reserved = g.reserve_node();
+    REQUIRE(reserved);
+    const NodeId id = reserved.value();
+    REQUIRE(id.valid());
+    REQUIRE(g.has_node(id));              // 预留后句柄**立即可用**
+    REQUIRE(g.find_node(id)->type_name.empty());
+    REQUIRE_FALSE(g.is_stable());         // 但图处于 pending 状态
+    REQUIRE(g.pending_count() == 1);
+
+    REQUIRE(g.fill_reserved(id, "dipole"));
+    REQUIRE(g.is_stable());
+    REQUIRE(g.pending_count() == 0);
+    REQUIRE(g.find_node(id)->type_name == "dipole");
+    REQUIRE(g.find_node(id)->id == id);   // id 不变
+}
+
+TEST_CASE("graph.structure.reserve_marks_pending", "[graph][structure]") {
+    Graph g;
+    const NodeId a = g.reserve_node().value();
+    const NodeId b = g.reserve_node().value();
+    REQUIRE(g.pending_count() == 2);
+    REQUIRE_FALSE(g.is_stable());
+    REQUIRE(g.is_pending(a));
+    REQUIRE(g.is_pending(b));
+
+    REQUIRE(g.fill_reserved(a, "x"));
+    REQUIRE(g.pending_count() == 1);
+    REQUIRE_FALSE(g.is_pending(a));
+    REQUIRE(g.is_pending(b));
+
+    // 删掉一个 pending 节点也要正确减少计数，否则图会永远不稳定
+    REQUIRE(g.remove_node(b));
+    REQUIRE(g.pending_count() == 0);
+    REQUIRE(g.is_stable());
+
+    // 非 pending 的句柄
+    REQUIRE_FALSE(g.is_pending(NodeId{999, 1}));
+    REQUIRE_FALSE(g.is_pending(NodeId{}));
+}
+
+TEST_CASE("graph.structure.fill_rejects_non_pending", "[graph][structure]") {
+    Graph g;
+    const NodeId a = g.add_node("dipole").value();
+
+    // 已补全过的槽位不能再次 fill
+    const auto twice = g.fill_reserved(a, "other");
+    REQUIRE_FALSE(twice);
+    REQUIRE(twice.error() == ErrorCode::duplicate_connection);
+
+    // 空类型名不是合法的 commit
+    const NodeId p = g.reserve_node().value();
+    const auto empty = g.fill_reserved(p, "");
+    REQUIRE_FALSE(empty);
+    REQUIRE(empty.error() == ErrorCode::invalid_argument);
+
+    // 未知句柄
+    const auto unknown = g.fill_reserved(NodeId{999, 1}, "x");
+    REQUIRE_FALSE(unknown);
+    REQUIRE(unknown.error() == ErrorCode::unknown_node);
+}
+
+TEST_CASE("graph.structure.is_pending_predicate", "[graph][structure]") {
+    Graph g;
+    const NodeId real = g.add_node("dipole").value();
+    const NodeId pending = g.reserve_node().value();
+
+    REQUIRE_FALSE(g.is_pending(real));
+    REQUIRE(g.is_pending(pending));
+    // 蕴含关系：pending ⟹ 存在
+    REQUIRE(g.has_node(pending));
+    REQUIRE_FALSE(g.is_pending(NodeId{}));
+    REQUIRE_FALSE(g.is_pending(NodeId{12345, 1}));
+}
+
+TEST_CASE("graph.structure.restore_node_preserves_id", "[graph][structure]") {
+    Graph g;
+    const NodeId a = g.add_node_named("dipole", "d1").value();
+    g.find_node_mutable(a)->set_param(1, qp::ports::Value{2.5});
+    const Node snapshot = *g.find_node(a);
+
+    REQUIRE(g.remove_node(a));
+    REQUIRE_FALSE(g.has_node(a));
+
+    // 恢复必须让**同一个 id** 重新有效——否则撤销再重做后，
+    // 所有引用该节点的边与缓存键都会失效
+    REQUIRE(g.restore_node(snapshot));
+    REQUIRE(g.has_node(a));
+    REQUIRE(g.find_node(a)->id == a);
+    REQUIRE(g.find_node(a)->type_name == "dipole");
+    REQUIRE(g.find_node(a)->name == "d1");
+    REQUIRE(g.find_node(a)->param(1).as_f64() == 2.5);
+
+    // 恢复一个已经活着的位置是冲突
+    const auto again = g.restore_node(snapshot);
+    REQUIRE_FALSE(again);
+    REQUIRE(again.error() == ErrorCode::duplicate_connection);
+
+    // 无效句柄
+    Node bad{};
+    REQUIRE(g.restore_node(bad).error() == ErrorCode::invalid_argument);
+}
+
+TEST_CASE("graph.structure.restore_edge_after_restore_node", "[graph][structure]") {
+    Graph g;
+    const NodeId a = g.add_node("src").value();
+    const NodeId b = g.add_node("dst").value();
+    const Edge e{PortRef{a, 1, PortDirection::output}, PortRef{b, 1, PortDirection::input}};
+    REQUIRE(g.connect(e.from, e.to));
+    REQUIRE(g.edge_count() == 1);
+
+    REQUIRE(g.remove_node(a));
+    REQUIRE(g.edge_count() == 0);
+
+    // 节点还没回来时不能恢复边
+    REQUIRE(g.restore_edge(e).error() == ErrorCode::unknown_node);
+
+    Node snapshot = *g.find_node(b);   // 占位，避免未使用
+    (void)snapshot;
+    // 先恢复 a 的内容（用删除前抓的快照）
+    Graph g2;
+    const NodeId a2 = g2.add_node("src").value();
+    const NodeId b2 = g2.add_node("dst").value();
+    const Edge e2{PortRef{a2, 1, PortDirection::output}, PortRef{b2, 1, PortDirection::input}};
+    REQUIRE(g2.connect(e2.from, e2.to));
+    const Node snap_a = *g2.find_node(a2);
+    REQUIRE(g2.remove_node(a2));
+    REQUIRE(g2.restore_node(snap_a));
+    REQUIRE(g2.restore_edge(e2));
+    REQUIRE(g2.edge_count() == 1);
+    REQUIRE(g2.incoming(e2.to) != nullptr);
+
+    // 重复恢复同一条边是冲突
+    REQUIRE(g2.restore_edge(e2).error() == ErrorCode::duplicate_connection);
+    // 方向错的边
+    const Edge reversed{PortRef{a2, 1, PortDirection::input},
+                        PortRef{b2, 1, PortDirection::output}};
+    REQUIRE(g2.restore_edge(reversed).error() == ErrorCode::invalid_argument);
+}
+
+TEST_CASE("graph.structure.bump_version_is_monotonic", "[graph][structure]") {
+    // 就地修改节点内容（find_node_mutable）时，调用方必须显式递增版本号，
+    // 否则缓存会返回过期结果。
+    Graph g;
+    const NodeId a = g.add_node("x").value();
+    const GraphVersion v0 = g.version();
+    g.bump_version();
+    REQUIRE(g.version() > v0);
+    g.bump_version();
+    REQUIRE(g.version() > v0 + 1);
+}
+
+TEST_CASE("graph.structure.set_node_name_enforces_uniqueness", "[graph][structure]") {
+    Graph g;
+    const NodeId a = g.add_node("t").value();
+    const NodeId b = g.add_node("t").value();
+
+    REQUIRE(g.set_node_name(a, "alpha"));
+    REQUIRE(g.find_node(a)->name == "alpha");
+    REQUIRE(g.find_node_by_name("alpha") == a);
+
+    // 撞名必须拒绝，且不动图
+    const GraphVersion v = g.version();
+    const auto dup = g.set_node_name(b, "alpha");
+    REQUIRE_FALSE(dup);
+    REQUIRE(dup.error() == ErrorCode::duplicate_connection);
+    REQUIRE(g.version() == v);
+    REQUIRE(g.find_node(b)->name.empty());
+
+    // 设成自己的名字是幂等的
+    REQUIRE(g.set_node_name(a, "alpha"));
+    // 清空名字总是允许的
+    REQUIRE(g.set_node_name(a, ""));
+    REQUIRE_FALSE(g.find_node_by_name("alpha").valid());
+
+    // 未知节点
+    REQUIRE(g.set_node_name(NodeId{999, 1}, "x").error() == ErrorCode::unknown_node);
+}

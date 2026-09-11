@@ -154,3 +154,6 @@ qp_add_test(qp_test_graph_ir
 qp_add_test(qp_test_graph_structure
     SOURCES unit/graph/test_structure.cpp
     LIBS qp::graph_structure)
+qp_add_test(qp_test_graph_mutate
+    SOURCES unit/graph/test_mutate.cpp
+    LIBS qp::graph_mutate)

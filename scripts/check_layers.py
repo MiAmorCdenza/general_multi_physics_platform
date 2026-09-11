@@ -45,7 +45,9 @@ ALLOWED: dict[str, set[str]] = {
     # L1 图与执行
     "ir": {"units", "diag", "ports"},
     "structure": {"units", "diag", "ir"},
-    "mutate": {"units", "diag", "ir", "structure"},
+    # mutate 的命令携带 qp::ports::Value（SetParam 的参数载荷），
+    # 因此必须允许 mutate → ports。这是 value 类型定义在 ports 的必然结果。
+    "mutate": {"units", "diag", "ports", "ir", "structure"},
     "validate": {"units", "diag", "ports", "ir", "structure"},
     "eval": {"units", "diag", "ports", "abi", "ir", "structure"},
     "domain": {"units", "diag", "abi", "ir", "eval"},

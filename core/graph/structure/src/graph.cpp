@@ -128,11 +128,58 @@ Result<NodeId> Graph::add_node_named(std::string_view type_name, std::string_vie
     return Result<NodeId>{slots_.back().node.id};
 }
 
+Result<NodeId> Graph::reserve_node() {
+    // 空类型名即 pending。与 add_node 的唯一差别是**不做类型名校验**——
+    // 预留的语义就是"我要占一个 id，类型稍后告诉你"。
+    for (std::size_t i = 1; i < slots_.size(); ++i) {
+        NodeSlot& s = slots_[i];
+        if (s.occupied) continue;
+        s.occupied = true;
+        s.generation = next_generation_++;
+        s.node = Node{};
+        s.node.id = NodeId{static_cast<SlotIndex>(i), s.generation};
+        ++live_nodes_;
+        ++pending_nodes_;
+        ++version_;
+        return Result<NodeId>{s.node.id};
+    }
+    {
+        NodeSlot s{};
+        s.occupied = true;
+        s.generation = next_generation_++;
+        s.node.id = NodeId{static_cast<SlotIndex>(slots_.size()), s.generation};
+        slots_.push_back(std::move(s));
+    }
+    ++live_nodes_;
+    ++pending_nodes_;
+    ++version_;
+    return Result<NodeId>{slots_.back().node.id};
+}
+
+Result<void> Graph::fill_reserved(NodeId id, std::string_view type_name) {
+    if (type_name.empty()) {
+        return Result<void>{ErrorCode::invalid_argument};
+    }
+    Node* n = node_at(id);
+    if (n == nullptr) {
+        return Result<void>{ErrorCode::unknown_node};
+    }
+    if (!n->type_name.empty()) {
+        // 已补全过：重复 fill 是调用方的错误
+        return Result<void>{ErrorCode::duplicate_connection};
+    }
+    n->type_name = std::string{type_name};
+    --pending_nodes_;
+    ++version_;
+    return Result<void>{};
+}
+
 Result<void> Graph::remove_node(NodeId id) {
     Node* n = node_at(id);
     if (n == nullptr) {
         return Result<void>{ErrorCode::unknown_node};
     }
+    const bool was_pending = n->type_name.empty();
 
     // 先删相关边（应用阶段不失败）
     edges_.erase(std::remove_if(edges_.begin(), edges_.end(),
@@ -144,8 +191,38 @@ Result<void> Graph::remove_node(NodeId id) {
     NodeSlot& s = slots_[id.index];
     s.node = Node{};
     s.occupied = false;
-    // 世代不回退：老句柄永不复活
+    // **释放时也要递增世代**。
+    //
+    // 世代的两个用途都要求这一步：
+    //   1. 老句柄永不复活——它记录的是**上一任**占用的世代；
+    //   2. 撤销"删除"需要把节点恢复到**同一个 id**，而 restore_node
+    //      靠比较"槽位世代 vs 恢复目标世代"来判断该 id 是否还能用。
+    //      若释放时不递增，槽位世代会与刚被删节点的世代相同，
+    //      restore_node 的 ABA 检查就会把一次**合法**的恢复判为冲突。
+    // 这条由 graph.mutate.undo_redo_roundtrip 抓出：
+    // 撤销再重做时 redo 失败于 duplicate_connection。
+    ++s.generation;
+    if (next_generation_ <= s.generation) {
+        next_generation_ = s.generation + 1;
+    }
     --live_nodes_;
+    if (was_pending) --pending_nodes_;
+    ++version_;
+    return Result<void>{};
+}
+
+Result<void> Graph::set_node_name(NodeId id, std::string_view name) {
+    Node* n = node_at(id);
+    if (n == nullptr) {
+        return Result<void>{ErrorCode::unknown_node};
+    }
+    if (!name.empty()) {
+        const NodeId existing = find_node_by_name(name);
+        if (existing.valid() && existing != id) {
+            return Result<void>{ErrorCode::duplicate_connection};
+        }
+    }
+    n->name = std::string{name};
     ++version_;
     return Result<void>{};
 }
@@ -237,10 +314,75 @@ const Edge* Graph::incoming(PortRef input) const noexcept {
     return nullptr;
 }
 
+Result<void> Graph::restore_node(const Node& snapshot) {
+    if (!snapshot.id.valid()) {
+        return Result<void>{ErrorCode::invalid_argument};
+    }
+    const SlotIndex idx = snapshot.id.index;
+
+    // 先把槽位扩到够大
+    if (idx >= slots_.size()) {
+        slots_.resize(static_cast<std::size_t>(idx) + 1);
+    }
+    NodeSlot& s = slots_[idx];
+    if (s.occupied) {
+        // 槽位被占用。若占用者的世代正好就是目标世代，说明这个 id
+        // 已经在本槽位上活着——重复恢复是调用方的错误。
+        // 若占用者的世代更高，那是后来的节点，同样不能覆盖。
+        if (s.generation >= snapshot.id.generation) {
+            return Result<void>{ErrorCode::duplicate_connection};
+        }
+        return Result<void>{ErrorCode::duplicate_connection};
+    }
+
+    // 槽位空闲：**没有 id 拥有它**，因此恢复是安全的。
+    //
+    // 这里刻意**不比较世代**。曾经的写法是 `if (gen >= target) reject`，
+    // 那是错的：删除操作会递增空闲槽位的世代，于是"撤销一次删除再恢复"
+    // 会把自己的槽位世代推到目标世代之上，然后被自己的检查拒绝。
+    // 世代比较只在**占用**路径上有意义（占用者是谁），
+    // 空闲路径上不存在"另一个 id"可言。这条由
+    // graph.mutate.undo_redo_roundtrip 抓出。
+    s.occupied = true;
+    s.generation = snapshot.id.generation;
+    s.node = snapshot;
+    // 防御：世代计数器必须始终领先于任何已分配的世代
+    if (next_generation_ <= snapshot.id.generation) {
+        next_generation_ = snapshot.id.generation + 1;
+    }
+    ++live_nodes_;
+    if (snapshot.type_name.empty()) {
+        ++pending_nodes_;   // 恢复的也可以是一个 pending 节点
+    }
+    ++version_;
+    return Result<void>{};
+}
+
+Result<void> Graph::restore_edge(const Edge& e) {
+    if (!e.valid()) {
+        return Result<void>{ErrorCode::invalid_argument};
+    }
+    if (node_at(e.from.node) == nullptr || node_at(e.to.node) == nullptr) {
+        return Result<void>{ErrorCode::unknown_node};
+    }
+    for (const auto& existing : edges_) {
+        if (existing.to == e.to) {
+            return Result<void>{ErrorCode::duplicate_connection};
+        }
+    }
+    if (e.from.node == e.to.node || reaches(e.to.node, e.from.node)) {
+        return Result<void>{ErrorCode::cycle_detected};
+    }
+    edges_.push_back(e);
+    ++version_;
+    return Result<void>{};
+}
+
 void Graph::clear() noexcept {
     slots_.clear();
     edges_.clear();
     live_nodes_ = 0;
+    pending_nodes_ = 0;
     ++version_;
 }
 
