@@ -1,6 +1,6 @@
 /**
  * @file check.cpp
- * @brief 端口类型检查的实现。
+ * @brief Implementation of port type checking.
  */
 #include <qp/ports/check.hpp>
 
@@ -9,15 +9,15 @@ namespace {
 
 using qp::diag::ErrorCode;
 
-/// @brief 两个数值类型之间是否需要精度转换，以及方向。
+/// @brief Whether two numeric kinds need a width conversion, and in which direction.
 enum class NumericBridge : std::uint8_t {
-    identical = 0,   ///< 完全相同
-    widen = 1,       ///< a 精度更低，接到 b 需拓宽（无损）
-    narrow = 2,      ///< a 精度更高，接到 b 需收窄（有损）
-    incompatible = 3 ///< 数值类别不同（如 f64 → bool）
+    identical = 0,   ///< exactly the same
+    widen = 1,       ///< a is narrower, so reaching b needs widening (lossless)
+    narrow = 2,      ///< a is wider, so reaching b needs narrowing (lossy)
+    incompatible = 3 ///< different numeric categories (e.g. f64 -> bool)
 };
 
-/// @brief 数值类型的秩。用于判断拓宽/收窄方向。
+/// @brief Rank of a numeric kind. Used to decide the widening/narrowing direction.
 [[nodiscard]] constexpr int numeric_rank(NumericKind k) noexcept {
     switch (k) {
         case NumericKind::none: return -1;
@@ -30,15 +30,15 @@ enum class NumericBridge : std::uint8_t {
     return -1;
 }
 
-/// @brief 判定两个数值类型的桥接方式。
+/// @brief Decides how two numeric kinds bridge.
 ///
-/// 规则（刻意保守）：
-///   - 完全相同 → identical
-///   - f32 ↔ f64 → widen / narrow（这是 ADR-0005 明确允许的唯一精度互通）
-///   - 其它组合（如 f64 → bool、i64 → f64）→ incompatible
+/// Rules (deliberately conservative):
+///   - exactly the same -> identical
+///   - f32 <-> f64 -> widen / narrow (the only width interchange ADR-0005 explicitly allows)
+///   - any other pair (e.g. f64 -> bool, i64 -> f64) -> incompatible
 ///
-/// 为什么不允许 i64 → f64：大整数转 double 会丢位，而静默丢位正是
-/// 我们要防的那类错误。需要时由节点显式声明一个转换端口。
+/// Why i64 -> f64 is not allowed: a large integer loses bits in a double, and silent bit loss
+/// is exactly the error class we guard against; a node that needs it declares a conversion port.
 [[nodiscard]] constexpr NumericBridge bridge_of(NumericKind a, NumericKind b) noexcept {
     if (a == b) return NumericBridge::identical;
 
@@ -51,7 +51,7 @@ enum class NumericBridge : std::uint8_t {
     return NumericBridge::incompatible;
 }
 
-/// @brief 场类端口的分量数与元素类型是否一致。
+/// @brief Whether two field ports agree on component count and element kind.
 [[nodiscard]] constexpr bool fields_shape_equal(const PortTypeDesc& a,
                                                 const PortTypeDesc& b) noexcept {
     return a.field_components == b.field_components && a.field_element == b.field_element;
@@ -60,11 +60,11 @@ enum class NumericBridge : std::uint8_t {
 }  // namespace
 
 bool check_dimensions(const PortTypeDesc& a, const PortTypeDesc& b) noexcept {
-    // 任一端不约束量纲 → 兼容
+    // Either end leaves the dimension unconstrained -> compatible
     if (a.constraint == DimensionConstraint::any || b.constraint == DimensionConstraint::any) {
         return true;
     }
-    // same_as_input 需要图的上下文才能解析，此处不判定（视为兼容，留给层间校验）
+    // same_as_input needs graph context to resolve; not decided here (compatible, deferred)
     if (a.constraint == DimensionConstraint::same_as_input ||
         b.constraint == DimensionConstraint::same_as_input) {
         return true;
@@ -76,12 +76,12 @@ ConnectionCheck check_connection(const PortTypeDesc& from, PortDirection from_di
                                  const PortTypeDesc& to, PortDirection to_dir) noexcept {
     ConnectionCheck r{};
 
-    // 方向：只能 output → input
+    // Direction: only output -> input
     if (from_dir == to_dir) {
         r.verdict = ConnectionVerdict::direction_mismatch;
         return r;
     }
-    // 内部统一按 output → input 处理
+    // Internally always treated as output -> input
     const PortTypeDesc& src = (from_dir == PortDirection::output) ? from : to;
     const PortTypeDesc& dst = (from_dir == PortDirection::output) ? to : from;
 
@@ -90,14 +90,14 @@ ConnectionCheck check_connection(const PortTypeDesc& from, PortDirection from_di
         return r;
     }
 
-    // any 逃生舱：允许但显式标注
+    // The any escape hatch: allowed, but explicitly flagged
     if (src.is_any || dst.is_any) {
         r.verdict = ConnectionVerdict::ok_with_any;
         r.has_any = true;
         return r;
     }
 
-    // 场类：形状必须完全一致
+    // Field kinds: the shape must match exactly
     const bool src_field = src.is_field();
     const bool dst_field = dst.is_field();
     if (src_field != dst_field) {
@@ -109,7 +109,7 @@ ConnectionCheck check_connection(const PortTypeDesc& from, PortDirection from_di
             r.verdict = ConnectionVerdict::type_mismatch;
             return r;
         }
-        // 场的量纲约束通常为 any；若都约束了则要比
+        // A field's dimension constraint is usually any; compare only when both constrain it
         if (!check_dimensions(src, dst)) {
             r.verdict = ConnectionVerdict::dimension_mismatch;
             return r;
@@ -118,7 +118,7 @@ ConnectionCheck check_connection(const PortTypeDesc& from, PortDirection from_di
         return r;
     }
 
-    // 数值标量：按数值类别判定
+    // Numeric scalars: decide by numeric category
     if (src.is_numeric() != dst.is_numeric()) {
         r.verdict = ConnectionVerdict::type_mismatch;
         return r;
@@ -131,7 +131,7 @@ ConnectionCheck check_connection(const PortTypeDesc& from, PortDirection from_di
                 r.needs_numeric_conversion = true;
                 break;
             case NumericBridge::narrow:
-                // 收窄允许但需标注：精度损失是调用方的决定，不能悄悄发生
+                // Narrowing is allowed but must be flagged: losing precision is the caller's call
                 r.needs_numeric_conversion = true;
                 break;
             case NumericBridge::incompatible:
@@ -147,7 +147,7 @@ ConnectionCheck check_connection(const PortTypeDesc& from, PortDirection from_di
         return r;
     }
 
-    // 非数值、非同形状（文本、句柄、数据集等）：必须完全同类
+    // Non-numeric, non-field kinds (text, handles, datasets, ...): must be exactly the same kind
     if (src.id != dst.id) {
         r.verdict = ConnectionVerdict::type_mismatch;
         return r;
@@ -161,7 +161,7 @@ Result<void> check_value(const PortTypeDesc& port, const Value& v, SourceId sour
         return Result<void>{ErrorCode::unknown_port_type};
     }
 
-    // any 端口接受一切（含 invalid——"尚未计算"对 any 是合法的）
+    // An any port accepts everything (including invalid -- "not computed yet" is legal for any)
     if (port.is_any) {
         return Result<void>{};
     }
@@ -170,7 +170,7 @@ Result<void> check_value(const PortTypeDesc& port, const Value& v, SourceId sour
         return Result<void>{ErrorCode::missing_field};
     }
 
-    // ── 场类 ────────────────────────────────────────────────────────────────
+    // -- field kinds ---------------------------------------------------------
     if (port.is_field()) {
         if (v.kind() != ValueKind::field_handle) {
             return Result<void>{ErrorCode::type_mismatch};
@@ -184,17 +184,17 @@ Result<void> check_value(const PortTypeDesc& port, const Value& v, SourceId sour
         return Result<void>{};
     }
 
-    // ── 标量类 ──────────────────────────────────────────────────────────────
+    // -- scalar kinds --------------------------------------------------------
     switch (port.numeric) {
         case NumericKind::f64:
-            // f32 值可以接到 f64 端口（无损拓宽）
+            // An f32 value may go on an f64 port (lossless widening)
             if (v.kind() == ValueKind::f64 || v.kind() == ValueKind::f32) {
                 return Result<void>{};
             }
             return Result<void>{ErrorCode::type_mismatch};
 
         case NumericKind::f32:
-            // f64 → f32 有损，但**允许**：收窄是调用方的显式选择（ADR-0005）
+            // f64 -> f32 is lossy but **allowed**: narrowing is the caller's explicit choice (ADR-0005)
             if (v.kind() == ValueKind::f32 || v.kind() == ValueKind::f64) {
                 return Result<void>{};
             }
@@ -206,7 +206,7 @@ Result<void> check_value(const PortTypeDesc& port, const Value& v, SourceId sour
 
         case NumericKind::i64:
         case NumericKind::i32:
-            // 整数端口**只**接整数：避免静默丢位
+            // An integer port takes **only** integers: no silent bit loss
             if (v.kind() == ValueKind::i64) return Result<void>{};
             return Result<void>{ErrorCode::type_mismatch};
 
@@ -214,7 +214,7 @@ Result<void> check_value(const PortTypeDesc& port, const Value& v, SourceId sour
             break;
     }
 
-    // ── 非数值：按 ID 对应的期望 kind ───────────────────────────────────────
+    // -- non-numeric: expected kind by ID ------------------------------------
     switch (port.id) {
         case kString:
         case kEnum:
@@ -228,8 +228,8 @@ Result<void> check_value(const PortTypeDesc& port, const Value& v, SourceId sour
         case kFieldTable:
         case kDataset:
         case kFitResult:
-            // 这些类型的载荷定义在各自模块（abi / runtime/store）。
-            // 端口层只保证"类型不混用"：具体载荷校验由使用方完成。
+            // The payloads of these types are defined in their own modules (abi / runtime/store).
+            // The port layer only guarantees "kinds are not mixed"; the user checks the payload.
             return Result<void>{};
         default:
             break;

@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
-"""契约完备性门禁。
+"""Contract completeness gate.
 
-对应 standards/enforcement.md §5。把 standards/function-contract.md 里
-的规范从"文档约定"变成"可执行门禁"。
+Corresponds to standards/enforcement.md §5. Turns the specification in
+standards/function-contract.md from a "documented convention" into an "executable gate".
 
-检查项：
-  C1 每个函数声明前必须有 /** */ 契约块
-  C2 契约块必须含六个必填字段（@ownership/@thread/@pre/@post/@errors/@tests）
-  C3 @ownership 与 @thread 的取值必须合法
-  C4 @tests 至少一个条目，且每个条目必须在 tests/ 下真实存在
-  C5 @errors 与声明的 noexcept 一致性
-  C6 反向检查：每个 TEST_CASE 必须至少被一个函数的 @tests 引用
-     （防止"测了没用的东西"与"契约漏写"两头漏）
+Checks:
+  C1 Every function declaration must be preceded by a /** */ contract block
+  C2 The block must contain the six required fields (@ownership/@thread/@pre/@post/@errors/@tests)
+  C3 The values of @ownership and @thread must be legal
+  C4 @tests must have at least one entry, and every entry must really exist under tests/
+  C5 @errors must agree with the declared noexcept
+  C6 Reverse check: every TEST_CASE must be referenced by at least one function's @tests
+     (catches both "tested something useless" and "contract not written")
 
-退出码：0 通过；1 有违规。
+Exit code: 0 pass; 1 violations.
 
-用法：
+Usage:
     python scripts/check_contracts.py
     python scripts/check_contracts.py --headers core --tests tests --quiet
 """
@@ -33,18 +33,18 @@ TAG_RE = re.compile(r"@(\w+)")
 ID_TOKEN_RE = re.compile(r"[A-Za-z_][\w.\-]*")
 PREPROC_RE = re.compile(r"^\s*#")
 
-# 必填字段。注意：TAGS 字典的键是去掉 '@' 的裸名，这里必须与之一致。
+# Required fields. Note: the TAGS dict keys are the bare names without '@'; this must match them.
 REQUIRED_TAGS = ("ownership", "thread", "pre", "post", "errors", "tests")
 OWNERSHIP_VALUES = {"pure", "owns", "observes", "borrows", "value"}
 
-# 线程角色。取值集合本身是契约的一部分：出现新角色必须显式登记，
-# 否则"这个函数到底谁能调"会变成含糊的散文。
+# Thread roles. The value set is itself part of the contract: a new role must be registered
+# explicitly, or "who may call this function" becomes vague prose.
 THREAD_VALUES = {
-    "any",      # 无共享可变状态，任意线程可调
-    "main",     # 仅主线程（UI、文档编辑）
-    "eval",     # 仅图求值线程
-    "ui",       # 仅 UI 线程（与 main 区分时使用）
-    "publish",  # 仅数据发布线程（seqlock 的写侧；见 core/abi）
+    "any",      # no shared mutable state; any thread may call it
+    "main",     # main thread only (UI, document editing)
+    "eval",     # graph evaluation thread only
+    "ui",       # UI thread only (used when distinct from main)
+    "publish",  # data publishing thread only (the write side of the seqlock; see core/abi)
 }
 
 
@@ -77,10 +77,10 @@ class FunctionContract:
 
 
 def is_declaration_start(stripped: str) -> bool:
-    """判断一行是否是函数声明的起始行。
+    """Decide whether a line starts a function declaration.
 
-    `template <...>` 单独成行时不算——真正的签名在下一行。
-    否则 join_declaration 会把模板头也拼进去，函数名无法识别。
+    A `template <...>` on its own line does not count -- the real signature is on the next
+    line, and otherwise join_declaration would fold the template head in and lose the name.
     """
     if not stripped or PREPROC_RE.match(stripped):
         return False
@@ -92,21 +92,21 @@ def is_declaration_start(stripped: str) -> bool:
         return False
     if "(" not in stripped:
         return False
-    # 三种收尾都合法：纯声明 ';'、多行体开头 '{'、单行体闭合 '}'
+    # All three endings are legal: pure declaration ';', multi-line body '{', one-line body '}'
     return stripped.endswith((";", "{", "}"))
 
 
 def join_declaration(lines: list[str], start: int, limit: int = 40) -> tuple[str, int, bool]:
-    """从 start 行起把声明拼成一行。
+    """Join a declaration into a single line starting at `start`.
 
-    返回 (声明文本, 结束行号, 是否单行体)。
+    Returns (declaration text, ending line number, whether it is a one-line body).
 
-    完成判据：
-      - 圆括号与花括号都配平，且以 `;` 结尾 —— 纯声明
-      - 圆括号与花括号都配平，且以 `}` 结尾 —— 单行体内联函数
+    Completion criteria:
+      - parentheses and braces both balanced, ending with `;` -- a pure declaration
+      - parentheses and braces both balanced, ending with `}` -- a one-line inline body
 
-    只配平花括号不够：`T{v1, v2}` 这种初始化列表会让花括号提前配平，
-    从而把返回语句误当成声明结束（本检查器踩过这个坑）。
+    Balancing braces alone is not enough: an initializer list such as `T{v1, v2}` balances them
+    early and makes a return statement look like the end of the declaration (a trap this checker hit).
     """
     parts: list[str] = []
     i = start
@@ -121,12 +121,12 @@ def join_declaration(lines: list[str], start: int, limit: int = 40) -> tuple[str
     return " ".join(parts), min(i, len(lines) - 1), False
 
 
-# 运算符重载的函数体若不超过这个行数，视为"语义即签名本身"，
-# 免除六个必填字段（由类型级测试覆盖）。超过则必须写完整契约。
-# 阈值 12 行覆盖了本项目里"一行一个分量"的显式展开写法（如 Dim 的逐轴乘除）。
+# An operator overload whose body is no longer than this is treated as "the semantics are the
+# signature itself": exempt from the six required fields, covered by type-level tests; beyond it a
+# full contract is required. The threshold 12 covers one-component-per-line expansions (Dim's per-axis ops).
 MAX_TRIVIAL_OPERATOR_LINES = 12
 
-# 形似函数声明、实为控制流的行首关键字。
+# Line-leading keywords that look like a function declaration but are control flow.
 CONTROL_KEYWORDS = frozenset({
     "if", "else", "for", "while", "do", "switch", "case", "return", "catch",
     "break", "continue", "delete", "new", "throw", "static_assert", "assert",
@@ -134,14 +134,14 @@ CONTROL_KEYWORDS = frozenset({
 
 
 def build_type_index(lines: list[str]) -> list[str | None]:
-    """前向扫描，记录每一行所处的**直接**外层类型名。
+    """Forward scan recording the **immediate** enclosing type name of each line.
 
-    关键点：struct 闭合后必须立刻恢复外层，否则命名空间级的自由函数
-    会被误判为类成员（本检查器第一版就栽在这里）。
+    Key point: after a struct closes, the outer scope must be restored at once, or a namespace-level
+    free function is misread as a class member (this checker's first version fell into that trap).
 
-    简化假设（与本项目代码风格一致，并在 tests/meta 中有反例测试）：
-      - `struct`/`class`/`union` 关键字与其 `{` 出现在同一行
-      - 大括号不与字符串或注释混排
+    Simplified assumptions (matching this project's style, with counterexamples in tests/meta):
+      - the `struct`/`class`/`union` keyword and its `{` appear on the same line
+      - braces are never mixed with strings or comments
     """
     owner: list[str | None] = []
     stack: list[str] = []
@@ -150,10 +150,10 @@ def build_type_index(lines: list[str]) -> list[str | None]:
         m = re.match(r"\s*(?:template\s*<.*>\s*)?(?:struct|class|union)\s+(\w+)", line)
         if m:
             stack.append(m.group(1))
-        # 本行花括号净变化。净减少时弹出对应数量的类型作用域。
+        # Net brace change on this line. A net decrease pops that many type scopes.
         net = line.count("{") - line.count("}")
         if m:
-            net -= 1  # 已用 struct 关键字入栈，抵消它自己的 '{'
+            net -= 1  # the struct keyword already pushed, cancel its own '{'
         while net < 0 and stack:
             stack.pop()
             net += 1
@@ -161,7 +161,7 @@ def build_type_index(lines: list[str]) -> list[str | None]:
 
 
 def compute_depths(lines: list[str]) -> list[int]:
-    """每行**开头处**的花括号深度（0 = 文件最外层）。"""
+    """Brace depth **at the start** of each line (0 = the file's outermost level)."""
     depths: list[int] = []
     depth = 0
     for line in lines:
@@ -171,18 +171,18 @@ def compute_depths(lines: list[str]) -> list[int]:
 
 
 def find_decl_start(lines: list[str], from_line: int, window: int = 4) -> int | None:
-    """找文档块紧邻的声明起始行（0-based），找不到返回 None。
+    """Find the declaration line adjacent to a doc block (0-based); None when absent.
 
-    本项目约定：契约块必须**紧贴**声明（中间只允许空行）。
-    因此遇到另一个注释行就停下——那说明当前块是文件头或类型头，
-    而不是某个函数的契约。这条规则同时挡住了"把文件头误配给第一个函数"。
+    Project convention: a contract block must sit **immediately before** the declaration (only blank
+    lines in between), so another comment line stops the search -- that means a file header or type
+    header, not a function's contract. This also blocks "file header given to the first function".
 
-    另外两个坑：
-    1. **单行体误判**：`explicit constexpr Quantity(double v) noexcept : v_(v) {}`
-       在同一行内闭合，必须原地识别，不能跳过。
-    2. **控制流误判**：`if (style == ...) {` 形似声明，靠关键字黑名单排除。
-    3. **落进函数体**：声明跨多行时，搜索会继续往函数体里走，把
-       `const auto exps = ...;` 这种语句误当成声明。用**花括号深度**过滤。
+    More traps:
+    1. **One-line body misread**: `explicit constexpr Quantity(double v) noexcept : v_(v) {}`
+       closes on the same line and must be recognised in place, not skipped.
+    2. **Control flow misread**: `if (style == ...) {` looks like a declaration; a keyword blacklist rules it out.
+    3. **Falling into a function body**: a multi-line declaration walks the search into the body,
+       where a statement like `const auto exps = ...;` is taken for a declaration. **Brace depth** filters it.
     """
     depths = compute_depths(lines)
     if from_line >= len(lines):
@@ -197,10 +197,10 @@ def find_decl_start(lines: list[str], from_line: int, window: int = 4) -> int | 
             i += 1
             continue
         if stripped.startswith(("//", "/*", "*")):
-            return None  # 另一个注释块 → 当前块不是函数契约
+            return None  # another comment block -> the current block is not a function contract
         if depths[i] != doc_depth:
             i += 1
-            continue  # 深度不符：这是更深层的语句，不是本契约的声明
+            continue  # depth mismatch: a deeper statement, not this contract's declaration
         if stripped.split(" ", 1)[0].split("(", 1)[0] in CONTROL_KEYWORDS:
             return None
         if is_declaration_start(stripped):
@@ -210,12 +210,12 @@ def find_decl_start(lines: list[str], from_line: int, window: int = 4) -> int | 
 
 
 def parse_doc_tags(body: str) -> dict[str, str]:
-    """解析文档块里的 @tag。
+    """Parse the @tags in a doc block.
 
-    必须支持**跨行续写**（clang-format 会把长 @tests 列表折行）：
+    **Continued lines** must be supported (clang-format wraps long @tests lists):
         * @tests   units.a, units.b,
         *          units.c
-    续行（不以 @ 开头的非空行）追加到上一个标签的值上。
+    A continuation (a non-empty line not starting with @) is appended to the previous tag's value.
     """
     tags: dict[str, str] = {}
     current: str | None = None
@@ -233,9 +233,9 @@ def parse_doc_tags(body: str) -> dict[str, str]:
 
 
 def first_value(raw: str) -> str:
-    """从 tag 值里取第一个词。
+    """Take the first word from a tag value.
 
-    支持 `pure`、`pure（值类型）`、`pure (value)` 等写法；括号前视为取值。
+    Supports `pure`, `pure (value type)`, `pure (value)` and similar; the part before a parenthesis is the value.
     """
     if not raw:
         return ""
@@ -244,33 +244,33 @@ def first_value(raw: str) -> str:
 
 
 def mentions_noexcept(text: str) -> bool:
-    """判断 noexcept **说明符**是否出现（而不是出现在标识符里）。
+    """Decide whether the noexcept **specifier** appears (rather than inside an identifier).
 
-    反例：`noexcept_mismatch` 含子串 "noexcept"，但它不是异常说明符。
-    因此必须按词边界匹配。
+    Counterexample: `noexcept_mismatch` contains the substring "noexcept" but is not an exception
+    specifier. So the match must respect word boundaries.
     """
     return re.search(r"(?<![\w])noexcept(?![\w])", text) is not None
 
 
 def is_operator_decl(signature: str) -> bool:
-    """判断签名是否是运算符重载（可能是类内 friend 定义或字面量运算符）。"""
-    # 普通运算符：operator+ / operator== / operator[] ...
-    # 字面量运算符：operator""_m / operator "" _m（允许空格）
+    """Decide whether a signature is an operator overload (maybe an in-class friend or a literal operator)."""
+    # Ordinary operators: operator+ / operator== / operator[] ...
+    # Literal operators: operator""_m / operator "" _m (whitespace allowed)
     return re.search(r'\boperator\s*(?:"".*?[^\w\s]|[^\s(]+)', signature) is not None
 
 
 def parse_header(path: Path, skip_trivial: bool = True,
                  abi_zone: str = "abi") -> tuple[list[FunctionContract], list[Violation]]:
-    """解析一个头文件，返回 (已识别的函数契约, 违规列表)。
+    """Parse one header file; returns (recognised function contracts, violations).
 
-    豁免规则（必须比"是运算符就跳过"更严）：
-      - **单行体**运算符重载：声明与函数体同行（如 `... noexcept { return a.v + b.v; }`）。
-        这类函数的"做什么"就是签名所写的那个运算，由类型级测试覆盖，
-        因此免除六个必填字段。若它自带任何契约字段，则照常校验。
-        多行体的 `operator+` 不受豁免——它已经复杂到需要契约了。
-      - `core/abi/` 下的结构性函数与构造函数/析构函数：免除 @tests
-        （由 tests/abi/ 的布局 static_assert 覆盖），但仍强制 @ownership/@thread。
-        待 abi 模块开工时本规则会有真实对象。
+    Exemption rules (stricter than "skip anything that is an operator"):
+      - A **one-line body** operator overload: declaration and body on the same line (e.g.
+        `... noexcept { return a.v + b.v; }`). Its "what it does" is the operation the signature
+        spells out, covered by type-level tests, so the six required fields are waived; if it has
+        contract fields of its own it is validated as usual. A multi-line `operator+` is not exempt.
+      - Structural functions under `core/abi/` and constructors/destructors: exempt from @tests
+        (covered by the layout static_asserts in tests/abi/), but @ownership/@thread are still
+        required. This rule will have real subjects once the abi module starts.
     """
     text = path.read_text(encoding="utf-8")
     lines = text.splitlines()
@@ -286,10 +286,10 @@ def parse_header(path: Path, skip_trivial: bool = True,
 
         decl_start = find_decl_start(lines, doc_end_line)
         if decl_start is None:
-            # 模块级文档块（文件头）。约定：它可以带 `@tests`，
-            # 声明"本模块契约面覆盖以下用例"——用于收纳不属于单个函数的用例
-            # （如类型级往返、端到端量纲推导）。
-            # 带 `@file` 的纯文件头不算契约，只有带 `@tests` 的才登记。
+            # Module-level doc block (file header). By convention it may carry `@tests`, declaring
+            # "this module's contract surface covers the following cases" -- for cases that belong
+            # to no single function (type-level round trips, end-to-end dimension derivation).
+            # A pure file header with `@file` is not a contract; only one with `@tests` is registered.
             if "tests" in tags:
                 fc = FunctionContract(path=path, line=1, signature="<module>", tags=tags,
                                       owner=None, exempt_reason="模块级契约面")
@@ -301,8 +301,8 @@ def parse_header(path: Path, skip_trivial: bool = True,
         owner = type_index[decl_start] if decl_start < len(type_index) else None
         body_lines = decl_end - decl_start + 1
 
-        # 短体运算符：语义即签名本身，由类型级测试覆盖。
-        # 不看单行与否——clang-format 会重排，判据不能依赖排版。
+        # Short-body operator: the semantics are the signature, covered by type-level tests.
+        # Not keyed on "one line or not" -- clang-format reflows, so the criterion must not depend on layout.
         exempt: str | None = None
         if (skip_trivial and is_operator_decl(signature)
                 and body_lines <= MAX_TRIVIAL_OPERATOR_LINES):
@@ -313,8 +313,8 @@ def parse_header(path: Path, skip_trivial: bool = True,
         elif owner and re.match(r"^~", signature.strip()):
             exempt = "析构函数：由类型级测试覆盖"
 
-        # 构造函数/析构函数没有可点名的 @tests 条目（它们由类型级测试覆盖），
-        # 其余五个必填字段照常强制。
+        # A constructor/destructor has no nameable @tests entry (type-level tests cover it);
+        # the other five required fields stay mandatory.
         ctor_or_dtor = exempt in ("构造函数：由类型级测试覆盖", "析构函数：由类型级测试覆盖")
 
         in_abi_zone = abi_zone and (abi_zone in path.parts)
@@ -328,7 +328,7 @@ def parse_header(path: Path, skip_trivial: bool = True,
         for tag in REQUIRED_TAGS:
             if tag in tags:
                 continue
-            # @tests 的三类豁免：短体运算符、构造/析构、abi 布局区
+            # The three @tests exemptions: short-body operators, ctor/dtor, the abi layout zone
             if tag == "tests" and (exempt is not None or ctor_or_dtor or in_abi_zone):
                 continue
             violations.append(
@@ -375,7 +375,7 @@ def collect_test_ids(tests_dir: Path) -> set[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    try:  # Windows 控制台可能是 GBK；保证脚本不因编码而崩溃
+    try:  # the Windows console may be GBK; keep the script from crashing on encoding
         sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
         sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
     except (AttributeError, OSError):
@@ -415,17 +415,17 @@ def main(argv: list[str] | None = None) -> int:
         all_contracts.extend(contracts)
         violations.extend(viols)
 
-    # 测试文件里也可以有模块级契约块（声明该测试文件覆盖的契约面）。
-    # 扫描时不再重复报"孤儿"，因为它们的用途正是收纳用例。
+    # A test file may also carry a module-level contract block (declaring the contract surface it
+    # covers). Its cases are not re-reported as orphans, because filing cases is exactly its purpose.
     if args.scan_tests:
         for path in sorted(tests_root.rglob("*.cpp")):
             contracts, _ = parse_header(path)
             all_contracts.extend(c for c in contracts if c.signature == "<module>")
 
-    # ── C4 @tests 条目必须真实存在 ──
+    # -- C4 @tests entries must really exist --
     for fc in all_contracts:
         if fc.exempt_reason is not None or fc.in_abi_zone:
-            # 豁免项不参与 C4 正向检查；若它自带 @tests 仍照常校验
+            # An exempt item skips the forward C4 check; if it carries @tests it is still validated
             if not fc.test_ids:
                 continue
         for tid in fc.test_ids:
@@ -441,10 +441,10 @@ def main(argv: list[str] | None = None) -> int:
                           f"非豁免函数没有任何 @tests：{fc.signature[:70]}")
             )
 
-    # ── C6 反向检查：孤儿测试 ──
+    # -- C6 reverse check: orphan tests --
     orphans = sorted(declared_tests - referenced)
 
-    # ── 输出 ──
+    # -- Output --
     exempted = sum(1 for c in all_contracts
                    if c.exempt_reason is not None and not c.tags)
     bare_operators = sum(1 for c in all_contracts if c.exempt_reason and c.exempt_reason.startswith("短体"))
@@ -458,8 +458,8 @@ def main(argv: list[str] | None = None) -> int:
         print(v.render(repo_root))
 
     if orphans:
-        # 孤儿测试 = 逆向检查失败：有人写了测试却没把它挂到任何契约上。
-        # 默认视为失败——否则契约面会慢慢与实际测试面脱节。
+        # An orphan test = the reverse check failed: someone wrote a test without attaching it to
+        # any contract. Failure by default -- otherwise the contract surface drifts from the tests.
         for tid in orphans:
             print(f"[C6] 孤儿测试用例（未被任何契约 @tests 引用）：{tid}")
 

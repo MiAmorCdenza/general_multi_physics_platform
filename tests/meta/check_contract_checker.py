@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""门禁自身的测试：验证 check_contracts.py 真的能抓到每类违规。
+"""Test of the gate itself: verify that check_contracts.py really catches each kind of violation.
 
-对应 standards/enforcement.md §8。
+Corresponds to standards/enforcement.md §8.
 
-未经验证的门禁等于没有门禁——它给你虚假的安全感。
-本脚本用 tests/meta/contract_violations/ 下的**故意违规样本**，
-逐条确认对应规则被触发；同时确认合规样本不产生误报。
+An unverified gate is no gate at all -- it gives false confidence. This script uses the
+**deliberately violating samples** under tests/meta/contract_violations/ and confirms rule by rule
+that the matching violation is triggered; it also confirms that a compliant sample is not reported.
 
-退出码：0 全部符合预期；1 有偏差。
+Exit code: 0 everything as expected; 1 a deviation.
 """
 from __future__ import annotations
 
@@ -25,10 +25,10 @@ FIXTURE_TESTS = FIXTURES / "declared_tests.json"
 
 
 def load_checker():
-    """按文件路径加载门禁模块（scripts 不是包）。"""
+    """Load the gate module by file path (scripts is not a package)."""
     spec = importlib.util.spec_from_file_location("qp_check_contracts", CHECKER)
     module = importlib.util.module_from_spec(spec)
-    sys.modules["qp_check_contracts"] = module  # dataclass 需要它
+    sys.modules["qp_check_contracts"] = module  # dataclass needs this
     spec.loader.exec_module(module)
     return module
 
@@ -49,7 +49,7 @@ def main() -> int:
     contracts, violations = cc.parse_header(FIXTURE_HEADER)
     declared_tests = set(json.loads(FIXTURE_TESTS.read_text(encoding="utf-8"))["test_cases"])
 
-    # 把两阶段违规合并：C4（引用不存在的用例）只在拿到"用例字典"后才能判定。
+    # Merge the two phases: C4 (referencing a nonexistent case) is only decidable once the case set is known.
     by_line: dict[int, set[str]] = {}
     for v in violations:
         by_line.setdefault(v.line, set()).add(v.rule)
@@ -81,7 +81,7 @@ def main() -> int:
             failures.append(f"{func_name} 未触发 {rule}（该行实际："
                             f"{by_line.get(target, set()) or '无'}）")
 
-    # ── 合规样本不得产生任何违规 ──
+    # -- The compliant sample must produce no violation --
     good_line = next((i + 1 for i, line in enumerate(text_lines) if "good_sample(" in line), None)
     if good_line is None:
         failures.append("反例样本里找不到 good_sample")
@@ -91,7 +91,7 @@ def main() -> int:
     else:
         print("  [OK  ] good_sample          无违规（无误报）")
 
-    # ── 模块级契约：允许存在，但必须能与非契约的文件头区分开 ──
+    # -- Module-level contracts: allowed, but distinguishable from a non-contract file header --
     module_contracts = [c for c in contracts if c.signature == "<module>"]
     misassigned = [c for c in contracts if c.signature != "<module>" and "file" in c.tags]
     if misassigned:

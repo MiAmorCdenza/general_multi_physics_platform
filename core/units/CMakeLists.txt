@@ -1,6 +1,6 @@
-# core/units：量纲与量。header-only，零依赖。
+# core/units: dimensions and quantities. Header-only, zero dependencies.
 #
-# 依赖规则：units 不得依赖 core 内任何其他模块（plan-tree.md §8 铁律 4）。
+# Dependency rule: units must not depend on any other module inside core (plan-tree.md §8 rule 4).
 
 add_library(qp_units INTERFACE)
 add_library(qp::units ALIAS qp_units)

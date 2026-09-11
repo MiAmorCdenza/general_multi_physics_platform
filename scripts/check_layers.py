@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""层级依赖门禁（standards/enforcement.md §4）。
+"""Layer dependency gate (standards/enforcement.md section 4).
 
-把 `docs/plan-tree.md` §8 的依赖铁律从"文档约定"变成"CI 拒绝条件"。
+Turns the dependency law of `docs/plan-tree.md` section 8 from a "documented agreement" into a "CI refusal condition".
 
-检查项：
-  L1 允许方向：core 内的 include 必须符合显式白名单
-  L2 禁止 Qt：core 下不得出现任何 Q* 头文件
-  L3 Eigen 受限：只允许出现在 eval / kernels
-  L4 禁止反向依赖：core 不得包含 views / plugins 的头文件
-  L5 白名单覆盖：出现了规则里没有的模块 → 报错，强制维护者显式登记
+Checks:
+  L1 allowed direction: an include inside core must match the explicit whitelist
+  L2 no Qt: no Q* header may appear under core
+  L3 Eigen restricted: allowed in eval / kernels only
+  L4 no reverse dependency: core must not include headers from views / plugins
+  L5 whitelist coverage: a module absent from the rules -> an error, forcing explicit registration
 
-设计要点：**白名单是显式的**。新增跨模块依赖必须改本文件，
-改文件这个动作本身就是"我知道我在扩大耦合"的确认。这是故意的摩擦。
+Design point: **the whitelist is explicit**. A new cross-module dependency must edit this file,
+and that edit is itself the confirmation "I know I am widening coupling". The friction is intentional.
 
-退出码：0 通过；1 有违规。
+Exit codes: 0 pass; 1 violations found.
 """
 from __future__ import annotations
 
@@ -25,40 +25,55 @@ from pathlib import Path
 
 INCLUDE_RE = re.compile(r'^\s*#\s*include\s*[<"]([^">]+)[">]')
 
-# 层目录：它们只是**分类**，不是模块。模块是层下面的一级。
-# 例：`qp/graph/ir/node.hpp` 属于模块 ir，不属于模块 graph。
+# Layer directories: they are only **categories**, not modules. A module is one level below a layer.
+# Example: `qp/graph/ir/node.hpp` belongs to module ir, not to module graph.
 LAYER_DIRS = frozenset({"graph", "runtime", "authoring"})
 
-# ── 允许的依赖方向（模块 → 它被允许依赖的模块集合）──────────────────────────
+# -- allowed dependency directions (module -> its allowed deps) --------------
 #
-# 与 docs/plan-tree.md §8 的白名单保持同步。新增模块必须在此登记，
-# 否则 L5 会报"未登记模块"。
+# Kept in sync with the whitelist in docs/plan-tree.md section 8. A new module must be registered
+# here, otherwise L5 reports an "unregistered module".
 ALLOWED: dict[str, set[str]] = {
-    # L0 地基
+    # L0 foundation
     "units": set(),
     "diag": {"units"},
     "reflect": {"units"},
     "abi": {"units"},
-    # ports 需要 abi 的 LatticeDesc 作为 Value 的场句柄载荷——
-    # 端口要能传递场，而场的布局定义在 abi。这条依赖是刻意的。
+    # ports needs abi's LatticeDesc as the field-handle payload of Value --
+    # a port must carry fields, and a field's layout is defined in abi. This dependency is intentional.
     "ports": {"units", "diag", "abi"},
-    # L1 图与执行
+    # L1 graph and execution
     "ir": {"units", "diag", "ports"},
     "structure": {"units", "diag", "ir"},
-    # mutate 的命令携带 qp::ports::Value（SetParam 的参数载荷），
-    # 因此必须允许 mutate → ports。这是 value 类型定义在 ports 的必然结果。
+    # A mutate command carries qp::ports::Value (the parameter payload of SetParam),
+    # so mutate -> ports must be allowed. That follows from Value being defined in ports.
     "mutate": {"units", "diag", "ports", "ir", "structure"},
     "validate": {"units", "diag", "ports", "ir", "structure"},
     "eval": {"units", "diag", "ports", "abi", "ir", "structure"},
-    "domain": {"units", "diag", "abi", "ir", "eval"},
-    "kernels": {"units", "diag", "abi", "domain"},
+    # domain uses validate's Report to express a "stale declaration" and needs structure to read the graph.
+    # The direction is domain -> validate (**one-way**): validate does not depend on domain, because
+    # domain semantics must have exactly one definition site -- an early version defined the same
+    # Domain enum in two modules, so any translation unit including both redefined it.
+    "domain": {"units", "diag", "abi", "ir", "structure", "validate"},
+    # kernels needs field because a batch is handed to an operator in the field
+    # vocabulary: `field::FieldValue` is "a described span of samples", and using
+    # it is what lets one operator run on a CPU array in a test and on a packed
+    # buffer in production without a second implementation. field depends only on
+    # abi, so the direction stays acyclic and field remains the more fundamental
+    # of the two.
+    #
+    # This is a deliberate widening of the plan-tree table, which listed
+    # kernels -> abi, domain. The alternative was to duplicate the batch
+    # descriptor inside kernels, which would give the platform two incompatible
+    # answers to "what is a described span".
     "field": {"units", "diag", "abi"},
-    # L2 运行与数据
+    "kernels": {"units", "diag", "abi", "field", "domain"},
+    # L2 runs and data
     "run": {"units", "diag", "abi", "ports"},
     "store": {"units", "diag", "ports"},
     "trace": {"units", "diag", "run", "store"},
     "io": {"units", "diag", "abi", "store"},
-    # L3 视图服务
+    # L3 view services
     "document": {"units", "diag", "ir", "abi"},
     "capability": {"units", "diag", "ports"},
     "commands": {"units", "diag", "ir", "structure", "mutate"},
@@ -66,10 +81,10 @@ ALLOWED: dict[str, set[str]] = {
     "portui": {"units", "diag", "ports", "capability"},
 }
 
-# core 之外的一切都不许被 core 依赖
+# Nothing outside core may be depended on by core
 FORBIDDEN_PREFIXES = ("views", "plugins", "external")
 
-# Eigen 只允许在这两个模块出现
+# Eigen may appear in these two modules only
 EIGEN_ALLOWED = {"eval", "kernels"}
 
 
@@ -89,60 +104,60 @@ class Violation:
 
 
 def module_of(include: str, core_root: Path) -> str | None:
-    """把 include 路径映射到 core 模块名，也用于源码路径。
+    """Maps an include path to a core module name; also used for source paths.
 
-    目录约定（兼容两种历史写法）：
-      `qp/units/dim.hpp`         → units
-      `qp/diag/result.hpp`       → diag
-      `qp/graph/ir/node.hpp`     → ir      （层目录被跳过）
-      `qp/abi/field_buffer.hpp`  → abi
-      `qp/units.hpp`             → units   伞头文件
-      `qp/graph/ir.hpp`          → ir      层目录下的伞头文件
+    Directory conventions (both historical spellings are accepted):
+      `qp/units/dim.hpp`         -> units
+      `qp/diag/result.hpp`       -> diag
+      `qp/graph/ir/node.hpp`     -> ir      (the layer directory is skipped)
+      `qp/abi/field_buffer.hpp`  -> abi
+      `qp/units.hpp`             -> units   umbrella header
+      `qp/graph/ir.hpp`          -> ir      umbrella header under a layer directory
 
-    实现：剔除 `include` / `src` 这类目录约定噪声后，
-    从 `qp/` 之后的目录里取**第一个非层目录**；若全被过滤掉
-    （即路径形如 `qp/<layer>/<file>`），则取文件名词干。
+    Implementation: after dropping directory-convention noise such as `include` / `src`,
+    take the **first non-layer directory** below `qp/`; if everything was filtered out
+    (that is, the path looks like `qp/<layer>/<file>`), take the file name stem.
     """
     parts = [p for p in Path(include).parts if p not in ("include", "src")]
     if len(parts) < 2 or parts[0] != "qp":
         return None
 
-    dirs = list(parts[1:-1])          # qp 与文件名之间的目录段
+    dirs = list(parts[1:-1])          # directory segments between qp and the file name
     modules = [d for d in dirs if d not in LAYER_DIRS]
     if modules:
         return modules[0]
 
-    # 没有模块目录：路径是 qp/<layer>/<file> 或 qp/<file>
+    # No module directory: the path is qp/<layer>/<file> or qp/<file>
     return Path(parts[-1]).stem or None
 
 
 def module_of_relative(rel_parts: tuple[str, ...]) -> str | None:
-    """从**相对 core 根**的路径判断所属模块。
+    """Determines the owning module from a path **relative to the core root**.
 
-    支持两种目录约定：
-      - 开发约定：`<layer>/<mod>/include/qp/...` → 取 `qp/` 之后的段
-      - 简化约定：`<mod>/include/qp/...`         → 取第 0 段
+    Two directory conventions are supported:
+      - development: `<layer>/<mod>/include/qp/...` -> the segments after `qp/`
+      - simplified:  `<mod>/include/qp/...`         -> segment 0
 
-    关键：判断逻辑必须与 `module_of()` **完全一致**，否则"文件属于哪个模块"
-    与"include 指向哪个模块"会用两套规则，产生自相矛盾的判定。
-    早期版本只做 `rel_parts[0]`，于是 `graph/ir/...` 被误判为模块 "graph"，
-    与 include 解析出的 "ir" 对不上——由层级门禁自身抓出。
+    Key: this logic must be **exactly consistent** with `module_of()`, or "which module a file
+    belongs to" and "which module an include points at" would use two rule sets and contradict
+    each other. An early version used only `rel_parts[0]`, so `graph/ir/...` was misread as
+    module "graph", disagreeing with the "ir" parsed from the include -- caught by the layer gate.
 
-    因此这里统一委托给 `module_of()`：先定位路径里的 `qp` 段，
-    再把 `qp/...` 整段交给它解析。
+    So this delegates to `module_of()` uniformly: locate the `qp` segment in the path,
+    then hand the whole `qp/...` part to it.
     """
     if not rel_parts:
         return None
     rest = tuple(p for p in rel_parts if p not in ("include", "src"))
-    # 路径形如 <layer>/<mod>/qp/... 或 <mod>/qp/...：从 `qp` 段开始交给 module_of
+    # Path looks like <layer>/<mod>/qp/... or <mod>/qp/...: hand it to module_of starting at `qp`
     if "qp" in rest:
         i = rest.index("qp")
         return module_of("/".join(rest[i:]), Path("."))
-    # 源码路径（无 qp 段）：形如 <layer>/<mod>/<file> 或 <mod>/<file>
+    # Source path (no qp segment): looks like <layer>/<mod>/<file> or <mod>/<file>
     dirs = [d for d in rest[:-1] if d not in LAYER_DIRS]
     if dirs:
         return dirs[0]
-    # 全部被过滤（如 <layer>/<file>）：用文件名兜底
+    # Everything was filtered out (e.g. <layer>/<file>): fall back to the file name
     return Path(rest[-1]).stem if rest else None
 
 
@@ -163,49 +178,49 @@ def check_file(path: Path, core_root: Path, root: Path,
             continue
         inc = m.group(1)
 
-        # L2 禁止 Qt
+        # L2: no Qt
         if (re.match(r"^Q[A-Z]\w*$", inc)
                 or inc.startswith(("QtCore/", "QtGui/", "QtQuick", "QtWidgets", "QtQml"))):
             violations.append(Violation(path, lineno, "L2",
-                                        f"core 内不得包含 Qt：{inc}"))
+                                        f"Qt must not be included inside core: {inc}"))
             continue
 
-        # L4 禁止反向依赖
+        # L4: no reverse dependency
         if inc.split("/")[0] in FORBIDDEN_PREFIXES:
             violations.append(Violation(path, lineno, "L4",
-                                        f"core 不得依赖 {inc.split('/')[0]}/：{inc}"))
+                                        f"core must not depend on {inc.split('/')[0]}/: {inc}"))
             continue
 
-        # L3 Eigen 受限
+        # L3: Eigen restricted
         if inc.startswith("Eigen/") or inc == "Eigen":
             if own not in EIGEN_ALLOWED:
                 violations.append(Violation(
                     path, lineno, "L3",
-                    f"Eigen 只允许出现在 {sorted(EIGEN_ALLOWED)}，当前模块是 {own!r}：{inc}"))
+                    f"Eigen is allowed only in {sorted(EIGEN_ALLOWED)}, current module is {own!r}: {inc}"))
             continue
 
-        # 只检查 core 内的相互依赖
+        # Only mutual dependencies inside core are checked
         dep = module_of(inc, core_root)
         if dep is None:
             continue
 
-        # L5 未登记模块
+        # L5: unregistered module
         if dep not in allowed:
             violations.append(Violation(path, lineno, "L5",
-                                        f"未登记的 core 模块 {dep!r}（请在本脚本的 ALLOWED 中显式加入）"))
+                                        f"unregistered core module {dep!r} (add it explicitly to ALLOWED)"))
             continue
         if own not in allowed:
             violations.append(Violation(path, lineno, "L5",
-                                        f"当前模块 {own!r} 未在 ALLOWED 中登记"))
+                                        f"the current module {own!r} is not registered in ALLOWED"))
             continue
 
-        # L1 允许方向
+        # L1: allowed direction
         if dep == own:
             continue
         if dep not in allowed[own]:
             violations.append(Violation(
                 path, lineno, "L1",
-                f"不允许的依赖 {own} → {dep}（{own} 允许：{sorted(allowed[own]) or '无'}）"))
+                f"disallowed dependency {own} -> {dep} ({own} allows: {sorted(allowed[own]) or 'none'})"))
 
     return violations
 
@@ -218,16 +233,16 @@ def main(argv: list[str] | None = None) -> int:
         pass
 
     repo_root = Path(__file__).resolve().parent.parent
-    parser = argparse.ArgumentParser(description="core 层级依赖门禁")
-    parser.add_argument("--core", default=str(repo_root / "core"), help="core 根目录")
-    parser.add_argument("--root", default=str(repo_root), help="用于相对路径显示")
+    parser = argparse.ArgumentParser(description="core layer dependency gate")
+    parser.add_argument("--core", default=str(repo_root / "core"), help="core root directory")
+    parser.add_argument("--root", default=str(repo_root), help="used for relative path display")
     parser.add_argument("--quiet", action="store_true")
     args = parser.parse_args(argv)
 
     core_root = Path(args.core)
     root = Path(args.root).resolve()
     if not core_root.is_dir():
-        print(f"错误：core 目录不存在 {core_root}", file=sys.stderr)
+        print(f"error: core directory does not exist: {core_root}", file=sys.stderr)
         return 1
 
     files = sorted(p for p in core_root.rglob("*") if p.suffix in (".hpp", ".h", ".cpp"))
@@ -236,16 +251,16 @@ def main(argv: list[str] | None = None) -> int:
         violations.extend(check_file(path, core_root, root, ALLOWED))
 
     if not args.quiet:
-        print(f"层级检查：扫描 {len(files)} 个文件，登记模块 {len(ALLOWED)} 个")
+        print(f"layer check: scanned {len(files)} files, {len(ALLOWED)} modules registered")
 
     for v in violations:
         print(v.render(root))
 
     if violations:
-        print(f"\n门禁失败：{len(violations)} 处层级违规", file=sys.stderr)
+        print(f"\ngate failed: {len(violations)} layer violations", file=sys.stderr)
         return 1
     if not args.quiet:
-        print("门禁通过：层级依赖合法。")
+        print("gate passed: layer dependencies are legal.")
     return 0
 
 

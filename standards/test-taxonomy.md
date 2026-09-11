@@ -107,8 +107,8 @@ static_assert(qp::abi::kAbiVersion == 1);
 **实测反例**（`pow<-2>(10.0)` 与字面量 `0.01` 在运行期同为 `0x3f847ae147ae147b`）：
 
 ```cpp
-REQUIRE(pow<-2>(Length{10.0}).value() == 0.01);          // ✅ 通过
-STATIC_REQUIRE(pow<-2>(Length{10.0}).value() == 0.01);   // ❌ 失败
+REQUIRE(pow<-2>(Length{10.0}).value() == 0.01);          // [OK] 通过
+STATIC_REQUIRE(pow<-2>(Length{10.0}).value() == 0.01);   // [X] 失败
 ```
 
 **规则**：
@@ -127,7 +127,7 @@ STATIC_REQUIRE(pow<-2>(Length{10.0}).value() == 0.01);   // ❌ 失败
 ```cpp
 using Ab = decltype(Length{1.0} * Mass{1.0});
 using Ba = decltype(Mass{1.0} * Length{1.0});
-STATIC_REQUIRE(std::is_same_v<Ab, Ba>);   // ✅ 清晰且不会踩宏的坑
+STATIC_REQUIRE(std::is_same_v<Ab, Ba>);   // [OK] 清晰且不会踩宏的坑
 ```
 
 **工具链前提必须被断言**：`tests/unit/units/test_floating_point_env.cpp`
@@ -150,8 +150,8 @@ STATIC_REQUIRE(std::is_same_v<Ab, Ba>);   // ✅ 清晰且不会踩宏的坑
 0.1 + 0.2  →  double 0x3FD3333333333334
 0.3        →  double 0x3FD3333333333333     （两者不相等）
 
-%.17g  →  两者都是 "0.3"        ❌ 无法区分
-%a     →  0x1.3333333333334p-2 与 0x1.3333333333333p-2  ✅
+%.17g  →  两者都是 "0.3"        [X] 无法区分
+%a     →  0x1.3333333333334p-2 与 0x1.3333333333333p-2  [OK]
 ```
 
 若用 `%.17g` 做缓存键的精确比较，会把**两个不同的计算当成同一次**——
@@ -168,8 +168,8 @@ MSVC 给补零形式 `0x1.8000000000000p+0`。因此必须**归一化**
 
 ```cpp
 volatile double a = 0.1, b = 0.2;
-REQUIRE(a + b != 0.3);          // ✅ 真实行为
-REQUIRE(0.1 + 0.2 != 0.3);      // ❌ 常量折叠后相等
+REQUIRE(a + b != 0.3);          // [OK] 真实行为
+REQUIRE(0.1 + 0.2 != 0.3);      // [X] 常量折叠后相等
 ```
 
 ---

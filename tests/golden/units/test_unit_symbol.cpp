@@ -1,9 +1,9 @@
 /**
  * @file test_unit_symbol.cpp
- * @brief units 模块 §unit_symbol 的黄金测试。
+ * @brief Golden tests for the units module, section unit_symbol.
  *
- * 这一组是**黄金回归**：单位字符串必须与手写期望值逐字相同。
- * 任何一处漂移都意味着 C++ / YAML / 脚本三处的"单位"开始不一致。
+ * A **golden regression**: unit strings must match the hand-written expectation exactly.
+ * Any drift means the "unit" in C++ / YAML / scripts has started to disagree.
  */
 #include <catch2/catch_test_macros.hpp>
 
@@ -24,7 +24,7 @@ TEST_CASE("units.symbol.dimensionless_is_one", "[units][golden]") {
 }
 
 TEST_CASE("units.symbol.short_forms", "[units][golden]") {
-    // 基本量
+    // base quantities
     REQUIRE(short_of(dims::length) == "m");
     REQUIRE(short_of(dims::mass) == "kg");
     REQUIRE(short_of(dims::time) == "s");
@@ -32,15 +32,15 @@ TEST_CASE("units.symbol.short_forms", "[units][golden]") {
     REQUIRE(short_of(dims::temperature) == "K");
     REQUIRE(short_of(dims::amount) == "mol");
     REQUIRE(short_of(dims::luminous) == "cd");
-    // 几何
+    // geometry
     REQUIRE(short_of(dims::area) == "m^2");
     REQUIRE(short_of(dims::volume) == "m^3");
     REQUIRE(short_of(dims::reciprocal_length) == "1/m");
-    // 运动学
+    // kinematics
     REQUIRE(short_of(dims::velocity) == "m/s");
     REQUIRE(short_of(dims::acceleration) == "m/s^2");
     REQUIRE(short_of(dims::jerk) == "m/s^3");
-    // 力学
+    // mechanics
     REQUIRE(short_of(dims::momentum) == "kg*m/s");
     REQUIRE(short_of(dims::force) == "kg*m/s^2");
     REQUIRE(short_of(dims::energy) == "kg*m^2/s^2");
@@ -48,9 +48,9 @@ TEST_CASE("units.symbol.short_forms", "[units][golden]") {
     REQUIRE(short_of(dims::pressure) == "kg/(m*s^2)");
     REQUIRE(short_of(dims::density) == "kg/m^3");
     REQUIRE(short_of(dims::moment_of_inertia) == "kg*m^2");
-    // 振动
+    // vibration
     REQUIRE(short_of(dims::frequency) == "1/s");
-    // 电磁（分母按符号字母序：A 在 s 之前）
+    // electromagnetics (denominator sorted by symbol letter: A before s)
     REQUIRE(short_of(dims::charge) == "A*s");
     REQUIRE(short_of(dims::magnetic_flux_density) == "kg/(A*s^2)");
     REQUIRE(short_of(dims::voltage) == "kg*m^2/(A*s^3)");
@@ -60,28 +60,28 @@ TEST_CASE("units.symbol.short_forms", "[units][golden]") {
 }
 
 TEST_CASE("units.symbol.denominator_parenthesized", "[units][golden]") {
-    // 分母含多个因子必须加括号，否则语义有歧义。
-    // 这里只断言**可观察输出**，不碰 detail:: 下的实现细节——
-    // 曾经为内部辅助函数单独写测试，那是测试实现而非行为，已改回。
-    REQUIRE(short_of(dims::mass) == "kg");              // 分母 0 个因子
-    REQUIRE(short_of(dims::velocity) == "m/s");         // 分母 1 个
-    REQUIRE(short_of(dims::density) == "kg/m^3");       // 分母 1 个
-    REQUIRE(short_of(dims::frequency) == "1/s");        // 分子空 → "1"
-    REQUIRE(short_of(dims::force) == "kg*m/s^2");       // 分母 1 个 → 无括号
-    REQUIRE(short_of(dims::energy) == "kg*m^2/s^2");    // 分母 1 个 → 无括号
-    REQUIRE(short_of(dims::pressure) == "kg/(m*s^2)");  // 分母 2 个 → 有括号
+    // A denominator with several factors must be parenthesized, else it is ambiguous.
+    // Only **observable output** is asserted here, never detail:: internals: writing a
+    // separate test for an internal helper tested the implementation, so it was reverted.
+    REQUIRE(short_of(dims::mass) == "kg");              // 0 denominator factors
+    REQUIRE(short_of(dims::velocity) == "m/s");         // 1 denominator factor
+    REQUIRE(short_of(dims::density) == "kg/m^3");       // 1 denominator factor
+    REQUIRE(short_of(dims::frequency) == "1/s");        // empty numerator -> "1"
+    REQUIRE(short_of(dims::force) == "kg*m/s^2");       // 1 denominator factor -> no parentheses
+    REQUIRE(short_of(dims::energy) == "kg*m^2/s^2");    // 1 denominator factor -> no parentheses
+    REQUIRE(short_of(dims::pressure) == "kg/(m*s^2)");  // 2 denominator factors -> parentheses
     REQUIRE(short_of(dims::voltage) == "kg*m^2/(A*s^3)");
     REQUIRE(short_of(dims::resistance) == "kg*m^2/(A^2*s^3)");
     REQUIRE(short_of(dims::magnetic_flux_density) == "kg/(A*s^2)");
     REQUIRE(short_of(dims::inductance) == "kg*m^2/(A^2*s^2)");
 
-    // 括号只在分母多因子时出现
+    // Parentheses appear only when the denominator has several factors
     REQUIRE(short_of(dims::velocity).find('(') == std::string::npos);
     REQUIRE(short_of(dims::density).find('(') == std::string::npos);
     REQUIRE(short_of(dims::force).find('(') == std::string::npos);
     REQUIRE(short_of(dims::pressure).find('(') != std::string::npos);
 
-    // 长式规则与短式一致
+    // Long-form rules match the short form
     REQUIRE(long_of(dims::pressure) == "kilogram per (meter*second^2)");
     REQUIRE(long_of(dims::voltage) == "kilogram*meter^2 per (ampere*second^3)");
     REQUIRE(long_of(dims::velocity) == "meter per second");
@@ -89,13 +89,13 @@ TEST_CASE("units.symbol.denominator_parenthesized", "[units][golden]") {
 }
 
 TEST_CASE("units.symbol.area_uses_caret", "[units][golden]") {
-    // 指数 1 不得出现 "^1"
+    // Exponent 1 must not produce "^1"
     REQUIRE(short_of(dims::length) == "m");
     REQUIRE(short_of(dims::length).find('^') == std::string::npos);
     REQUIRE(short_of(dims::momentum).find("^1") == std::string::npos);
-    // 指数 >1 必须出现 "^n"
+    // Exponent >1 must produce "^n"
     REQUIRE(short_of(dims::area).find("^2") != std::string::npos);
-    // 指数 0 的分量不得出现
+    // Components with exponent 0 must not appear
     REQUIRE(short_of(dims::area).find("kg") == std::string::npos);
     REQUIRE(short_of(dims::area).find('s') == std::string::npos);
 }
@@ -105,7 +105,7 @@ TEST_CASE("units.symbol.negative_exponent_uses_per", "[units][golden]") {
     REQUIRE(short_of(dims::velocity).find("^-") == std::string::npos);
     REQUIRE(short_of(dims::frequency) == "1/s");
     REQUIRE(short_of(dims::reciprocal_length) == "1/m");
-    // 负指数只允许出现在分母侧
+    // Negative exponents may appear only on the denominator side
     REQUIRE(short_of(dims::energy) == "kg*m^2/s^2");
 }
 
@@ -131,10 +131,10 @@ TEST_CASE("units.symbol.deterministic", "[units][property]") {
                                dims::charge,   dims::voltage,  dims::resistance,
                                dims::magnetic_flux_density,    Dim{3, -2, 1, 0, 0, 0, 0}};
     for (Dim d : samples) {
-        // 同输入 → 同输出，逐字相同
+        // Same input -> same output, character for character
         REQUIRE(short_of(d) == short_of(d));
         REQUIRE(long_of(d) == long_of(d));
-        // 非空
+        // non-empty
         REQUIRE_FALSE(short_of(d).empty());
         REQUIRE_FALSE(long_of(d).empty());
     }

@@ -1,12 +1,12 @@
 /**
  * @file unit_symbol.hpp
- * @brief 由**编译期量纲类型**自动生成单位字符串。
+ * @brief Generates unit strings from the **compile-time dimension type**.
  *
- * 这是本项目"一份真相源"的关键机制：
- *   C++ 里的单位字符串、YAML 里的 `unit:` 字段、脚本里的单位名，
- *   三者全部由同一个 `Dim` 推导而来，不存在第二份单位表。
+ * This is the project's key "single source of truth" mechanism:
+ *   the unit strings in C++, the `unit:` field in YAML, the unit names in scripts --
+ *   all three are derived from one `Dim`, and no second unit table exists.
  *
- * 因此：**不允许手写单位字符串的字面量**，除非它来自本文件的函数。
+ * Hence: **unit string literals must never be written by hand**, unless this file made them.
  */
 #pragma once
 
@@ -19,7 +19,7 @@
 
 namespace qp::units {
 
-/// @brief 单位符号风格。
+/// @brief Unit symbol style.
 enum class SymbolStyle {
     short_form,  ///< "kg*m/s^2"
     long_form,   ///< "kilogram*meter/second^2"
@@ -28,45 +28,45 @@ enum class SymbolStyle {
 namespace detail {
 
 /**
- * 单位名顺序 —— **qp 约定，非 ISO 80000 逐字复刻**。
+ * Unit name order -- a **qp convention, not a verbatim copy of ISO 80000**.
  *
- * 规则：分子按符号字母升序，分母同理。结果：
- *   kg < m < s  →  力 = "kg*m/s^2"
- *   A < s       →  磁感应强度 = "kg/(A*s^2)"、电压 = "kg*m^2/(A*s^3)"
+ * Rule: the numerator sorts symbols by ascending letter, and so does the denominator. Result:
+ *   kg < m < s  ->  force = "kg*m/s^2"
+ *   A < s       ->  magnetic flux density = "kg/(A*s^2)", voltage = "kg*m^2/(A*s^3)"
  *
- * 为什么是"约定"而不是"标准"：
- *   现行规范（BIPM SI 手册、NIST SP 811）对**导出单位用基本单位表达时的书写
- *   顺序没有强制规定**，只要求同一文本内自洽。因此本项目的做法是选定一种
- *   确定性顺序并写进 ABI 版本，而不是声称遵循某条并不存在的强制条款。
+ * Why a "convention" and not a "standard":
+ *   The current specifications (BIPM SI brochure, NIST SP 811) impose **no mandatory order
+ *   for writing derived units in base units**, only self-consistency within one text. So this
+ *   project fixes one deterministic order in the ABI version, rather than citing a nonexistent clause.
  *
- * 这不影响任何物理正确性：`unit_symbol` 只用于显示与互换；
- * 真正的量纲信息在 `Dim` 类型里，与字符串无关。
+ * This affects no physical correctness: `unit_symbol` serves display and interchange only;
+ * the real dimension information lives in the `Dim` type and is independent of the string.
  *
- * 未来若需要严格照抄某个标准符号（如 NIST 的 "kg·m²/(A·s³)"），
- * 应新增符号表并升 `kUnitsAbiVersion`，而不是偷偷改顺序。
+ * If a standard symbol must ever be copied verbatim (say NIST's "kg·m²/(A·s³)"),
+ * add a new symbol table and bump `kUnitsAbiVersion`, rather than quietly changing the order.
  */
 inline constexpr std::array<std::string_view, 7> kShortNumerator{
     "A", "K", "cd", "kg", "m", "mol", "s"};
 inline constexpr std::array<std::string_view, 7> kLongNumerator{
     "ampere", "kelvin", "candela", "kilogram", "meter", "mole", "second"};
 
-/// 把指数追加为 "^n"（n==1 时省略）。
+/// Appends the exponent as "^n" (omitted when n == 1).
 inline void append_exp(std::string& out, DimExp e) {
     if (e == 1) return;
     out += '^';
     out += std::to_string(static_cast<int>(e));
 }
 
-/// 单位符号按字母序排列时的轴索引：A K cd kg m mol s
-/// → 对应 Dim 的成员 I, Th, J, M, L, N, T
+/// Axis index when unit symbols are ordered alphabetically: A K cd kg m mol s
+/// -> the Dim members I, Th, J, M, L, N, T
 inline constexpr std::array<int, 7> kSymbolAxisOrder{3, 4, 6, 1, 0, 5, 2};
 
-// 以下三个是**实现细节**（namespace detail），不构成模块契约面，
-// 因而不单独写契约、不单独点名测试。它们的行为通过公开的 unit_symbol()
-// 在黄金测试与性质测试中被完整覆盖——这是"测试可观察行为，而非实现细节"。
+// The next three are **implementation details** (namespace detail) and form no module contract
+// surface, so they carry no contract block and no named tests; the public unit_symbol() covers
+// them fully in the golden and property tests -- "test observable behavior, not implementation".
 namespace detail {
 
-/// 取出按符号序排列的七个指数。
+/// Extracts the seven exponents in symbol order.
 [[nodiscard]] inline std::array<DimExp, 7> symbol_order_exponents(Dim d) noexcept {
     const std::array<DimExp, 7> by_member{d.L, d.M, d.T, d.I, d.Th, d.N, d.J};
     std::array<DimExp, 7> out{};
@@ -76,9 +76,9 @@ namespace detail {
     return out;
 }
 
-/// 某一侧（分子 / 分母）实际会打印出几个因子。
-/// 分母侧数的是**负指数**：压强 kg/(m*s^2) 的分母是 m 与 s^2，共 2 个。
-/// 早期版本把"取负之后为正"当作判据，等于把分子也数了进去——由黄金测试抓出。
+/// How many factors one side (numerator / denominator) will actually print.
+/// The denominator counts **negative exponents**: for pressure kg/(m*s^2) that is m and s^2, 2 in all.
+/// An earlier version tested "positive after negation" and counted the numerator too -- caught by a golden test.
 [[nodiscard]] inline int count_factors(Dim d, bool denominator) noexcept {
     int n = 0;
     for (DimExp e : symbol_order_exponents(d)) {
@@ -88,7 +88,7 @@ namespace detail {
     return n;
 }
 
-/// 分母侧是否需要括号：含多个因子时必须有括号，否则语义有歧义。
+/// Whether the denominator needs parentheses: more than one factor requires them, or the meaning is ambiguous.
 [[nodiscard]] inline bool needs_parentheses(Dim d) noexcept {
     return count_factors(d, true) > 1;
 }
@@ -96,17 +96,17 @@ namespace detail {
 }  // namespace detail
 
 /**
- * @brief 生成一侧（分子或分母）的字符串。符号取绝对值，方向由 `per` 表达。
+ * @brief Builds the string for one side (numerator or denominator). Symbols are absolute; `per` carries direction.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        向 out 追加该侧的符号串；无因子时追加 "1"
- * @invariant   分母多因子时自动加括号（与 count_factors 一致）
- * @errors      noexcept；分配失败即 std::terminate
+ * @post        Appends that side's symbol string to out; appends "1" when there is no factor
+ * @invariant   A multi-factor denominator is parenthesized automatically (consistent with count_factors)
+ * @errors      noexcept; allocation failure calls std::terminate
  * @complexity  O(7)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       units.symbol.short_forms, units.symbol.long_form,
  *              units.symbol.denominator_parenthesized
  */
@@ -125,11 +125,11 @@ inline void append_side(std::string& out, const std::array<std::string_view, N>&
         append_exp(out, shown);
         first = false;
     }
-    if (first) out += '1';  // 例如频率的分子侧
+    if (first) out += '1';  // e.g. the numerator side of a frequency
     if (parenthesize) out += ')';
 }
 
-/// 判断分母侧是否为空（全部指数 <= 0）。
+/// Whether the denominator side is empty (every exponent <= 0).
 inline constexpr bool has_denominator(Dim d) noexcept {
     return d.L < 0 || d.M < 0 || d.T < 0 || d.I < 0 || d.Th < 0 || d.N < 0 || d.J < 0;
 }
@@ -137,17 +137,17 @@ inline constexpr bool has_denominator(Dim d) noexcept {
 }  // namespace detail
 
 /**
- * @brief 生成量纲 D 的单位字符串。
+ * @brief Builds the unit string of dimension D.
  *
  * @ownership   pure
  * @thread      any
- * @pre         D 可表示（is_representable）
- * @post        返回非空字符串；无量纲返回 "1"
- * @invariant   同一个 D 永远生成同一个字符串（幂等且确定）
- * @errors      noexcept；分配失败即 std::terminate（与全库一致：不抛异常）
+ * @pre         D is representable (is_representable)
+ * @post        Returns a non-empty string; a dimensionless D returns "1"
+ * @invariant   One D always yields one string (idempotent and deterministic)
+ * @errors      noexcept; allocation failure calls std::terminate (library-wide: nothing throws)
  * @complexity  O(7)
  * @nondet      none
- * @frozen      否（字符串风格可扩），但 "同一 D → 同一字符串" 这一不变量冻结
+ * @frozen      no (the string style may grow), but "same D -> same string" is frozen
  * @tests       units.symbol.short_forms, units.symbol.dimensionless_is_one,
  *              units.symbol.negative_exponent_uses_per, units.symbol.area_uses_caret,
  *              units.symbol.denominator_parenthesized,
@@ -174,17 +174,17 @@ inline constexpr bool has_denominator(Dim d) noexcept {
 }
 
 /**
- * @brief 编译期量纲 → 单位字符串（短式）。
+ * @brief Compile-time dimension -> unit string (short form).
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        等价于 unit_symbol(D, short_form)
- * @invariant   见 unit_symbol
- * @errors      noexcept；分配失败即 std::terminate
- * @complexity  O(1)（首次调用后）
+ * @post        Equivalent to unit_symbol(D, short_form)
+ * @invariant   See unit_symbol
+ * @errors      noexcept; allocation failure calls std::terminate
+ * @complexity  O(1) (after the first call)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       units.symbol.compile_time_matches_runtime
  */
 template <Dim D>
@@ -193,17 +193,17 @@ template <Dim D>
 }
 
 /**
- * @brief 七指数逗号序列，用于诊断信息与黄金回归的诊断点打印。
+ * @brief The seven exponents as a comma sequence, for diagnostics and golden-regression print points.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        返回 "L,M,T,I,Th,N,J" 形式的字符串
- * @invariant   与 unit_symbol 一样确定：同输入同输出
- * @errors      noexcept；分配失败即 std::terminate
+ * @post        Returns a string of the form "L,M,T,I,Th,N,J"
+ * @invariant   As deterministic as unit_symbol: same inputs, same output
+ * @errors      noexcept; allocation failure calls std::terminate
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否（诊断格式不属于 ABI）
+ * @frozen      no (the diagnostic format is not part of the ABI)
  * @tests       units.dim_axes.diagnostic_format
  */
 [[nodiscard]] inline std::string dim_axes(Dim d) noexcept {
@@ -213,19 +213,19 @@ template <Dim D>
 }
 
 /**
- * @brief 运行期单位：量纲 + 换算到 SI 基本单位的因子。
+ * @brief A runtime unit: a dimension plus the factor converting to SI base units.
  *
- * 用途：端口上标注单位、YAML 里写 `unit: cm`、仪器读数带单位显示。
+ * Uses: unit labels on ports, `unit: cm` in YAML, instrument readings shown with their unit.
  *
- * @ownership   pure（值类型）
+ * @ownership   pure (a value type)
  * @thread      any
  * @pre         factor != 0
  * @post        to_si(v) == v * factor
- * @invariant   symbol 与 dim 一致（由构造方保证，不在此处校验）
+ * @invariant   symbol agrees with dim (guaranteed by the constructor, not checked here)
  * @errors      noexcept
  * @complexity  O(1)
  * @nondet      none
- * @frozen      是——这是 ABI 侧使用的类型
+ * @frozen      yes -- this is the type the ABI side uses
  * @tests       units.unit.convert_to_si, units.unit.roundtrip
  */
 struct Unit final {
@@ -234,33 +234,33 @@ struct Unit final {
     std::string symbol{};
 
     /**
-     * @brief 把以本单位的数值换算为 SI 基本单位数值。
+     * @brief Converts a value in this unit into an SI base-unit value.
      *
      * @ownership   pure
      * @thread      any
      * @pre         none
-     * @post        返回 v * factor
-     * @invariant   from_si(to_si(v)) == v（在浮点可表示范围内）
+     * @post        Returns v * factor
+     * @invariant   from_si(to_si(v)) == v (within the floating-point representable range)
      * @errors      noexcept
      * @complexity  O(1)
      * @nondet      none
-     * @frozen      是
+     * @frozen      yes
      * @tests       units.unit.convert_to_si, units.unit.roundtrip
      */
     [[nodiscard]] double to_si(double v) const noexcept { return v * factor; }
 
     /**
-     * @brief 把 SI 基本单位数值换算为本单位数值。
+     * @brief Converts an SI base-unit value into a value in this unit.
      *
      * @ownership   pure
      * @thread      any
      * @pre         factor != 0
-     * @post        返回 v / factor
-     * @invariant   to_si(from_si(v)) == v（在浮点可表示范围内）
+     * @post        Returns v / factor
+     * @invariant   to_si(from_si(v)) == v (within the floating-point representable range)
      * @errors      noexcept
      * @complexity  O(1)
      * @nondet      none
-     * @frozen      是
+     * @frozen      yes
      * @tests       units.unit.roundtrip
      */
     [[nodiscard]] double from_si(double v) const noexcept { return v / factor; }

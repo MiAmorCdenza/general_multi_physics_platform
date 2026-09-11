@@ -1,6 +1,6 @@
 /**
  * @file test_conversion.cpp
- * @brief 单位换算、字面量、Unit 的测试。
+ * @brief Tests for unit conversion, literals, and Unit.
  */
 #include <catch2/catch_test_macros.hpp>
 
@@ -31,7 +31,7 @@ TEST_CASE("units.literals.engineering_prefixes", "[units]") {
     STATIC_REQUIRE((250.0_ms).value() == 0.25);
     STATIC_REQUIRE((90.0_min).value() == 5400.0);
 
-    // 前缀换算必须精确到浮点可表示范围
+    // Prefix conversion must be exact to the limits of floating-point representation
     REQUIRE((1.0_cm).value() == 0.01);
     REQUIRE((1.0_mm).value() == 0.001);
 }
@@ -45,7 +45,7 @@ TEST_CASE("units.literals.derived_units", "[units]") {
     STATIC_REQUIRE(decltype(10.0_Pa)::dim == dims::pressure);
     STATIC_REQUIRE(decltype(10.0_kg_m3)::dim == dims::density);
 
-    // 字面量与类型系统的衔接：字面量只是构造糖，类型检查照常生效
+    // How literals meet the type system: a literal is only construction sugar, type checking still applies
     constexpr auto f = 2.0_kg * 9.8_m_s2;
     STATIC_REQUIRE(std::is_same_v<std::decay_t<decltype(f)>, Force>);
     REQUIRE(f.value() == 19.6);

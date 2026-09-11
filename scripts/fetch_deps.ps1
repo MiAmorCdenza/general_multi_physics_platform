@@ -1,15 +1,15 @@
-# 拉取第三方依赖到 external/（不入库，见 .gitignore）
+﻿# Fetches third-party dependencies into external/ (not tracked; see .gitignore)
 #
-# 为什么不用 CMake FetchContent 的默认行为：
-#   FetchContent 在**配置阶段**联网。离线开发、CI 缓存、以及"配置成功与否
-#   取决于网络"都是不可接受的。因此依赖拉取是**显式的、一次性的**步骤，
-#   配置阶段只做本地探测。
+# Why not use the default CMake FetchContent behavior:
+#   FetchContent goes online during the **configure phase**. Offline development, CI
+#   caches, and "configure succeeds only if the network does" are unacceptable; so
+#   fetching is **explicit and one-shot**, and configure only probes locally.
 #
-# 用法：
-#   pwsh scripts/fetch_deps.ps1            # 拉取缺失的依赖
-#   pwsh scripts/fetch_deps.ps1 -Force     # 强制重拉
+# Usage:
+#   pwsh scripts/fetch_deps.ps1            # fetch the missing dependencies
+#   pwsh scripts/fetch_deps.ps1 -Force     # force a re-fetch
 #
-# 版本一经选定即**钉死**：升级 Catch2 必须改本文件并在 PR 说明中写明理由。
+# Versions are **pinned** once chosen: a Catch2 upgrade edits this file and says why in the PR.
 [CmdletBinding()]
 param(
     [switch]$Force
@@ -17,7 +17,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# ── 依赖清单（唯一真相源）────────────────────────────────────────────────────
+# -- Dependency manifest (single source of truth) -----------------------------
 $Deps = @(
     @{
         Name    = "Catch2"

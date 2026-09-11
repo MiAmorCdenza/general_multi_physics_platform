@@ -1,35 +1,35 @@
 /**
  * @file qp/abi.hpp
- * @brief abi 模块的唯一入口。
+ * @brief The single entry point of the abi module.
  *
- * ## 这个模块的规矩与别处不同
+ * ## This module plays by different rules
  *
- * 其它 core 模块可以用模板、STL、C++ 惯用法。**abi 不可以。**
+ * Other core modules may use templates, the STL, and C++ idioms. **abi may not.**
  *
- * 原因：abi 是给**外部语言绑定**（Python / MATLAB / 未来 Web）看的边界契约。
- * 那些绑定不编译 C++，只读一份逐字节的布局说明（见 `tests/ABI_LAYOUT.md`）。
- * 若 abi 头文件依赖模板库，"ABI 是什么"就被埋进了一份 C++ 实现里，
- * 外部无法独立消费——几十年来的 ABI 兼容噩梦都源于此。
+ * Reason: abi is the boundary contract read by **external language bindings** (Python
+ * / MATLAB / future Web). They do not compile C++; they read a byte-exact layout
+ * spec (see `tests/ABI_LAYOUT.md`). Burying "what the ABI is" in template-dependent
+ * C++ would leave outsiders unable to consume it -- the root of the ABI nightmare.
  *
- * 因此 abi 的约束是：
- *   - 只用 C 语言子集：POD、定长整数、无模板（`data_as` 是唯一例外，见下）
- *   - **零 core 依赖**：连 `units` 都不 include（量纲自带 `FieldDim` 表示，
- *     一致性由 `tests/abi/` 的断言守住）
- *   - 每个结构体都有版本常量与布局断言
- *   - 布局变更必须升版本号，不兼容即拒绝加载
+ * So abi's constraints are:
+ *   - C subset only: POD, fixed-width integers, no templates (`data_as` excepted, below)
+ *   - **Zero core dependencies**: not even `units` is included (a dimension carries
+ *     its own `FieldDim`; `tests/abi/` assertions guard that consistency)
+ *   - Every struct has a version constant and layout assertions
+ *   - A layout change must bump the version; an incompatible one is refused
  *
- * `data_as<T>` 是唯一的模板：它只是 `static_cast` 的语法糖，不进入 ABI，
- * 外部绑定不需要它。
+ * `data_as<T>` is the only template: sugar over `static_cast`, it never enters the
+ * ABI, and external bindings do not need it.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   本模块不依赖 core 内任何其它模块
+ * @invariant   This module depends on no other module inside core
  * @errors      noexcept
  * @complexity  —
  * @nondet      none
- * @frozen      是
+ * @frozen      yes
  * @tests       abi.version.values_are_frozen, abi.version.compatibility_matrix,
  *              abi.version.rejects_newer_major, abi.version.rejects_older_major,
  *              abi.version.accepts_newer_minor, abi.version.rejects_layout_mismatch,

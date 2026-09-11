@@ -1,17 +1,17 @@
-﻿# qp 的构建入口：一次跑完两个编译器的完整门禁
+﻿# Build entry point for qp: run the complete gate for both compilers in one go
 #
-# 为什么需要这个脚本（而不是直接敲 cmake）：
-#   1. **编译器矩阵是硬门禁**（enforcement.md §2.1）。只在一个编译器上通过
-#      不算完成——P1 阶段 MSVC 就抓到了 GCC 完全接受的非类型模板参数缺陷。
-#   2. MSVC 在中文 Windows 上会往 stderr 打大量本地化的 `/showIncludes` 提示
-#      （"注意: 包含文件: ..."）。直接看屏幕会淹掉真正的错误，必须先落日志。
-#   3. Ninja + MSVC 需要 vcvars 环境；手敲容易漏，漏了会静默换成别的工具链。
+# Why this script is needed (rather than typing cmake directly):
+#   1. **The compiler matrix is a hard gate** (enforcement.md section 2.1). Passing on only one compiler
+#      does not count -- in phase P1 MSVC caught a non-type template parameter defect GCC accepted fully.
+#   2. On a Chinese Windows, MSVC writes many localized `/showIncludes` notices to stderr
+#      ("Note: including file: ..."). Reading the screen buries the real errors; log to a file first.
+#   3. Ninja + MSVC needs a vcvars environment; hand-typing it is easy to forget, and a forgotten one silently switches toolchain.
 #
-# 用法：
-#   pwsh scripts/build.ps1                 # 两个编译器都跑
-#   pwsh scripts/build.ps1 -Only gcc       # 只跑 GCC
+# Usage:
+#   pwsh scripts/build.ps1                 # both compilers
+#   pwsh scripts/build.ps1 -Only gcc       # GCC only
 #   pwsh scripts/build.ps1 -Only msvc
-#   pwsh scripts/build.ps1 -NoTest         # 只构建不测试
+#   pwsh scripts/build.ps1 -NoTest         # build only, no tests
 [CmdletBinding()]
 param(
     [ValidateSet("all", "gcc", "msvc")]
@@ -46,12 +46,36 @@ function Invoke-Toolchain {
         Remove-Item -Recurse -Force $BuildDir
     }
 
-    # 环境准备（MSVC 需要 vcvars）与构建都落日志：MSVC 的本地化提示会淹掉错误
+    # Both environment setup (MSVC needs vcvars) and the build go to a log: MSVC's localized notices bury errors
     $cfgLog  = Join-Path $repoRoot "$BuildDir.configure.log"
     $bldLog  = Join-Path $repoRoot "$BuildDir.build.log"
     $tstLog  = Join-Path $repoRoot "$BuildDir.test.log"
 
     & $EnvSetup
+
+    # -- Pin the console code page to UTF-8 before configuring ----------------
+    #
+    # This is not cosmetic. Ninja learns a translation unit's header dependencies
+    # by matching cl.exe's `/showIncludes` output against `msvc_deps_prefix` in
+    # rules.ninja. CMake detects that prefix during compiler detection with
+    # `execute_process(ENCODING AUTO)`, which decodes the child's output using
+    # the console code page. cl.exe prints the (localized) prefix as UTF-8.
+    #
+    # If the console code page is a legacy one (437, 936, ...), CMake records
+    # mojibake instead of the prefix: the UTF-8 bytes E6 B3 A8 that begin the
+    # localized Chinese prefix are decoded one byte at a time and
+    # re-emitted as C2 B5 E2 94 82 C2 BF. Ninja then compares the wrong bytes
+    # and therefore sees no dependency at all.
+    #
+    # The failure is silent: every build succeeds, Ninja simply never learns a
+    # dependency, editing a header reports "no work to do", and the test suite
+    # runs against stale binaries. This project lost several debugging rounds to
+    # exactly that.
+    #
+    # Setting the code page here fixes it at the source: CMake now decodes what
+    # cl.exe actually wrote. scripts/check_build_deps.ps1 is the regression test
+    # and must stay green for the MSVC build directory.
+    & chcp 65001 | Out-Null
 
     $cfgArgs = @("-S", ".", "-B", $BuildDir, "-G", $Generator, "-DCMAKE_BUILD_TYPE=$BuildType")
     if ($Compiler) { $cfgArgs += "-DCMAKE_CXX_COMPILER=$Compiler" }
@@ -86,13 +110,13 @@ function Invoke-Toolchain {
     }
 }
 
-# ── GCC（MinGW-w64）──────────────────────────────────────────────────────────
+# -- GCC (MinGW-w64) ----------------------------------------------------------
 if ($Only -in @("all", "gcc")) {
     Invoke-Toolchain -Name "GCC (MinGW-w64)" -BuildDir "build" -Generator "Ninja" `
         -Compiler "g++" -EnvSetup { }
 }
 
-# ── MSVC ─────────────────────────────────────────────────────────────────────
+# -- MSVC ---------------------------------------------------------------------
 if ($Only -in @("all", "msvc")) {
     $vcvars = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\*\VC\Auxiliary\Build\vcvars64.bat" `
         -ErrorAction SilentlyContinue | Select-Object -First 1
@@ -101,7 +125,7 @@ if ($Only -in @("all", "msvc")) {
     } else {
         Invoke-Toolchain -Name "MSVC (cl)" -BuildDir "build-msvc" -Generator "Ninja" `
             -Compiler "cl" -EnvSetup {
-                # vcvars 只能在 cmd 里生效，因此用 cmd /c 包一层后再继续
+                # vcvars only takes effect inside cmd, so wrap it in cmd /c before continuing
                 cmd /c "`"$($vcvars.FullName)`" >nul 2>&1 && set" | ForEach-Object {
                     if ($_ -match '^([^=]+)=(.*)$') {
                         Set-Item -Path "env:$($matches[1])" -Value $matches[2] -ErrorAction SilentlyContinue

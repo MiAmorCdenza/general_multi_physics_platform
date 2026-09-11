@@ -1,6 +1,6 @@
 /**
  * @file registry.cpp
- * @brief 端口类型注册表的实现。
+ * @brief Implementation of the port type registry.
  */
 #include <qp/ports/registry.hpp>
 
@@ -9,7 +9,7 @@
 namespace qp::ports {
 namespace {
 
-/// @brief 构造一个标量端口描述。
+/// @brief Build a scalar port description.
 [[nodiscard]] PortTypeDesc scalar(std::string_view name, PortTypeId id, NumericKind numeric,
                                   qp::units::Dim dim) noexcept {
     PortTypeDesc d{};
@@ -21,7 +21,7 @@ namespace {
     return d;
 }
 
-/// @brief 构造一个非数值端口描述（文本、句柄等）。
+/// @brief Build a non-numeric port description (text, handle, etc.).
 [[nodiscard]] PortTypeDesc plain(std::string_view name, PortTypeId id) noexcept {
     PortTypeDesc d{};
     d.id = id;
@@ -31,7 +31,7 @@ namespace {
     return d;
 }
 
-/// @brief 构造一个场端口描述。
+/// @brief Build a field port description.
 [[nodiscard]] PortTypeDesc field(std::string_view name, PortTypeId id,
                                  std::uint8_t components) noexcept {
     PortTypeDesc d{};
@@ -39,7 +39,7 @@ namespace {
     d.name = name;
     d.numeric = NumericKind::none;
     d.constraint = DimensionConstraint::any;
-    d.field_element = 0;   // f32（见 ADR-0005：场数据一律 f32）
+    d.field_element = 0;   // f32 (see ADR-0005: field data is always f32)
     d.field_components = components;
     return d;
 }
@@ -50,9 +50,9 @@ std::vector<PortTypeDesc> make_builtin_types() {
     std::vector<PortTypeDesc> out;
     out.reserve(kBuiltinTypeCount + 12);
 
-    // ── 标量 ────────────────────────────────────────────────────────────────
-    // 量纲为 none 的标量：具体量纲由节点的端口声明覆盖；
-    // 这里的内置描述是"无特定量纲的数值"，供泛型节点使用。
+    // -- Scalars -------------------------------------------------------------
+    // Dimensionless scalars: the concrete dimension is overridden by the node's port declaration;
+    // the builtin description here is "a numeric value with no specific dimension", for generic nodes.
     out.push_back(scalar("scalar_f64", kScalarF64, NumericKind::f64, qp::units::Dim{}));
     out.push_back(scalar("scalar_f32", kScalarF32, NumericKind::f32, qp::units::Dim{}));
     out.push_back(scalar("bool", kBool, NumericKind::boolean, qp::units::Dim{}));
@@ -61,20 +61,20 @@ std::vector<PortTypeDesc> make_builtin_types() {
     out.push_back(plain("enum", kEnum));
     out.push_back(plain("dimension", kDimension));
 
-    // ── 场 ──────────────────────────────────────────────────────────────────
+    // -- Fields --------------------------------------------------------------
     out.push_back(field("scalar_field", kScalarField, 1));
     out.push_back(field("vector_field", kVectorField, 3));
     out.push_back(plain("field_table", kFieldTable));
 
-    // ── 几何与粒子 ──────────────────────────────────────────────────────────
+    // -- Geometry and particles ----------------------------------------------
     out.push_back(plain("particle_buffer", kParticleBuffer));
     out.push_back(plain("geometry", kGeometry));
 
-    // ── 测量与数据 ──────────────────────────────────────────────────────────
+    // -- Measurement and data ------------------------------------------------
     out.push_back(plain("dataset", kDataset));
     out.push_back(plain("fit_result", kFitResult));
 
-    // ── 逃生舱 ──────────────────────────────────────────────────────────────
+    // -- Escape hatch --------------------------------------------------------
     {
         PortTypeDesc d{};
         d.id = kAny;
@@ -90,8 +90,8 @@ std::vector<PortTypeDesc> make_builtin_types() {
 
 PortTypeRegistry::PortTypeRegistry() {
     for (const auto& d : make_builtin_types()) {
-        // 内置类型构造不通过 register_type：它们本就是权威定义，
-        // 走注册路径会把"宿主保留区间"的检查套在自己头上。
+        // Builtin types are not constructed through register_type: they are the authoritative
+        // definition, and the registration path would apply the "host reserved range" check to them.
         types_.push_back(d);
     }
 }
@@ -106,28 +106,28 @@ Result<void> PortTypeRegistry::register_type(const PortTypeDesc& desc) {
         return Result<void>{ErrorCode::missing_field};
     }
 
-    // 宿主保留区间：插件的 ID 必须 >= kUserTypeBase。
-    // 注意 kAny(1000) 也在保留区间内，且它是内置的——
-    // 因此这里查的是"是否已被内置占用"，而不是"数值是否小于阈值"。
+    // Host reserved range: a plugin ID must be >= kUserTypeBase.
+    // Note that kAny(1000) is also inside the reserved range and is a builtin, so what is
+    // checked here is "already taken by a builtin", not "the value is below the threshold".
     const bool is_reserved_id = desc.id < kUserTypeBase;
     const PortTypeDesc* existing = find(desc.id);
 
     if (existing != nullptr) {
-        // 幂等：同一 ID 且描述完全相同 → 允许（插件被加载两次是正常的）
+        // Idempotent: the same ID with an identical description -> allowed (a plugin loading twice is normal)
         if (existing->name == desc.name && existing->numeric == desc.numeric &&
             existing->constraint == desc.constraint &&
             existing->dimension == desc.dimension &&
             existing->field_element == desc.field_element &&
             existing->field_components == desc.field_components &&
             existing->is_any == desc.is_any) {
-            return Result<void>{};   // 无变化
+            return Result<void>{};   // no change
         }
-        // 同 ID 不同描述 → 拒绝。静默覆盖会让两个插件互相踩踏。
+        // Same ID, different description -> reject. A silent overwrite would let two plugins trample each other.
         return Result<void>{ErrorCode::duplicate_connection};
     }
 
     if (is_reserved_id) {
-        // 未占用但落在保留区间：插件不得使用宿主预留的 ID
+        // Unoccupied but inside the reserved range: a plugin must not use a host-reserved ID
         return Result<void>{ErrorCode::out_of_range};
     }
 
@@ -155,8 +155,8 @@ bool PortTypeRegistry::has_builtin(PortTypeId id) const noexcept {
 }
 
 const PortTypeRegistry& builtin_registry() noexcept {
-    // C++11 起局部静态初始化是线程安全的；且此后**不再修改**，
-    // 因此这是一份不可变共享数据，不违反"无可变全局状态"。
+    // Local static initialization has been thread-safe since C++11, and nothing modifies it
+    // afterwards, so this is immutable shared data and does not violate "no mutable global state".
     static const PortTypeRegistry instance{};
     return instance;
 }

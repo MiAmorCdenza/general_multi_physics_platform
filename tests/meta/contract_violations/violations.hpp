@@ -1,101 +1,101 @@
 /**
  * @file contract_violations.hpp
- * @brief 门禁反例样本：每条违规都必须被 check_contracts.py 抓到。
+ * @brief Contract counter-examples: every violation below must be caught by check_contracts.py.
  *
- * 本文件**不是**生产代码，只被 tests/meta/check_contract_checker.py 使用。
- * 对应 standards/enforcement.md §8：未经验证的门禁等于没有门禁。
+ * This file is **not** production code; it is used only by tests/meta/check_contract_checker.py.
+ * Corresponds to standards/enforcement.md section 8: an unverified gate is no gate at all.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   本文件内的合规样本不产生任何违规
+ * @invariant   The compliant samples in this file produce no violation
  * @errors      noexcept
  * @complexity  —
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       meta.sample.case, meta.another.case
  */
 #pragma once
 
 namespace qp::meta {
 
-// ── 反例 1：缺 @tests（应触发 C2）────────────────────────────────────────────
+    // -- counterexample 1: missing @tests (must trigger C2) -------------------
 /**
- * @brief 缺少 @tests 字段的函数。
+ * @brief A function missing its @tests field.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        返回输入
+ * @post        Returns the input
  * @errors      noexcept
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  */
 [[nodiscard]] inline int missing_tests(int x) noexcept { return x; }
 
-// ── 反例 2：@tests 引用不存在的用例（应触发 C4）──────────────────────────────
+    // -- counterexample 2: @tests names a missing case (must trigger C4) ------
 /**
- * @brief 引用了不存在的测试用例。
+ * @brief References a test case that does not exist.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        返回输入
+ * @post        Returns the input
  * @errors      noexcept
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       meta.this_test_case_does_not_exist
  */
 [[nodiscard]] inline int bad_test_id(int x) noexcept { return x; }
 
-// ── 反例 3：@errors 与 noexcept 不一致（应触发 C5）───────────────────────────
+    // -- counterexample 3: @errors vs noexcept (must trigger C5) --------------
 /**
- * @brief 声称 noexcept 但签名允许抛出。
+ * @brief Claims noexcept while the signature may throw.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        返回输入
+ * @post        Returns the input
  * @errors      noexcept
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       meta.sample.case
  */
 [[nodiscard]] inline int noexcept_mismatch(int x) { return x; }
 
-// ── 反例 4：@ownership 取值非法（应触发 C3）─────────────────────────────────
+    // -- counterexample 4: illegal @ownership value (must trigger C3) --------
 /**
- * @brief ownership 写了个不存在的取值。
+ * @brief ownership carries a value that does not exist.
  *
  * @ownership   whatever
  * @thread      any
  * @pre         none
- * @post        返回输入
+ * @post        Returns the input
  * @errors      noexcept
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       meta.sample.case
  */
 [[nodiscard]] inline int bad_ownership(int x) noexcept { return x; }
 
-// ── 正例：完全合规，不应产生任何违规 ────────────────────────────────────────
+    // -- positive sample: compliant, no violation (must trigger nothing) -----
 /**
- * @brief 合规样本，用于确认门禁不会误报。
+ * @brief A compliant sample, confirming that the gate does not cry wolf.
  *
  * @ownership   pure
  * @thread      any
- * @pre         x 为任意整数
- * @post        返回 x
- * @invariant   无
+ * @pre         x is any integer
+ * @post        Returns x
+ * @invariant   none
  * @errors      noexcept
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       meta.sample.case
  */
 [[nodiscard]] inline int good_sample(int x) noexcept { return x; }

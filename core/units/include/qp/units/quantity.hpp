@@ -1,23 +1,23 @@
 /**
  * @file quantity.hpp
- * @brief 带量纲的数值：编译期强制量纲正确的算术。
+ * @brief A value with a dimension: arithmetic whose dimensions the compiler enforces.
  *
- * 设计要点（对应章程 §4.2 与 ADR-0001）：
- *   - 量纲是**类型的一部分**，不是运行时字段。写错量纲 = 编译失败。
- *   - 不提供到标量的隐式转换。想拿裸数值必须显式 `.value()`——
- *     这一步就是"我在放弃量纲保护"的确认动作。
+ * Design points (charter §4.2 and ADR-0001):
+ *   - The dimension is **part of the type**, not a runtime field. A wrong dimension = a compile error.
+ *   - No implicit conversion to a scalar. Getting the bare number requires an explicit `.value()` --
+ *     that step is the confirmation "I am giving up dimension protection".
  *
- * @frozen 本文件的类模板形状冻结；新增成员函数属于兼容扩展。
+ * @frozen The class template shape in this file is frozen; new member functions are compatible additions.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   同量纲可运算、跨量纲不可运算（编译期强制）
+ * @invariant   Same dimensions can be combined, different dimensions cannot (enforced at compile time)
  * @errors      noexcept
- * @complexity  —
+ * @complexity  --
  * @nondet      none
- * @frozen      是（`Quantity` 的类模板形状与 `value()` 语义）
+ * @frozen      yes (`Quantity`'s class template shape and `value()` semantics)
  * @tests       units.quantity.energy_equivalence
  */
 #pragma once
@@ -30,19 +30,19 @@
 namespace qp::units {
 
 /**
- * @brief 一个带量纲的标量。
+ * @brief A scalar that carries a dimension.
  *
- * @tparam D 量纲。数值语义为"以 SI 基本单位表示的值"。
+ * @tparam D The dimension. The numeric semantics are "the value expressed in SI base units".
  *
- * @ownership   pure（值类型，可平凡复制）
+ * @ownership   pure (a value type, trivially copyable)
  * @thread      any
  * @pre         none
- * @post        value() 返回构造时的裸数值，不做任何换算
- * @invariant   同类型可加；不同类型不可加（编译期拒绝）
- * @errors      noexcept；无失败模式
+ * @post        value() returns the bare number as constructed, with no conversion
+ * @invariant   The same type can be added; different types cannot (rejected at compile time)
+ * @errors      noexcept; no failure mode
  * @complexity  O(1)
  * @nondet      none
- * @frozen      是——类模板形状与 value() 语义冻结
+ * @frozen      yes -- the class template shape and value() semantics are frozen
  * @tests       units.quantity.construct, units.quantity.value_roundtrip,
  *              units.quantity.add_same_dim, units.quantity.sub_same_dim,
  *              units.quantity.mul_dim_adds, units.quantity.div_dim_subtracts,
@@ -57,79 +57,79 @@ public:
     static constexpr Dim dim = D;
 
     /**
-     * @brief 默认构造为 0。
+     * @brief Default-constructs to 0.
      *
      * @ownership   pure
      * @thread      any
      * @pre         none
      * @post        value() == 0.0
-     * @invariant   0 是唯一与量纲无关的数值
+     * @invariant   0 is the only value independent of the dimension
      * @errors      noexcept
      * @complexity  O(1)
      * @nondet      none
-     * @frozen      否
+     * @frozen      no
      */
     constexpr Quantity() noexcept = default;
 
     /**
-     * @brief 从裸数值构造。数值以 SI 基本单位解释。
+     * @brief Construct from a bare number. The number is interpreted in SI base units.
      *
      * @ownership   pure
      * @thread      any
      * @pre         none
      * @post        value() == v
-     * @invariant   不提供隐式转换：`Length x = 3.0;` 必须编译失败
+     * @invariant   No implicit conversion is provided: `Length x = 3.0;` must fail to compile
      * @errors      noexcept
      * @complexity  O(1)
      * @nondet      none
-     * @frozen      是（explicit 这一性质冻结）
+     * @frozen      yes (the explicit property is frozen)
      */
     explicit constexpr Quantity(double v) noexcept : v_(v) {}
 
     /**
-     * @brief 就地写入裸数值（复用对象，避免分配）。
+     * @brief Write the bare number in place (reusing the object, avoiding an allocation).
      *
-     * @ownership   pure（修改自身）
+     * @ownership   pure (modifies itself)
      * @thread      any
      * @pre         none
      * @post        value() == v
-     * @invariant   量纲不变
+     * @invariant   The dimension is unchanged
      * @errors      noexcept
      * @complexity  O(1)
      * @nondet      none
-     * @frozen      否
+     * @frozen      no
      * @tests       units.quantity.set_updates_value
      */
     constexpr void set(double v) noexcept { v_ = v; }
 
     /**
-     * @brief 取裸数值。
+     * @brief Read the bare number.
      *
      * @ownership   pure
      * @thread      any
      * @pre         none
-     * @post        返回值等于最近一次构造或 set 的实参
-     * @invariant   value(Quantity(x)) == x（对任意有限 x）
+     * @post        The returned value equals the argument of the latest construction or set
+     * @invariant   value(Quantity(x)) == x (for any finite x)
      * @errors      noexcept
      * @complexity  O(1)
      * @nondet      none
-     * @frozen      是
+     * @frozen      yes
      * @tests       units.quantity.value_roundtrip
      */
     [[nodiscard]] constexpr double value() const noexcept { return v_; }
 
     /**
-     * @brief 是否为有限值。数值内核在钳制前用它判定（章程 C2）。
+     * @brief Whether the value is finite. The numeric kernel tests this before clamping (charter C2).
      *
      * @ownership   pure
      * @thread      any
      * @pre         none
-     * @post        true 当且仅当 value() 既非 inf 也非 NaN
-     * @invariant   与 std::isfinite(value()) 恒等
+     * @post        true if and only if value() is neither inf nor NaN
+     * @invariant   Identical to std::isfinite(value())
      * @errors      noexcept
      * @complexity  O(1)
      * @nondet      none
-     * @frozen      否
+     * @frozen      no
      * @tests       units.quantity.is_finite
      */
     [[nodiscard]] bool is_finite() const noexcept { return std::isfinite(v_); }
@@ -138,20 +138,20 @@ private:
     double v_ = 0.0;
 };
 
-// ── 加减：仅同量纲 ───────────────────────────────────────────────────────────
+// -- Add and subtract: same dimension only ------------------------------------
 
 /**
- * @brief 同量纲相加。
+ * @brief Add two values of the same dimension.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        返回 Quantity<D>，数值为两者之和
- * @invariant   交换律；结合律；(a + b) - b == a（浮点容差外精确成立仅当无舍入）
+ * @post        Returns Quantity<D> holding the sum of the two
+ * @invariant   Commutative; associative; (a + b) - b == a (exact only when no rounding occurs)
  * @errors      noexcept
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       units.quantity.add_same_dim
  */
 template <auto D>
@@ -160,17 +160,17 @@ template <auto D>
 }
 
 /**
- * @brief 同量纲相减。
+ * @brief Subtract two values of the same dimension.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        返回 Quantity<D>，数值为两者之差
- * @invariant   a - a 的数值为 0.0
+ * @post        Returns Quantity<D> holding the difference of the two
+ * @invariant   The value of a - a is 0.0
  * @errors      noexcept
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       units.quantity.sub_same_dim
  */
 template <auto D>
@@ -179,17 +179,17 @@ template <auto D>
 }
 
 /**
- * @brief 取负。
+ * @brief Negate.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        数值取反，量纲不变
+ * @post        The number is negated, the dimension is unchanged
  * @invariant   -(-a) == a
  * @errors      noexcept
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       units.quantity.negate
  */
 template <auto D>
@@ -197,20 +197,20 @@ template <auto D>
     return Quantity<D>{-a.value()};
 }
 
-// ── 乘除：量纲运算 ───────────────────────────────────────────────────────────
+// -- Multiply and divide: dimension arithmetic --------------------------------
 
 /**
- * @brief 相乘：数值相乘，量纲相加。
+ * @brief Multiply: the numbers multiply, the dimensions add.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        结果量纲为 L + R；数值为精确乘积
- * @invariant   交换律、结合律
+ * @post        The result dimension is L + R; the number is the exact product
+ * @invariant   Commutative, associative
  * @errors      noexcept
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       units.quantity.mul_dim_adds, units.quantity.mul_commutative,
  *              units.quantity.mul_associative
  */
@@ -220,17 +220,17 @@ template <auto L, auto R>
 }
 
 /**
- * @brief 相除：数值相除，量纲相减。
+ * @brief Divide: the numbers divide, the dimensions subtract.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        结果量纲为 L / R
- * @invariant   (a / b) * b 的量纲与 a 相同
- * @errors      noexcept；b 为零时按 IEEE 754 产生 inf/nan，不抛异常
+ * @post        The result dimension is L / R
+ * @invariant   (a / b) * b has the same dimension as a
+ * @errors      noexcept; a zero b produces inf/nan per IEEE 754, no exception
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       units.quantity.div_dim_subtracts
  */
 template <auto L, auto R>
@@ -238,7 +238,7 @@ template <auto L, auto R>
     return Quantity<L / R>{a.value() / b.value()};
 }
 
-/// @brief 与无量纲标量相乘。标量不改变量纲。
+/// @brief Multiply by a dimensionless scalar. A scalar does not change the dimension.
 template <auto D>
 [[nodiscard]] constexpr Quantity<D> operator*(Quantity<D> a, double s) noexcept {
     return Quantity<D>{a.value() * s};
@@ -247,21 +247,21 @@ template <auto D>
 [[nodiscard]] constexpr Quantity<D> operator*(double s, Quantity<D> a) noexcept {
     return Quantity<D>{s * a.value()};
 }
-/// @brief 与无量纲标量相除。
+/// @brief Divide by a dimensionless scalar.
 template <auto D>
 [[nodiscard]] constexpr Quantity<D> operator/(Quantity<D> a, double s) noexcept {
     return Quantity<D>{a.value() / s};
 }
 
-// ── 幂：量纲按整数次幂缩放 ───────────────────────────────────────────────────
+// -- Power: the dimension scales by an integer exponent -----------------------
 
 namespace detail {
 
-/// @brief 整数次幂，constexpr 友好（平方求幂，不用 std::pow）。
+/// @brief Integer power, constexpr-friendly (exponentiation by squaring, no std::pow).
 ///
-/// 与 std::pow 的差异：整数幂用重复乘法，**不引入 libm 的精度损失**，
-/// 且可出现在常量表达式中。浮点结合律不成立，因此这里固定求值顺序，
-/// 保证同一编译器下 pow<N>(x) 可复现（章程 R2 的精神）。
+/// Difference from std::pow: an integer power uses repeated multiplication, so it **introduces no
+/// libm precision loss** and may appear in a constant expression. Floating-point multiplication is
+/// not associative, so the evaluation order is fixed here to keep pow<N>(x) reproducible (charter R2).
 [[nodiscard]] constexpr double int_pow(double base, int exp) noexcept {
     if (exp == 0) return 1.0;
     const bool negative = exp < 0;
@@ -280,17 +280,17 @@ namespace detail {
 }  // namespace detail
 
 /**
- * @brief 整数次幂。
+ * @brief Integer power.
  *
  * @ownership   pure
  * @thread      any
- * @pre         P 为编译期整数
- * @post        量纲为 D 的 P 次幂；数值为 a 的 P 次幂
- * @invariant   pow<1>(a) == a；pow<0>(a) 为无量纲 1；pow<2>(a) 量纲为 D*D
- * @errors      noexcept；P<0 且 a==0 时按 IEEE 754 产生 inf，不抛异常
+ * @pre         P is a compile-time integer
+ * @post        The dimension is D to the P; the number is a to the P
+ * @invariant   pow<1>(a) == a; pow<0>(a) is the dimensionless 1; pow<2>(a) has dimension D*D
+ * @errors      noexcept; P<0 with a==0 produces inf per IEEE 754, no exception
  * @complexity  O(log|P|)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       units.quantity.pow_two, units.quantity.pow_zero,
  *              units.quantity.pow_constexpr, units.quantity.pow_is_deterministic,
  *              units.quantity.pow_matches_repeated_multiplication
@@ -305,20 +305,20 @@ template <int P, auto D>
 }
 
 /**
- * @brief 平方根：量纲指数减半。
+ * @brief Square root: the dimension exponents are halved.
  *
- * 注意：只有当所有指数均为偶数时量纲才合法。本函数不做检查——
- * 调用点必须用 constexpr 断言保证。见 spec.md 待决项。
+ * Note: the dimension is only legal when every exponent is even. This function does not check --
+ * the call site must guarantee it with a constexpr assertion. See the open item in spec.md.
  *
  * @ownership   pure
  * @thread      any
- * @pre         D 的所有指数均为偶数
- * @post        量纲指数为 D 的一半；数值为 sqrt(a)
- * @invariant   sqrt_unchecked(pow<2>(x)) == x（浮点容差内）
- * @errors      noexcept；负数为 NaN，不抛异常
+ * @pre         Every exponent of D is even
+ * @post        The dimension exponents are half of D; the number is sqrt(a)
+ * @invariant   sqrt_unchecked(pow<2>(x)) == x (within floating-point tolerance)
+ * @errors      noexcept; a negative number gives NaN, no exception
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       units.quantity.sqrt_unchecked
  */
 template <auto D>
@@ -326,20 +326,20 @@ template <auto D>
     return Quantity<D>{std::sqrt(a.value())};
 }
 
-// ── 比较：仅同量纲 ───────────────────────────────────────────────────────────
+// -- Comparison: same dimension only ------------------------------------------
 
 /**
- * @brief 同量纲比较。
+ * @brief Compare values of the same dimension.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        按数值大小返回布尔
- * @invariant   全序（数值为 NaN 时除外，遵循 IEEE 754）
+ * @post        Returns a boolean according to the numeric order
+ * @invariant   A total order (except for NaN, which follows IEEE 754)
  * @errors      noexcept
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       units.quantity.comparison
  */
 template <auto D>

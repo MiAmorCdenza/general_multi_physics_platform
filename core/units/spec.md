@@ -226,16 +226,16 @@ constexpr Quantity<L * R> operator*(Quantity<L> a, Quantity<R> b) noexcept;
 
 | 类别 | 内容 | 位置 | 状态 |
 |---|---|---|---|
-| 1 单元 | `Dim` 代数、`Quantity` 算术、字面量换算 | `tests/unit/units/` | ✅ 已运行 |
-| 2 静态契约 | 尺寸/对齐/平凡可复制/`kUnitsAbiVersion` | `test_dim.cpp` | ✅ |
-| 3 性质 | 交换律、结合律、单位元、幂复合、确定性 | 各文件 `[property]` tag | ✅ 固定样本集（RapidCheck 待接入）|
-| 4 黄金回归 | 单位字符串逐字对照 + 工具链前提 | `tests/golden/units/`、`test_floating_point_env.cpp` | ✅ |
-| 5 确定性 | `pow` 同输入同输出 | `test_quantity.cpp` | ✅ |
+| 1 单元 | `Dim` 代数、`Quantity` 算术、字面量换算 | `tests/unit/units/` | [OK] 已运行 |
+| 2 静态契约 | 尺寸/对齐/平凡可复制/`kUnitsAbiVersion` | `test_dim.cpp` | [OK] |
+| 3 性质 | 交换律、结合律、单位元、幂复合、确定性 | 各文件 `[property]` tag | [OK] 固定样本集（RapidCheck 待接入）|
+| 4 黄金回归 | 单位字符串逐字对照 + 工具链前提 | `tests/golden/units/`、`test_floating_point_env.cpp` | [OK] |
+| 5 确定性 | `pow` 同输入同输出 | `test_quantity.cpp` | [OK] |
 | 6 性能 | — | — | 不适用（全 constexpr）|
 | 7 模糊 | — | — | 不适用 |
 | 8 契约合规套件 | — | — | 不适用（本模块不定义插件接口）|
-| 门禁 | 契约完备性 + 门禁自检 | `scripts/check_contracts.py`、`tests/meta/` | ✅ |
-| 编译矩阵 | GCC 15.2（i686）+ MSVC 19.51（x64） | 本地 | ✅ 双 70/70 |
+| 门禁 | 契约完备性 + 门禁自检 | `scripts/check_contracts.py`、`tests/meta/` | [OK] |
+| 编译矩阵 | GCC 15.2（i686）+ MSVC 19.51（x64） | 本地 | [OK] 双 70/70 |
 
 **统计**：62 个 `TEST_CASE`、1326 条断言、CTest 注册 70 项（含 8 个聚合项）。
 
@@ -257,7 +257,7 @@ constexpr Quantity<L * R> operator*(Quantity<L> a, Quantity<R> b) noexcept;
 | 门禁可执行且自身受测 | `tests/meta/` 证明 C2–C5 四类违规必被抓到 |
 | 跨编译器 | GCC 15.2 与 MSVC 19.51 双 70/70 |
 | 单位字符串唯一来源 | 黄金测试逐字对照通过 |
-| 规范本身可用 | 本文件 + 头文件内契约证明「①类型→②签名→③函数契约→④实现→⑤测试」可执行 |
+| 规范本身可用 | 本文件 + 头文件内契约证明「(1)类型→(2)签名→(3)函数契约→(4)实现→(5)测试」可执行 |
 
 ### P1 期间被测试抓出的真实缺陷（8 个）
 

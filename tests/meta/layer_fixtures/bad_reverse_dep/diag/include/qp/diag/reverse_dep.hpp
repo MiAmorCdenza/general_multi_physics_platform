@@ -1,10 +1,10 @@
 /**
  * @file reverse_dep.hpp
- * @brief 反例样本：core 依赖了消费者（views）。必须被 L4 抓到。
+ * @brief Negative sample: core depends on a consumer (views). L4 must catch it.
  */
 #pragma once
 
-#include <views/nodegraph/editor.hpp>   // 非法：core 不得依赖 views
+#include <views/nodegraph/editor.hpp>   // illegal: core must not depend on views
 
 namespace qp::layerfixture::bad_reverse {
 

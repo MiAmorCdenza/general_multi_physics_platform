@@ -1,6 +1,6 @@
 /**
  * @file qp/units.hpp
- * @brief units 模块的唯一入口。
+ * @brief The single entry point of the units module.
  */
 #pragma once
 
@@ -12,7 +12,7 @@
 
 namespace qp::units {
 
-/// @brief 量纲系统的 ABI 版本。`Dim` 的布局或指数含义变更时必须递增。
+/// @brief ABI version of the dimension system. Bump when `Dim` layout or exponents change.
 inline constexpr int kUnitsAbiVersion = 1;
 
 }  // namespace qp::units

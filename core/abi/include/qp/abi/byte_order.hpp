@@ -1,16 +1,16 @@
 /**
  * @file byte_order.hpp
- * @brief 字节序声明。ABI 只支持小端。
+ * @brief Byte-order declaration. The ABI supports little-endian only.
  *
- * 为什么把这件事**显式声明**而不是"假设大家都是小端"：
- *   场数据动辄 19MB，做字节序转换是不可接受的成本；
- *   但"默默假设"会在移植到大端平台时变成静默的数据损坏。
+ * Why **declare this explicitly** instead of "assuming everyone is little-endian":
+ *   field data runs to 19MB, so byte swapping is an unacceptable cost;
+ *   but a silent assumption becomes silent data corruption on a big-endian port.
  *
- * 因此：编译期检测，非小端平台直接编译失败。
- * 若将来真要支持大端，正确做法是新增一个显式的转换层并升 kAbiMajor，
- * 而不是在热路径里加条件分支。
+ * Therefore: detect at compile time, and fail the build on a non-little-endian target.
+ * If big-endian support is ever really needed, the right move is a new explicit
+ * conversion layer plus a kAbiMajor bump, not a branch in the hot path.
  *
- * @frozen 是
+ * @frozen yes
  */
 #pragma once
 
@@ -18,14 +18,14 @@ namespace qp::abi {
 
 #if defined(__BYTE_ORDER__) && defined(__ORDER_BIG_ENDIAN__) && \
     (__BYTE_ORDER__ == __ORDER_BIG_ENDIAN__)
-#error "qp ABI 只支持小端（little-endian）。大端平台需要显式的转换层并升 kAbiMajor。"
+#error "qp ABI supports little-endian only. Big-endian needs an explicit conversion layer and a kAbiMajor bump."
 #endif
 
 #if defined(_M_PPC) || defined(__s390x__) || defined(__sparc__)
-#error "qp ABI 只支持小端（little-endian）。检测到已知的大端目标平台。"
+#error "qp ABI supports little-endian only. A known big-endian target was detected."
 #endif
 
-/// @brief 本 ABI 假定的小端标记。供外部语言绑定在握手时校验。
+/// @brief The little-endian flag this ABI assumes. For external language bindings to
 inline constexpr bool kLittleEndian = true;
 
 }  // namespace qp::abi

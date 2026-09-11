@@ -1,27 +1,27 @@
 /**
  * @file literals.hpp
- * @brief 用户自定义字面量：`5.0_m`、`9.8_m_s2`、`250.0_mm` 等。
+ * @brief User-defined literals: `5.0_m`, `9.8_m_s2`, `250.0_mm` and so on.
  *
- * 定位说明（重要）：
- *   字面量只是**语法糖**，它绑定在字面量上——变量、表达式结果都用不上它。
- *   真正防止量纲错误的是 `Quantity<D>` 的类型系统本身。
- *   本文件的作用是让"写常量"这件事顺口，不是安全机制。
+ * Positioning (important):
+ *   A literal is only **syntax sugar** bound to the literal itself -- variables and expression
+ *   results cannot use it. What actually prevents dimension errors is the `Quantity<D>` type system.
+ *   This file makes "writing a constant" read naturally; it is not a safety mechanism.
  *
- * 换算约定：
- *   - C++ 规定浮点字面量运算符只能接 `long double`。
- *   - 所有换算都在 `long double` 下完成，**最后一步**用 `from_long_double()`
- *     显式收窄为 double。这是全文件唯一的收窄点，集中且可审计。
- *   - 换算因子一律写作 double，避免 `1000.0L` 这种混精度的隐式提升。
+ * Conversion conventions:
+ *   - C++ requires a floating-point literal operator to take `long double`.
+ *   - Every conversion is done in `long double`, and only the **final step** narrows to double
+ *     through `from_long_double()`: the only narrowing point in the file, centralized and auditable.
+ *   - Conversion factors are always written as double, avoiding `1000.0L` mixed-precision promotion.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   换算结果与 SI 基本单位一致（250.0_mm 的数值为 0.25）
+ * @invariant   The converted result matches SI base units (250.0_mm has the value 0.25)
  * @errors      noexcept
- * @complexity  —
+ * @complexity  --
  * @nondet      none
- * @frozen      否（字面量集合可扩）
+ * @frozen      no (the literal set is extensible)
  * @tests       units.literals.base_units, units.literals.engineering_prefixes,
  *              units.literals.derived_units
  */
@@ -33,14 +33,14 @@ namespace qp::units::literals {
 
 namespace detail {
 
-/// @brief 全文件唯一的 long double → double 收窄点。
+/// @brief The file's only long double -> double narrowing point.
 [[nodiscard]] constexpr double from_long_double(long double v) noexcept {
     return static_cast<double>(v);
 }
 
 }  // namespace detail
 
-// ── 基本量 ───────────────────────────────────────────────────────────────────
+// -- Base quantities ----------------------------------------------------------
 [[nodiscard]] constexpr Length operator""_m(long double v) noexcept {
     return Length{detail::from_long_double(v)};
 }
@@ -57,7 +57,7 @@ namespace detail {
     return Temperature{detail::from_long_double(v)};
 }
 
-// ── 常用换算（课堂测量里真实会写的单位） ─────────────────────────────────────
+// -- Common conversions (units a classroom measurement really writes) ---------
 [[nodiscard]] constexpr Length operator""_mm(long double v) noexcept {
     return Length{detail::from_long_double(v) / 1000.0};
 }
@@ -80,7 +80,7 @@ namespace detail {
     return Time{detail::from_long_double(v) * 60.0};
 }
 
-// ── 复合量 ───────────────────────────────────────────────────────────────────
+// -- Derived quantities -------------------------------------------------------
 [[nodiscard]] constexpr Velocity operator""_m_s(long double v) noexcept {
     return Velocity{detail::from_long_double(v)};
 }

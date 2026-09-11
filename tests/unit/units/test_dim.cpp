@@ -1,9 +1,9 @@
 /**
  * @file test_dim.cpp
- * @brief units 模块 §Dim 的单元与性质测试。
+ * @brief Unit and property tests for §Dim of the units module.
  *
- * 用例 id 与 core/units/include/qp/units/dim.hpp 的 @tests 字段逐字对应。
- * 由 scripts/check_contracts.py 机械校验（见 standards/enforcement.md §5）。
+ * The case ids correspond verbatim to the @tests fields in core/units/include/qp/units/dim.hpp.
+ * They are checked mechanically by scripts/check_contracts.py (see standards/enforcement.md §5).
  */
 #include <catch2/catch_test_macros.hpp>
 
@@ -14,7 +14,7 @@
 
 using namespace qp::units;
 
-// ── 静态布局契约（对应 @frozen）───────────────────────────────────────────
+// -- Static layout contract (corresponds to @frozen) -----------------------
 
 TEST_CASE("units.dim.layout", "[units][abi]") {
     STATIC_REQUIRE(std::is_trivially_copyable_v<Dim>);
@@ -23,28 +23,28 @@ TEST_CASE("units.dim.layout", "[units][abi]") {
     STATIC_REQUIRE(alignof(Dim) == 1);
     STATIC_REQUIRE(sizeof(DimExp) == 1);
     STATIC_REQUIRE(kUnitsAbiVersion == 1);
-    // 成员顺序是 ABI：m kg s A K mol cd
+    // The member order is ABI: m kg s A K mol cd
     STATIC_REQUIRE(std::is_same_v<decltype(Dim::L), DimExp>);
 }
 
-// ── 判据 ─────────────────────────────────────────────────────────────────────
+// -- Predicates ---------------------------------------------------------------
 
 TEST_CASE("units.dim.equality", "[units]") {
     STATIC_REQUIRE(Dim{1, 0, 0, 0, 0, 0, 0} == Dim{1, 0, 0, 0, 0, 0, 0});
     STATIC_REQUIRE(Dim{1, 0, 0, 0, 0, 0, 0} != Dim{0, 1, 0, 0, 0, 0, 0});
     STATIC_REQUIRE(Dim{} == Dim::none());
     STATIC_REQUIRE(dims::length != dims::mass);
-    STATIC_REQUIRE(dims::energy == dims::torque);        // 同量纲，异语义
-    STATIC_REQUIRE(dims::frequency == dims::angular_velocity);  // rad 视为无量纲
+    STATIC_REQUIRE(dims::energy == dims::torque);        // same dimension, different meaning
+    STATIC_REQUIRE(dims::frequency == dims::angular_velocity);  // rad is treated as dimensionless
 }
 
 TEST_CASE("units.dim.dimensionless_predicate", "[units]") {
-    // 真正无量纲：全部指数为 0
+    // Truly dimensionless: every exponent is 0
     STATIC_REQUIRE(Dim{}.is_dimensionless());
     STATIC_REQUIRE(Dim::none().is_dimensionless());
     STATIC_REQUIRE(dims::length.is_dimensionless() == false);
     STATIC_REQUIRE(dims::area.is_dimensionless() == false);
-    // 指数相互抵消**不等于**无量纲：L^1 * T^-1 是有量纲的（速度）
+    // Exponents cancelling out is **not** dimensionless: L^1 * T^-1 is dimensional (velocity)
     STATIC_REQUIRE((Dim{1, 0, -1, 0, 0, 0, 0}.is_dimensionless()) == false);
     STATIC_REQUIRE((Dim{1, -1, 0, 0, 0, 0, 0}.is_dimensionless()) == false);
     STATIC_REQUIRE((Dim{-1, 1, 0, 0, 0, 0, 0}.is_dimensionless()) == false);
@@ -52,15 +52,15 @@ TEST_CASE("units.dim.dimensionless_predicate", "[units]") {
 
 TEST_CASE("units.dim.zero_exponent_sum", "[units]") {
     STATIC_REQUIRE(Dim{}.has_zero_exponent_sum());
-    // 速度：L=1, T=-1 → 和 0
+    // Velocity: L=1, T=-1 -> sum 0
     STATIC_REQUIRE((Dim{1, 0, -1, 0, 0, 0, 0}.has_zero_exponent_sum()));
-    // L*M/T^2：1+1-2 = 0 → 也判为和为零，但这显然是力，有量纲
+    // L*M/T^2: 1+1-2 = 0 -> also judged a zero sum, but this is obviously force, which is dimensional
     STATIC_REQUIRE((Dim{1, 1, -2, 0, 0, 0, 0}.has_zero_exponent_sum()));
     STATIC_REQUIRE(dims::force.has_zero_exponent_sum());
-    // 单向蕴含：真正无量纲 ⟹ 和为零
+    // One-way implication: truly dimensionless => zero sum
     STATIC_REQUIRE(Dim{}.is_dimensionless());
     STATIC_REQUIRE(Dim{}.has_zero_exponent_sum());
-    // 反例：和有零但非无量纲 —— 证明二者不可互换
+    // Counterexample: a zero sum that is not dimensionless -- the two are not interchangeable
     STATIC_REQUIRE(dims::force.has_zero_exponent_sum());
     STATIC_REQUIRE(dims::force.is_dimensionless() == false);
 }
@@ -72,10 +72,10 @@ TEST_CASE("units.dim.representable", "[units]") {
                    false);
 }
 
-// ── 加减：逐分量精确 ─────────────────────────────────────────────────────────
+// -- Add and subtract: exact per component ------------------------------------
 
 TEST_CASE("units.dim.add_exact", "[units]") {
-    // Dim 的 operator+ 与 operator* 是同一运算（指数相加）的两种拼写。
+    // Dim's operator+ and operator* are two spellings of the same operation (adding exponents).
     STATIC_REQUIRE(dims::length + dims::length == Dim{2, 0, 0, 0, 0, 0, 0});
     STATIC_REQUIRE(dims::length + dims::mass == Dim{1, 1, 0, 0, 0, 0, 0});
     STATIC_REQUIRE(dims::velocity + dims::time == dims::length);
@@ -119,7 +119,7 @@ TEST_CASE("units.dim.multiply_exact", "[units]") {
     STATIC_REQUIRE(dims::acceleration * dims::mass == dims::force);
     STATIC_REQUIRE(dims::current * dims::time == dims::charge);
     STATIC_REQUIRE(dims::force * dims::length == dims::energy);
-    // 分量精确性（运行期路径）
+    // Component exactness (the runtime path)
     constexpr Dim samples[] = {dims::length, dims::mass, dims::time, dims::current};
     for (Dim a : samples) {
         for (Dim b : samples) {
@@ -147,10 +147,10 @@ TEST_CASE("units.dim.negate", "[units]") {
     STATIC_REQUIRE(dim_inverse(Dim{}) == Dim{});
 }
 
-// ── 性质：代数律 ─────────────────────────────────────────────────────────────
+// -- Properties: algebraic laws -----------------------------------------------
 
-// 注：P1 阶段使用固定样本集验证代数律。接入 RapidCheck 后（依赖门禁 §1）
-// 本用例应改为 RC_GTEST_PROP 形式，**用例 id 不变**（契约承诺的是性质，不是实现方式）。
+// Note: P1 validates the algebraic laws with a fixed sample set. After RapidCheck is wired in
+// (dependency gate §1) these cases become RC_GTEST_PROP with **unchanged case ids** (a contract promises a property, not a mechanism).
 
 TEST_CASE("units.dim.multiply_commutative", "[units][property]") {
     constexpr Dim samples[] = {Dim{},

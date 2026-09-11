@@ -1,11 +1,11 @@
 /**
  * @file lattice.hpp
- * @brief 采样格子的 ABI 描述：场数据长什么样。
+ * @brief ABI description of the sampling lattice: what the field data looks like.
  *
- * 这是"一张场"的**元数据**，不是数据本身。数据在 `FieldBuffer` 里。
- * 两者分离的理由：元数据极小（可随意复制），数据极大（必须零拷贝）。
+ * This is the **metadata** of one field, not the data itself. The data lives in `FieldBuffer`.
+ * Why the two are separate: metadata is tiny (copy it freely), data is huge (it must stay zero-copy).
  *
- * @frozen 是——布局是 ABI 契约。
+ * @frozen yes -- the layout is an ABI contract.
  */
 #pragma once
 
@@ -15,37 +15,37 @@
 
 namespace qp::abi {
 
-/// @brief 格子类型。决定 `data_bytes` 怎么算。
+/// @brief Lattice kind. Determines how `data_bytes` is computed.
 enum class LatticeKind : std::uint8_t {
-    /// 不在格子上：单个值（点测量、标量参数）。
+    /// Not on a lattice: a single value (point measurement, scalar parameter).
     point = 0,
-    /// 1 维数组：`count[0]` 个采样点。
+    /// 1-D array: `count[0]` sample points.
     line = 1,
-    /// 2 维网格：`count[0] × count[1]`。
+    /// 2-D grid: `count[0] x count[1]`.
     plane = 2,
-    /// 3 维网格：`count[0] × count[1] × count[2]`。
+    /// 3-D grid: `count[0] x count[1] x count[2]`.
     volume = 3,
 };
 
-/// @brief 场的分量类型。
+/// @brief Component kind of the field.
 enum class ComponentKind : std::uint8_t {
-    scalar = 0,   ///< 每点 1 个 float32
-    vector = 1,   ///< 每点 3 个 float32（x, y, z）
+    scalar = 0,   ///< 1 float32 per point
+    vector = 1,   ///< 3 float32 per point (x, y, z)
 };
 
-/// @brief 数据元素的标量类型。
+/// @brief Scalar type of a data element.
 enum class ElementType : std::uint8_t {
-    f32 = 0,   ///< 4 字节浮点。场数据的默认精度（见 ADR-0005）。
-    f64 = 1,   ///< 8 字节浮点。标量测量链用。
+    f32 = 0,   ///< 4-byte float. The default precision for field data (see ADR-0005).
+    f64 = 1,   ///< 8-byte float. Used by the scalar measurement chain.
 };
 
 /**
- * @brief 采样格子的描述。
+ * @brief Description of the sampling lattice.
  *
- * 布局（小端，所有整数定长）：
+ * Layout (little endian, all integers fixed width):
  * ```
- * 偏移  长度  字段
- *    0     7  dimension   （7 个 int8）
+ * offset  length  field
+ *    0     7  dimension   (7 int8 values)
  *    7     1  component
  *    8     1  element
  *    9     1  kind
@@ -53,46 +53,46 @@ enum class ElementType : std::uint8_t {
  *   12     4  count[0]
  *   16     4  count[1]
  *   20     4  count[2]
- *   24     4  spacing_bytes   （每个采样点的间距 = 分量数 × 元素大小）
+ *   24     4  spacing_bytes   (stride per sample point = component count x element size)
  *   28     4  _reserved
- * 共 32 字节，alignof == 4
+ * 32 bytes total, alignof == 4
  * ```
  *
- * @ownership   pure（POD，可随意复制）
+ * @ownership   pure (POD, copy freely)
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   同一格子描述每次序列化得到同一字节串
+ * @invariant   the same lattice description serialises to the same byte string every time
  * @errors      noexcept
- * @frozen      是
+ * @frozen      yes
  * @tests       abi.lattice.size_and_alignment, abi.lattice.field_offsets,
  *              abi.lattice.point_count, abi.lattice.data_bytes,
  *              abi.lattice.trivially_copyable, abi.lattice.default_is_point_scalar
  */
 struct LatticeDesc final {
-    FieldDim dimension{};                                  ///< 物理量的量纲
-    ComponentKind component = ComponentKind::scalar;       ///< 标量还是矢量
-    ElementType element = ElementType::f32;                ///< 元素精度
-    LatticeKind kind = LatticeKind::point;                 ///< 几何形状
-    std::uint8_t padding = 0;                              ///< 显式填充，保持后续字段 4 字节对齐
+    FieldDim dimension{};                                  ///< Dimension of the physical quantity
+    ComponentKind component = ComponentKind::scalar;       ///< Scalar or vector
+    ElementType element = ElementType::f32;                ///< Element precision
+    LatticeKind kind = LatticeKind::point;                 ///< Geometric shape
+    std::uint8_t padding = 0;                              ///< Explicit padding; keeps later fields 4-byte aligned
 
-    std::uint32_t count[3] = {0, 0, 0};                    ///< 各维采样点数
-    std::uint32_t spacing_bytes = 0;                       ///< 每个采样点占多少字节
-    std::uint32_t reserved = 0;                            ///< 保留，必须为 0
+    std::uint32_t count[3] = {0, 0, 0};                    ///< Sample count per dimension
+    std::uint32_t spacing_bytes = 0;                       ///< Bytes occupied by one sample point
+    std::uint32_t reserved = 0;                            ///< Reserved; must be 0
 };
 
 /**
- * @brief 采样点总数。
+ * @brief Total number of sample points.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        point / line / plane / volume 分别返回 1 / c0 / c0*c1 / c0*c1*c2
- * @invariant   point 类型恒返回 1（即使 count 全为 0）
- * @errors      noexcept；溢出时按 64 位计算后截断——调用方须先检查 data_bytes 的合理性
+ * @post        point / line / plane / volume return 1 / c0 / c0*c1 / c0*c1*c2 respectively
+ * @invariant   the point kind always returns 1 (even when every count is 0)
+ * @errors      noexcept; on overflow the 64-bit result is truncated -- the caller must check data_bytes first
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       abi.lattice.point_count
  */
 [[nodiscard]] constexpr std::uint64_t point_count(const LatticeDesc& d) noexcept {
@@ -106,51 +106,51 @@ struct LatticeDesc final {
     return 0;
 }
 
-/// @brief 每个采样点包含几个 float（标量 1、矢量 3）。
+/// @brief How many floats one sample point holds (1 for scalar, 3 for vector).
 [[nodiscard]] constexpr std::uint32_t component_count(ComponentKind c) noexcept {
     return c == ComponentKind::vector ? 3U : 1U;
 }
 
-/// @brief 单个元素的字节数。
+/// @brief Size of one element in bytes.
 [[nodiscard]] constexpr std::uint32_t element_size(ElementType e) noexcept {
     return e == ElementType::f64 ? 8U : 4U;
 }
 
 /**
- * @brief 该格子所需的数据字节数。
+ * @brief Number of data bytes this lattice requires.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        等于 point_count × component_count × element_size
- * @invariant   与 LatticeDesc::spacing_bytes × point_count 一致（当 spacing 已正确填写）
+ * @post        equals point_count x component_count x element_size
+ * @invariant   matches LatticeDesc::spacing_bytes x point_count (when spacing was filled in correctly)
  * @errors      noexcept
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       abi.lattice.data_bytes
  */
 [[nodiscard]] constexpr std::uint64_t data_bytes(const LatticeDesc& d) noexcept {
     return point_count(d) * component_count(d.component) * element_size(d.element);
 }
 
-/// @brief 按本描述应有的每点间距。
+/// @brief The per-point stride this description should have.
 [[nodiscard]] constexpr std::uint32_t expected_spacing(const LatticeDesc& d) noexcept {
     return component_count(d.component) * element_size(d.element);
 }
 
 /**
- * @brief 描述是否自洽。宿主在采用外部传入的格子前必须调用。
+ * @brief Whether the description is self-consistent. The host must call this before adopting an outside lattice.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        检查 reserved 为 0、spacing 与分量/精度一致、维数计数合法
- * @invariant   自洽的描述不会导致越界读取
+ * @post        checks that reserved is 0, spacing matches component/precision, and dimension counts are legal
+ * @invariant   a self-consistent description cannot cause an out-of-bounds read
  * @errors      noexcept
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       abi.lattice.consistency_check
  */
 [[nodiscard]] constexpr bool is_consistent(const LatticeDesc& d) noexcept {
@@ -175,7 +175,7 @@ struct LatticeDesc final {
     return true;
 }
 
-/// @brief 构造一个自洽的格子描述（自动填 spacing）。
+/// @brief Build a self-consistent lattice description (fills in spacing automatically).
 [[nodiscard]] constexpr LatticeDesc make_lattice(LatticeKind kind, ComponentKind component,
                                                  ElementType element, FieldDim dim,
                                                  std::uint32_t n0 = 0, std::uint32_t n1 = 0,

@@ -1,8 +1,8 @@
-﻿# core：地基 + 图 + 运行时 + 视图服务
+﻿# core: foundation + graph + runtime + view services
 #
-# 铁律（standards/enforcement.md §4）：
-#   core 下不得出现任何 Qt 头文件，不得依赖 views/ 或 plugins/。
-#   本目录必须能在 QP_BUILD_VIEWS=OFF 且未安装 Qt 的机器上完整构建并通过测试。
+# Iron rule (standards/enforcement.md section 4):
+#   No Qt header may appear anywhere under core, and core must not depend on
+#   views/ or plugins/. This directory must build and pass tests with QP_BUILD_VIEWS=OFF
 
 add_subdirectory(units)
 add_subdirectory(diag)

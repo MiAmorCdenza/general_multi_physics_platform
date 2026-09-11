@@ -151,7 +151,7 @@ void advance_leapfrog(std::span<const ParticleSoA> in,
 ### 例 4：反面示例（不要这样写）
 
 ```cpp
-// ❌ 没有契约
+// [X] 没有契约
 void process(Graph& g, Data& d, bool flag);
 
 // 这行代码有四个未回答的问题：
@@ -192,7 +192,7 @@ void process(Graph& g, Data& d, bool flag);
 ## 6. 落地顺序（不可颠倒）
 
 ```
-① 类型契约  →  ② 接口签名  →  ③ 函数契约  →  ④ 实现  →  ⑤ 测试
+(1) 类型契约  →  (2) 接口签名  →  (3) 函数契约  →  (4) 实现  →  (5) 测试
    （冻结）      （冻结）       （逐模块推进）
 ```
 

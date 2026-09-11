@@ -1,8 +1,8 @@
 /**
  * @file test_diag.cpp
- * @brief diag 模块的单元、性质与并发测试。
+ * @brief Unit, property and concurrency tests for the diag module.
  *
- * 用例 id 与 core/diag/include/qp/diag/*.hpp 的 @tests 字段逐字对应。
+ * The case ids correspond verbatim to the @tests fields under core/diag/include.
  */
 #include <catch2/catch_test_macros.hpp>
 
@@ -18,12 +18,12 @@
 using namespace qp::diag;
 
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // error.hpp
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 
 TEST_CASE("diag.error_code_values_are_stable", "[diag]") {
-    // 错误码是**稳定标识**，不是内部序号：数值一旦发布不得重排。
+    // Error codes are **stable identifiers**, not internal ordinals: once published, values must not be reordered.
     STATIC_REQUIRE(static_cast<std::uint16_t>(ErrorCode::ok) == 0);
     STATIC_REQUIRE(static_cast<std::uint16_t>(ErrorCode::invalid_argument) == 0x0101);
     STATIC_REQUIRE(static_cast<std::uint16_t>(ErrorCode::dimension_mismatch) == 0x0203);
@@ -33,7 +33,7 @@ TEST_CASE("diag.error_code_values_are_stable", "[diag]") {
     STATIC_REQUIRE(static_cast<std::uint16_t>(ErrorCode::internal_error) == 0x0901);
     STATIC_REQUIRE(sizeof(ErrorCode) == 2);
 
-    // 短名稳定且非空
+    // Short names are stable and non-empty
     REQUIRE(to_string(ErrorCode::ok) == "ok");
     REQUIRE(to_string(ErrorCode::cycle_detected) == "cycle_detected");
     REQUIRE(to_string(ErrorCode::dimension_mismatch) == "dimension_mismatch");
@@ -41,7 +41,7 @@ TEST_CASE("diag.error_code_values_are_stable", "[diag]") {
 }
 
 TEST_CASE("diag.error_code_names_are_unique", "[diag][property]") {
-    // 不同错误码不得共用短名（否则日志无法区分）
+    // Different error codes must not share a short name (the log could not tell them apart)
     const ErrorCode all[] = {
         ErrorCode::ok, ErrorCode::invalid_argument, ErrorCode::malformed_document,
         ErrorCode::unsupported_version, ErrorCode::missing_field, ErrorCode::out_of_range,
@@ -72,17 +72,17 @@ TEST_CASE("diag.error_domain_mapping", "[diag]") {
     STATIC_REQUIRE(domain_of(ErrorCode::plugin_incompatible) == ErrorDomain::plugin);
     STATIC_REQUIRE(domain_of(ErrorCode::seed_required) == ErrorDomain::runtime);
     STATIC_REQUIRE(domain_of(ErrorCode::internal_error) == ErrorDomain::internal);
-    STATIC_REQUIRE(domain_of(ErrorCode::ok) == ErrorDomain::internal);  // 无意义，仅保证全覆盖
+    STATIC_REQUIRE(domain_of(ErrorCode::ok) == ErrorDomain::internal);  // meaningless, present only for full coverage
 }
 
 TEST_CASE("diag.consequence_ordering", "[diag]") {
-    // 顺序即严重程度：可比较、可排序
+    // The order is the severity: comparable and sortable
     STATIC_REQUIRE(Consequence::recoverable < Consequence::degraded);
     STATIC_REQUIRE(Consequence::degraded < Consequence::run_aborted);
     STATIC_REQUIRE(Consequence::run_aborted < Consequence::fatal);
     STATIC_REQUIRE(sizeof(Consequence) == 1);
 
-    // 默认后果按域推断
+    // The default consequence is inferred from the domain
     STATIC_REQUIRE(default_consequence(ErrorCode::invalid_argument) == Consequence::recoverable);
     STATIC_REQUIRE(default_consequence(ErrorCode::dimension_mismatch) == Consequence::recoverable);
     STATIC_REQUIRE(default_consequence(ErrorCode::cycle_detected) == Consequence::degraded);
@@ -91,9 +91,9 @@ TEST_CASE("diag.consequence_ordering", "[diag]") {
     STATIC_REQUIRE(default_consequence(ErrorCode::internal_error) == Consequence::fatal);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // result.hpp
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 
 TEST_CASE("diag.result.ok_value", "[diag]") {
     const Result<int> r{42};
@@ -105,15 +105,15 @@ TEST_CASE("diag.result.ok_value", "[diag]") {
 }
 
 TEST_CASE("diag.result.layout", "[diag][abi]") {
-    // Result 的形状是冻结契约的一部分
+    // The shape of Result is part of the frozen contract
     STATIC_REQUIRE(std::is_same_v<Result<int>::value_type, int>);
-    // 平凡可复制性**取决于载荷**：int 时可平凡复制，string 时不可。
-    // 因此这里只断言"没有引入额外的间接层"，而不是断言某个固定取值。
+    // Trivial copyability **depends on the payload**: trivial for int, not for string.
+    // So this asserts only "no extra indirection was introduced", not a fixed value.
     STATIC_REQUIRE(sizeof(Result<int>) <= sizeof(std::optional<int>) + alignof(std::optional<int>)
                                                + sizeof(ErrorCode));
     STATIC_REQUIRE(std::is_copy_constructible_v<Result<int>>);
     STATIC_REQUIRE(std::is_move_constructible_v<Result<int>>);
-    // 不得隐式转成 bool 以外的类型（防止 if (r.value()) 之类的误用）
+    // Must not implicitly convert to anything but bool (blocks misuse such as if (r.value()))
     STATIC_REQUIRE(std::is_convertible_v<Result<int>, bool> == false);  // explicit operator bool
 }
 
@@ -122,7 +122,7 @@ TEST_CASE("diag.result.err_only", "[diag]") {
     REQUIRE_FALSE(r.has_value());
     REQUIRE_FALSE(static_cast<bool>(r));
     REQUIRE(r.error() == ErrorCode::dimension_mismatch);
-    REQUIRE(r.consequence() == Consequence::recoverable);  // typing 域 → 用户改参数即可
+    REQUIRE(r.consequence() == Consequence::recoverable);  // typing domain -> the user just changes the parameter
 }
 
 TEST_CASE("diag.result.value_or_fallback", "[diag]") {
@@ -133,19 +133,19 @@ TEST_CASE("diag.result.value_or_fallback", "[diag]") {
 }
 
 TEST_CASE("diag.result.monadic_chaining", "[diag]") {
-    // 成功链路：值被逐级变换
+    // Success chain: the value is transformed step by step
     const Result<int> start{10};
     const auto doubled = start.and_then([](int v) { return Result<int>{v * 2}; });
     REQUIRE(doubled.has_value());
     REQUIRE(doubled.value() == 20);
 
-    // 失败链路：错误码必须被原样透传，不得被吞掉
+    // Failure chain: the error code must pass through unchanged, never swallowed
     const Result<int> bad{ErrorCode::out_of_range};
     const auto passed = bad.and_then([](int v) { return Result<int>{v * 2}; });
     REQUIRE_FALSE(passed.has_value());
     REQUIRE(passed.error() == ErrorCode::out_of_range);
 
-    // 链路中段失败也要透传
+    // A failure in the middle of the chain must pass through too
     const auto mid = start.and_then([](int) { return Result<int>{ErrorCode::fit_failed}; });
     REQUIRE_FALSE(mid.has_value());
     REQUIRE(mid.error() == ErrorCode::fit_failed);
@@ -169,19 +169,19 @@ TEST_CASE("diag.result.void_ok_is_truthy", "[diag]") {
 }
 
 TEST_CASE("diag.result.no_throw_on_access", "[diag]") {
-    // 本项目的失败表达不用异常：Result 的所有成员都是 noexcept 语义
+    // This project expresses failure without exceptions: every Result member has noexcept semantics
     STATIC_REQUIRE(noexcept(std::declval<const Result<int>&>().value()));
     STATIC_REQUIRE(noexcept(std::declval<const Result<int>&>().has_value()));
     STATIC_REQUIRE(noexcept(std::declval<const Result<int>&>().error()));
     STATIC_REQUIRE(noexcept(std::declval<const Result<int>&>().value_or(0)));
     STATIC_REQUIRE(noexcept(std::declval<const Result<void>&>().has_value()));
     STATIC_REQUIRE(std::is_nothrow_constructible_v<Result<int>, ErrorCode>);
-    // void 特化应当无状态开销
+    // The void specialization should carry no state overhead
     STATIC_REQUIRE(sizeof(Result<void>) == sizeof(ErrorCode));
 }
 
 TEST_CASE("diag.result.move_only_payload", "[diag]") {
-    // 只可移动的载荷也要能放进来
+    // A move-only payload must fit too
     struct MoveOnly {
         int v = 0;
         explicit MoveOnly(int x) : v(x) {}
@@ -195,36 +195,36 @@ TEST_CASE("diag.result.move_only_payload", "[diag]") {
     REQUIRE(r.value().v == 5);
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // diagnostic.hpp
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 
 TEST_CASE("diag.diagnostic.construction", "[diag]") {
     const Diagnostic d{ErrorCode::cycle_detected, "节点 n3 形成环", SourceId{"graph"}};
     REQUIRE(d.code() == ErrorCode::cycle_detected);
     REQUIRE(d.domain() == ErrorDomain::graph);
-    REQUIRE(d.consequence() == Consequence::degraded);  // 从域推断
+    REQUIRE(d.consequence() == Consequence::degraded);  // inferred from the domain
     REQUIRE(d.source().value == "graph");
     REQUIRE(d.message() == "节点 n3 形成环");
 
-    // 显式覆盖后果级别
+    // Explicitly override the consequence level
     const Diagnostic fatal{ErrorCode::invalid_argument, "x", SourceId{"in"}, Consequence::fatal};
     REQUIRE(fatal.consequence() == Consequence::fatal);
-    REQUIRE(fatal.domain() == ErrorDomain::input);  // 域不受影响
+    REQUIRE(fatal.domain() == ErrorDomain::input);  // the domain is unaffected
 }
 
 TEST_CASE("diag.diagnostic.stable_text", "[diag]") {
     const Diagnostic d{ErrorCode::dimension_mismatch, "长度不能接到时间", SourceId{"validate"}};
     const std::string text = d.to_text();
     REQUIRE(text == "validate: dimension_mismatch — 长度不能接到时间");
-    // 幂等：同一诊断每次给出同一文本
+    // Idempotent: the same diagnostic yields the same text every time
     REQUIRE(d.to_text() == text);
 
-    // 无来源时省略前缀
+    // The prefix is omitted when there is no source
     const Diagnostic bare{ErrorCode::cancelled, "用户取消"};
     REQUIRE(bare.to_text() == "cancelled — 用户取消");
 
-    // with_detail 追加而不改 code / consequence
+    // with_detail appends without changing code / consequence
     Diagnostic with_detail{ErrorCode::missing_field, "缺 unit"};
     with_detail.with_detail("端口 out 上");
     REQUIRE(with_detail.code() == ErrorCode::missing_field);
@@ -232,21 +232,21 @@ TEST_CASE("diag.diagnostic.stable_text", "[diag]") {
 }
 
 TEST_CASE("diag.diagnostic.no_live_references", "[diag]") {
-    // 诊断必须**自持**：拷贝后原对象销毁，副本仍然可用。
-    // 这条性质保证诊断能跨线程/跨进程/跨语言传递。
+    // A diagnostic must be **self-contained**: the copy stays usable after the original dies.
+    // This property lets diagnostics travel across threads, processes and languages.
     std::string text;
     {
         Diagnostic origin{ErrorCode::plugin_load_failed, "x.dll 载入失败", SourceId{"plugin"}};
-        const Diagnostic copy = origin;      // 拷贝
+        const Diagnostic copy = origin;      // copy
         text = copy.to_text();
     }
     REQUIRE(text == "plugin: plugin_load_failed — x.dll 载入失败");
     REQUIRE_FALSE(text.empty());
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 // sink.hpp
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
 
 TEST_CASE("diag.sink.null_sink", "[diag]") {
     NullSink sink;
@@ -268,14 +268,14 @@ TEST_CASE("diag.sink.collecting_sink", "[diag]") {
     REQUIRE(sink.contains(ErrorCode::cycle_detected));
     REQUIRE_FALSE(sink.contains(ErrorCode::fit_failed));
 
-    // 顺序即 emit 顺序
+    // The order is the emit order
     const auto items = sink.items();
     REQUIRE(items.size() == 3);
     REQUIRE(items[0].message() == "a");
     REQUIRE(items[1].message() == "b");
     REQUIRE(items[2].message() == "c");
 
-    // 最严重者
+    // The worst one
     REQUIRE(sink.worst_consequence() == Consequence::fatal);
 
     sink.clear();
@@ -284,7 +284,7 @@ TEST_CASE("diag.sink.collecting_sink", "[diag]") {
 }
 
 TEST_CASE("diag.sink.collecting_sink_thread_safe", "[diag][concurrency]") {
-    // 求值线程与主线程都可能产生诊断，emit 必须线程安全。
+    // Both the eval thread and the main thread may produce diagnostics, so emit must be thread-safe.
     CollectingSink sink;
     constexpr int kThreads = 4;
     constexpr int kPerThread = 250;
@@ -302,18 +302,18 @@ TEST_CASE("diag.sink.collecting_sink_thread_safe", "[diag][concurrency]") {
     REQUIRE(sink.size() == static_cast<std::size_t>(kThreads * kPerThread));
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// contract.hpp —— 前置条件的"死亡测试"
-// ═══════════════════════════════════════════════════════════════════════════
+// ===========================================================================
+// contract.hpp -- the "death tests" for preconditions
+// ===========================================================================
 //
-// 违反 @pre 必须**终止进程**，因此不能在同一进程里断言——那会杀掉测试
-// 运行器本身。做法：本可执行文件在设置 QP_TEST_SELF 后以"死亡子进程"
-// 模式运行，由 CMake 注册成一个 WILL_FAIL 的测试项。
+// Violating @pre must **terminate the process**, so it cannot be asserted in the same process --
+// that would kill the test runner itself. The approach: with QP_TEST_SELF set, this executable runs
+// in "death child process" mode, registered by CMake as a WILL_FAIL test item.
 //
-// 得到的是**真实的进程退出码**证据，而不是模拟。
+// What you get is **real process exit code** evidence, not a simulation.
 
 TEST_CASE("diag.contract.holds_does_nothing", "[diag]") {
-    // 条件成立时必须正常返回，且无副作用
+    // When the condition holds it must return normally and have no side effects
     precondition(true, "true", __FILE__, __LINE__);
     precondition(1 + 1 == 2, "1+1==2", __FILE__, __LINE__);
     QP_PRECONDITION(true);
@@ -327,9 +327,9 @@ TEST_CASE("diag.contract.violation_terminates", "[.][diag][death]") {
         SKIP("QP_TEST_SELF 未设置：本用例需由 CMake 以死亡子进程方式运行");
     }
 
-    // ── 以下代码只会跑在死亡子进程里 ──
-    // precondition 内部走 fprintf + std::terminate，不抛异常、不返回。
+    // -- The code below only runs in the death child process --
+    // precondition goes through fprintf + std::terminate; it does not throw and does not return.
     std::fflush(stdout);
-    QP_PRECONDITION(false);   // 必须在此终止
-    std::_Exit(0);            // 若真走到这里，说明前置条件检查失效了
+    QP_PRECONDITION(false);   // must terminate here
+    std::_Exit(0);            // reaching this line means the precondition check failed
 }

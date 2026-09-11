@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""层级门禁自身的测试：验证 check_layers.py 真的能抓到每类违规。
+"""Test of the layer gate itself: verify that check_layers.py really catches each kind of violation.
 
-对应 standards/enforcement.md §8：未经验证的门禁等于没有门禁。
+Corresponds to standards/enforcement.md §8: an unverified gate is no gate at all.
 
-反例放在 tests/meta/layer_fixtures/<case>/include/qp/<module>/<file>.hpp，
-每个反例目录被当成一个独立的 core 根来检查（因为真实的 core 里不可能
-放这些违规文件）。
+The counterexamples live under tests/meta/layer_fixtures/<case>/include/qp/<module>/<file>.hpp, and
+each counterexample directory is checked as a standalone core root (the real core could never
+contain these violating files).
 
-退出码：0 全部符合预期；1 有偏差。
+Exit code: 0 everything as expected; 1 a deviation.
 """
 from __future__ import annotations
 
@@ -30,11 +30,11 @@ def load_checker():
 
 
 def scan(cc, case_dir: Path) -> list:
-    """把某个反例目录当作 core 根来扫描。
+    """Scan one counterexample directory as a core root.
 
-    注意 core 根取 `case_dir`（而不是 `case_dir/include`），
-    与真实仓库里 `core/units/include/qp/...` 的结构一致：
-    模块名始终是相对于 core 根的第一段或 qp 之后的段。
+    Note the core root is `case_dir` (not `case_dir/include`), matching the structure of
+    `core/units/include/qp/...` in the real repository: the module name is always the first
+    segment relative to the core root, or the segment after qp.
     """
     violations = []
     for path in sorted(p for p in case_dir.rglob("*") if p.suffix in (".hpp", ".h", ".cpp")):
@@ -55,15 +55,15 @@ def main() -> int:
 
     cc = load_checker()
 
-    # (反例目录, 期望被抓到的规则)
+    # (counterexample directory, rule expected to be caught)
     #
-    # 目录约定说明：反例目录被整体当作 core 根，因此内部必须与真实仓库同构——
-    # 开发约定 `<mod>/include/qp/<mod>/<file>.hpp`（见 module_of_relative）。
+    # Directory convention: a counterexample directory is treated as a whole core root, so its
+    # contents must mirror the real repository -- `<mod>/include/qp/<mod>/<file>.hpp` (see module_of_relative).
     expectations = [
-        ("bad_units_to_abi", "L1"),      # 方向不允许
-        ("bad_qt_in_core", "L2"),        # Qt 进 core
-        ("bad_reverse_dep", "L4"),       # 反向依赖消费者
-        ("bad_unregistered", "L5"),      # 未登记模块
+        ("bad_units_to_abi", "L1"),      # direction not allowed
+        ("bad_qt_in_core", "L2"),        # Qt inside core
+        ("bad_reverse_dep", "L4"),       # reverse-dependency consumer
+        ("bad_unregistered", "L5"),      # unregistered module
     ]
 
     failures: list[str] = []
@@ -81,7 +81,7 @@ def main() -> int:
         if not hit:
             failures.append(f"{case} 未触发 {rule}（实际 {sorted(rules) or '无'}）")
 
-    # ── 正例：合法依赖不得被误报 ──
+    # -- Positive case: a legal dependency must not be reported --
     ok_dir = FIXTURES / "ok_diag_to_units"
     ok_violations = scan(cc, ok_dir)
     if ok_violations:
@@ -91,9 +91,9 @@ def main() -> int:
     else:
         print("  [OK  ] ok_diag_to_units        无违规（无误报）")
 
-    # ── 白名单自身一致性 ──
-    # 每个被允许依赖的模块名也必须在 ALLOWED 里有自己的条目，
-    # 否则说明白名单里出现了拼写错误或遗漏（依赖方向会静默失效）。
+    # -- Whitelist self-consistency --
+    # Every module name that may be depended on must also have its own entry in ALLOWED;
+    # otherwise the whitelist contains a typo or an omission (a dependency direction silently dies).
     dangling: list[str] = []
     for owner, deps in cc.ALLOWED.items():
         for dep in deps:

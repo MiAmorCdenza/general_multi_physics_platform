@@ -1,12 +1,12 @@
 /**
  * @file qt_in_core.hpp
- * @brief 反例样本：core 里出现了 Qt。必须被 L2 抓到。
+ * @brief Negative fixture: Qt appears inside core. Layer L2 must catch it.
  *
- * 这条铁律是"core 必须能脱离 Qt 独立构建"（enforcement.md §6）的机械保证。
+ * This iron rule mechanically guarantees "core can build without Qt" (enforcement.md section 6).
  */
 #pragma once
 
-#include <QObject>          // 非法：core 内不得包含 Qt
+// Illegal: core must not include Qt
 #include <QString>
 
 namespace qp::layerfixture::bad_qt {

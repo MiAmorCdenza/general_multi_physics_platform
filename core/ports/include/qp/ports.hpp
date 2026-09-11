@@ -1,19 +1,19 @@
 /**
  * @file qp/ports.hpp
- * @brief ports 模块的唯一入口。
+ * @brief The single entry point of the ports module.
  *
- * 端口类型注册表是"加一个域零核心改动"这个承诺的落点：
- * 新类型能被声明、能被校验、能被 UI 自动渲染，都不需要改宿主代码。
+ * The port-type registry is where the promise "add a domain with zero core changes" lands:
+ * a new type can be declared, validated and auto-rendered by the UI without touching host code.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   本模块不依赖 core 内除 units / diag / abi 之外的模块
+ * @invariant   this module depends on no module under core except units / diag / abi
  * @errors      noexcept
- * @complexity  —
+ * @complexity  --
  * @nondet      none
- * @frozen      是（已注册类型 ID 与名称）
+ * @frozen      yes (registered type IDs and names)
  * @tests       ports.value.default_is_invalid, ports.value.construction,
  *              ports.value.numeric_accessors, ports.value.kind_is_exhaustive,
  *              ports.value.copy_independence, ports.value.never_throws,
@@ -47,7 +47,7 @@
 
 namespace qp::ports {
 
-/// @brief ports 模块的 ABI 版本。端口类型 ID 或 ValueKind 数值变更时必须递增。
+/// @brief ABI version of the ports module. Bump when a type ID or a ValueKind value changes.
 inline constexpr int kPortsAbiVersion = 1;
 
 }  // namespace qp::ports

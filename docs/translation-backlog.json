@@ -1,0 +1,440 @@
+{
+  "total_lines": 3205,
+  "total_files": 102,
+  "emoji_only": [],
+  "batches": [
+    {
+      "lines": 641,
+      "files": [
+        {
+          "path": "core/abi/CMakeLists.txt",
+          "lines": 5
+        },
+        {
+          "path": "core/abi/include/qp/abi/abi_version.hpp",
+          "lines": 41
+        },
+        {
+          "path": "core/diag/include/qp/diag/contract.hpp",
+          "lines": 29
+        },
+        {
+          "path": "core/diag/include/qp/diag/diagnostic.hpp",
+          "lines": 29
+        },
+        {
+          "path": "core/graph/CMakeLists.txt",
+          "lines": 10
+        },
+        {
+          "path": "core/graph/domain/include/qp/graph/domain/build.hpp",
+          "lines": 35
+        },
+        {
+          "path": "core/graph/domain/include/qp/graph/domain/domain.hpp",
+          "lines": 50
+        },
+        {
+          "path": "core/graph/eval/include/qp/graph/eval/cache.hpp",
+          "lines": 55
+        },
+        {
+          "path": "core/graph/eval/include/qp/graph/eval/value_key.hpp",
+          "lines": 42
+        },
+        {
+          "path": "core/graph/eval/src/evaluator.cpp",
+          "lines": 19
+        },
+        {
+          "path": "core/graph/mutate/CMakeLists.txt",
+          "lines": 4
+        },
+        {
+          "path": "core/graph/structure/include/qp/graph/structure/graph.hpp",
+          "lines": 175
+        },
+        {
+          "path": "core/graph/validate/include/qp/graph/validate.hpp",
+          "lines": 22
+        },
+        {
+          "path": "core/units/include/qp/units.hpp",
+          "lines": 2
+        },
+        {
+          "path": "core/units/include/qp/units/dim.hpp",
+          "lines": 65
+        },
+        {
+          "path": "scripts/check_build_deps.ps1",
+          "lines": 18
+        },
+        {
+          "path": "scripts/fetch_deps.ps1",
+          "lines": 10
+        },
+        {
+          "path": "tests/golden/units/test_unit_symbol.cpp",
+          "lines": 27
+        },
+        {
+          "path": "tests/meta/layer_fixtures/bad_qt_in_core/diag/include/qp/diag/qt_in_core.hpp",
+          "lines": 3
+        }
+      ]
+    },
+    {
+      "lines": 641,
+      "files": [
+        {
+          "path": "core/abi/include/qp/abi/field_buffer.hpp",
+          "lines": 100
+        },
+        {
+          "path": "core/abi/include/qp/abi/lattice.hpp",
+          "lines": 49
+        },
+        {
+          "path": "core/diag/include/qp/diag/result.hpp",
+          "lines": 50
+        },
+        {
+          "path": "core/graph/domain/include/qp/graph/domain/plan.hpp",
+          "lines": 23
+        },
+        {
+          "path": "core/graph/ir/include/qp/graph/ir.hpp",
+          "lines": 18
+        },
+        {
+          "path": "core/graph/ir/include/qp/graph/ir/edge.hpp",
+          "lines": 20
+        },
+        {
+          "path": "core/graph/structure/src/graph.cpp",
+          "lines": 57
+        },
+        {
+          "path": "core/graph/validate/include/qp/graph/validate/dimensions.hpp",
+          "lines": 37
+        },
+        {
+          "path": "core/graph/validate/include/qp/graph/validate/report.hpp",
+          "lines": 34
+        },
+        {
+          "path": "core/graph/validate/src/dimensions.cpp",
+          "lines": 23
+        },
+        {
+          "path": "core/ports/include/qp/ports/value.hpp",
+          "lines": 65
+        },
+        {
+          "path": "core/units/include/qp/units/dimensions.hpp",
+          "lines": 32
+        },
+        {
+          "path": "scripts/build.ps1",
+          "lines": 13
+        },
+        {
+          "path": "tests/meta/layer_fixtures/bad_reverse_dep/diag/include/qp/diag/reverse_dep.hpp",
+          "lines": 2
+        },
+        {
+          "path": "tests/meta/layer_fixtures/bad_units_to_abi/units/include/qp/units/forbidden_direction.hpp",
+          "lines": 4
+        },
+        {
+          "path": "tests/meta/layer_fixtures/ok_diag_to_units/diag/include/qp/diag/allowed_dep.hpp",
+          "lines": 5
+        },
+        {
+          "path": "tests/smoke/test_core_standalone.cpp",
+          "lines": 8
+        },
+        {
+          "path": "tests/support/test_main.cpp",
+          "lines": 28
+        },
+        {
+          "path": "tests/unit/graph/test_validate.cpp",
+          "lines": 70
+        },
+        {
+          "path": "tests/unit/units/test_conversion.cpp",
+          "lines": 3
+        }
+      ]
+    },
+    {
+      "lines": 641,
+      "files": [
+        {
+          "path": "core/abi/include/qp/abi.hpp",
+          "lines": 17
+        },
+        {
+          "path": "core/diag/include/qp/diag.hpp",
+          "lines": 6
+        },
+        {
+          "path": "core/diag/include/qp/diag/error.hpp",
+          "lines": 39
+        },
+        {
+          "path": "core/graph/domain/src/declaration.cpp",
+          "lines": 1
+        },
+        {
+          "path": "core/graph/eval/include/qp/graph/eval.hpp",
+          "lines": 21
+        },
+        {
+          "path": "core/graph/eval/include/qp/graph/eval/evaluator.hpp",
+          "lines": 59
+        },
+        {
+          "path": "core/graph/eval/src/cache.cpp",
+          "lines": 2
+        },
+        {
+          "path": "core/graph/ir/CMakeLists.txt",
+          "lines": 2
+        },
+        {
+          "path": "core/graph/ir/include/qp/graph/ir/ids.hpp",
+          "lines": 30
+        },
+        {
+          "path": "core/graph/mutate/include/qp/graph/mutate.hpp",
+          "lines": 20
+        },
+        {
+          "path": "core/graph/mutate/src/bus.cpp",
+          "lines": 47
+        },
+        {
+          "path": "core/graph/structure/include/qp/graph/structure.hpp",
+          "lines": 12
+        },
+        {
+          "path": "core/ports/CMakeLists.txt",
+          "lines": 8
+        },
+        {
+          "path": "core/ports/include/qp/ports/check.hpp",
+          "lines": 55
+        },
+        {
+          "path": "core/ports/src/check.cpp",
+          "lines": 34
+        },
+        {
+          "path": "core/units/include/qp/units/unit_symbol.hpp",
+          "lines": 66
+        },
+        {
+          "path": "scripts/check_layers.py",
+          "lines": 29
+        },
+        {
+          "path": "tests/meta/contract_violations/violations.hpp",
+          "lines": 27
+        },
+        {
+          "path": "tests/meta/layer_fixtures/bad_unregistered/diag/include/qp/diag/unregistered.hpp",
+          "lines": 4
+        },
+        {
+          "path": "tests/unit/graph/test_domain.cpp",
+          "lines": 73
+        },
+        {
+          "path": "tests/unit/graph/test_mutate.cpp",
+          "lines": 89
+        }
+      ]
+    },
+    {
+      "lines": 641,
+      "files": [
+        {
+          "path": "CMakeLists.txt",
+          "lines": 27
+        },
+        {
+          "path": "core/CMakeLists.txt",
+          "lines": 3
+        },
+        {
+          "path": "core/abi/include/qp/abi/byte_order.hpp",
+          "lines": 11
+        },
+        {
+          "path": "core/abi/include/qp/abi/field_dim.hpp",
+          "lines": 28
+        },
+        {
+          "path": "core/graph/domain/include/qp/graph/domain.hpp",
+          "lines": 17
+        },
+        {
+          "path": "core/graph/domain/include/qp/graph/domain/declaration.hpp",
+          "lines": 22
+        },
+        {
+          "path": "core/graph/ir/include/qp/graph/ir/descriptor.hpp",
+          "lines": 76
+        },
+        {
+          "path": "core/graph/ir/src/descriptor.cpp",
+          "lines": 1
+        },
+        {
+          "path": "core/graph/mutate/include/qp/graph/mutate/command.hpp",
+          "lines": 33
+        },
+        {
+          "path": "core/graph/structure/CMakeLists.txt",
+          "lines": 2
+        },
+        {
+          "path": "core/graph/validate/CMakeLists.txt",
+          "lines": 3
+        },
+        {
+          "path": "core/graph/validate/include/qp/graph/validate/validate.hpp",
+          "lines": 54
+        },
+        {
+          "path": "core/graph/validate/src/validate.cpp",
+          "lines": 20
+        },
+        {
+          "path": "core/ports/include/qp/ports.hpp",
+          "lines": 6
+        },
+        {
+          "path": "core/ports/include/qp/ports/registry.hpp",
+          "lines": 63
+        },
+        {
+          "path": "tests/meta/check_dialect_gate.py",
+          "lines": 9
+        },
+        {
+          "path": "tests/unit/graph/test_eval.cpp",
+          "lines": 69
+        },
+        {
+          "path": "tests/unit/graph/test_ir.cpp",
+          "lines": 44
+        },
+        {
+          "path": "tests/unit/graph/test_structure.cpp",
+          "lines": 82
+        },
+        {
+          "path": "tests/unit/units/test_floating_point_env.cpp",
+          "lines": 30
+        },
+        {
+          "path": "tests/unit/units/test_quantity.cpp",
+          "lines": 41
+        }
+      ]
+    },
+    {
+      "lines": 641,
+      "files": [
+        {
+          "path": "core/diag/include/qp/diag/sink.hpp",
+          "lines": 33
+        },
+        {
+          "path": "core/graph/domain/CMakeLists.txt",
+          "lines": 4
+        },
+        {
+          "path": "core/graph/domain/src/build.cpp",
+          "lines": 16
+        },
+        {
+          "path": "core/graph/eval/CMakeLists.txt",
+          "lines": 3
+        },
+        {
+          "path": "core/graph/eval/src/value_key.cpp",
+          "lines": 25
+        },
+        {
+          "path": "core/graph/ir/include/qp/graph/ir/node.hpp",
+          "lines": 32
+        },
+        {
+          "path": "core/graph/mutate/include/qp/graph/mutate/bus.hpp",
+          "lines": 77
+        },
+        {
+          "path": "core/graph/validate/src/report.cpp",
+          "lines": 1
+        },
+        {
+          "path": "core/ports/include/qp/ports/port_type.hpp",
+          "lines": 64
+        },
+        {
+          "path": "core/ports/src/registry.cpp",
+          "lines": 23
+        },
+        {
+          "path": "core/units/CMakeLists.txt",
+          "lines": 2
+        },
+        {
+          "path": "core/units/include/qp/units/literals.hpp",
+          "lines": 16
+        },
+        {
+          "path": "core/units/include/qp/units/quantity.hpp",
+          "lines": 81
+        },
+        {
+          "path": "scripts/check_contracts.py",
+          "lines": 28
+        },
+        {
+          "path": "tests/CMakeLists.txt",
+          "lines": 44
+        },
+        {
+          "path": "tests/abi/test_abi_layout.cpp",
+          "lines": 68
+        },
+        {
+          "path": "tests/meta/check_contract_checker.py",
+          "lines": 3
+        },
+        {
+          "path": "tests/meta/check_layer_checker.py",
+          "lines": 7
+        },
+        {
+          "path": "tests/unit/diag/test_diag.cpp",
+          "lines": 41
+        },
+        {
+          "path": "tests/unit/ports/test_ports.cpp",
+          "lines": 53
+        },
+        {
+          "path": "tests/unit/units/test_dim.cpp",
+          "lines": 20
+        }
+      ]
+    }
+  ]
+}
