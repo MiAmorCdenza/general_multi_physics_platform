@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "L2 起步（runtime/run + runtime/store 完成）+ views 骨架打通（MSVC x64 + Qt 6.8.3 Widgets）",
+  "updated": "许可定为 Apache-2.0（LICENSE + NOTICE + THIRD_PARTY_NOTICES）；新增 Qt 模块许可门禁",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -51,10 +51,15 @@
     "catch2_link": {
       "state": "passing",
       "detail": "external/Catch2 v3.5.2；scripts/fetch_deps.ps1 显式拉取，配置阶段默认不联网"
+    },
+    "qt_module_licence": {
+      "tool": "scripts/check_qt_modules.py",
+      "state": "passing",
+      "detail": "只允许链接 LGPL 兼容的 Qt 模块。检查的是**生成出来的链接行**而不是源码：源码扫描只能找 `#include <QtCharts/...>`，会漏掉两种真实出错方式——CMake 里声明了组件但被扫的文件没 include，以及某个 LGPL 模块传递依赖 GPL 模块。而法律上要紧的是最终进二进制的那组库，那组库是在构建系统里定下来的。由 tests/meta/check_qt_licence_gate.py 用 4 反例 + 2 正例 + 1 跳过场景验证。**首次在真实构建树上运行就抓到一个洞**：Qt 的 debug 库名带后缀（`Qt6Chartsd.lib`），按原始文件名比对会让 debug 构建漏过——而 debug 正是开发者做原型时链的。现在有专门的夹具。无 Qt 构建树时放行并说明，因为那是本项目承诺能工作的配置。"
     }
   },
   "test_stats": {
-    "ctest_registered": 453,
+    "ctest_registered": 455,
     "compilers_green": [
       "gcc-15.2.0-i686",
       "msvc-19.51-x64"
@@ -211,5 +216,19 @@
       "state": "planned",
       "note": "可整体删除"
     }
-  ]
+  ],
+  "licence": {
+    "project": "Apache-2.0",
+    "file": "LICENSE",
+    "notice": "NOTICE",
+    "third_party": "THIRD_PARTY_NOTICES.md",
+    "decision": "docs/adr/ADR-0006-gui-framework-and-qt-licensing.md",
+    "reason": "章程的核心断言是「views/ 与 plugins/ 可以整个删掉，core/ 仍能编译并通过全部测试」，即 core 被设计成**可复用的地基**。可复用的地基应该让它尽可能容易被复用（含专利授权、无 copyleft 摩擦），而不是给它加一道需要法律判断的门槛。否决 LGPL-3.0 的要点：core 是静态库，LGPL-3.0 §4 只允许走 §4(d)(0)（须提供目标代码让用户可重新链接）；LGPL 是为「库」写的而本项目同时是应用与框架；它会给插件生态制造一条取决于构建方式的分界线（DLL 插件不受传染、静态链接 core 的插件受传染），而插件作者不该需要先读许可法才能判断能否闭源。",
+    "qt_obligations": "Qt 6.8.3 以 LGPL-3.0 动态链接使用（Qt6Core/Gui/Widgets），未修改 Qt 源码。LGPL-3.0 全文**刻意不入库**——仓库里没有 Qt 代码，入库会产生「这里有 LGPL 代码」的误导；全文属于发行包，由打包步骤作为 LICENSE.LGPLv3 放入。Qt Charts 刻意不用（GPL-3.0 而非 LGPL），绘图改用 QCustomPlot(MIT) 或 QWT(LGPL)。",
+    "outstanding": [
+      "scripts/fetch_deps.ps1 -WithQt 无人值守装 Qt（目前手工 aqtinstall）",
+      "打包步骤把 LGPLv3 全文放入发行包",
+      "windeployqt 生成可分发目录并在无 Qt 机器上验证"
+    ]
+  }
 }

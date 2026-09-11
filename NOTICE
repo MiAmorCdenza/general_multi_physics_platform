@@ -1,0 +1,36 @@
+qp — general-purpose physics experiment simulation platform
+Copyright 2026 MiAmorCdenza
+
+This product is licensed under the Apache License, Version 2.0. See LICENSE.
+
+This product includes software developed by third parties, listed in
+THIRD_PARTY_NOTICES.md. The notices below are the attributions that must travel
+with a **distributed binary**, which is not the same set as the build
+dependencies: Catch2 is used to build and run the tests and is never shipped, so
+it appears in THIRD_PARTY_NOTICES.md but not here.
+
+--------------------------------------------------------------------------------
+Qt (https://www.qt.io/)
+Copyright (C) 2016 The Qt Company Ltd.
+Copyright (C) 2015 Klarälvdalens Datakonsult AB
+Copyright (C) 2013 Digia Plc and/or its subsidiary(-ies)
+Copyright (C) 2010 Nokia Corporation and/or its subsidiary(-ies)
+
+The distributed application links dynamically against the following Qt modules:
+
+    Qt6Core, Qt6Gui, Qt6Widgets
+
+These modules are used under the GNU Lesser General Public License, version 3
+(LGPL-3.0). The full text of that licence is included with the binary
+distribution as LICENSE.LGPLv3, and is also available from
+https://www.gnu.org/licenses/lgpl-3.0.html
+
+In accordance with LGPL-3.0 section 4, the Qt libraries are linked dynamically
+so that a recipient can replace them with modified versions. Qt's source, and
+instructions for building it, are available from https://www.qt.io/download
+
+No Qt module is used under the GNU General Public License. In particular Qt
+Charts is deliberately not used: it is offered under GPL-3.0 or a commercial
+licence and not under LGPL-3.0, so including it would place the whole distributed
+binary under GPL-3.0. See docs/adr/ADR-0006-gui-framework-and-qt-licensing.md.
+--------------------------------------------------------------------------------

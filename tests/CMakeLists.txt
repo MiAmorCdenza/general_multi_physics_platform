@@ -182,6 +182,30 @@ if(Python3_Interpreter_FOUND)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 endif()
 
+# -- Qt licence gate (THIRD_PARTY_NOTICES.md section 1) ----------------------
+# Reads the generated link lines and refuses any Qt module that is not
+# LGPL-compatible. Checking linkage rather than source is what makes it catch a
+# transitive pull, which a #include scan cannot see.
+#
+# Registered unconditionally: with no Qt build tree it passes and says so, which
+# is the configuration the project promises keeps working (core builds and tests
+# with Qt absent entirely).
+if(Python3_Interpreter_FOUND)
+    add_test(NAME gate.qt_licence
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_qt_modules.py --quiet)
+    set_tests_properties(gate.qt_licence PROPERTIES
+        LABELS "gate"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+    add_test(NAME meta.qt_licence_checker
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/meta/check_qt_licence_gate.py)
+    set_tests_properties(meta.qt_licence_checker PROPERTIES
+        LABELS "gate"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+endif()
+
 # -- Tests of the gates themselves (enforcement.md §8) ----------------------
 if(Python3_Interpreter_FOUND)
     add_test(NAME meta.contract_checker
