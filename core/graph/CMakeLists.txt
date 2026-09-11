@@ -1,4 +1,4 @@
-﻿# core/graph：图与执行层。
+# core/graph：图与执行层。
 #
 # 目录结构是"层 → 模块"两级：
 #   core/graph/ir/        中间表示（IR）—— 插件 API 本身
@@ -11,3 +11,4 @@
 #   core/graph/field/     场语义的最小契约
 
 add_subdirectory(ir)
+add_subdirectory(structure)

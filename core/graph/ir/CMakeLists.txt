@@ -1,4 +1,4 @@
-﻿# core/graph/ir：中间表示。插件 API 本身。
+# core/graph/ir：中间表示。插件 API 本身。
 #
 # 依赖规则：ir 只依赖 L0 与 ports，不依赖 core/graph 内其他子模块。
 

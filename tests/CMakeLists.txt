@@ -151,3 +151,6 @@ qp_add_test(qp_test_ports
 qp_add_test(qp_test_graph_ir
     SOURCES unit/graph/test_ir.cpp
     LIBS qp::graph_ir)
+qp_add_test(qp_test_graph_structure
+    SOURCES unit/graph/test_structure.cpp
+    LIBS qp::graph_structure)
