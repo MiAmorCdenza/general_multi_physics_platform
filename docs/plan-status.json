@@ -1,0 +1,72 @@
+{
+  "schema": "qp.plan-status/1",
+  "updated": "P1",
+  "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
+  "statuses": ["planned", "contract", "specified", "implemented", "verified"],
+  "gates": {
+    "contract_completeness": {
+      "tool": "scripts/check_contracts.py",
+      "state": "passing",
+      "detail": "31 个契约 / 55 个用例 / 0 违规 / 0 孤儿；10 个短体运算符按规则豁免"
+    },
+    "gate_self_test": {
+      "tool": "tests/meta/check_contract_checker.py",
+      "state": "passing",
+      "detail": "C2/C3/C4/C5 四类违规必被抓到；合规样本无误报"
+    },
+    "compiler_matrix": {
+      "state": "passing",
+      "detail": "GCC 15.2.0 (MinGW-w64) 与 MSVC 19.51 均编译并运行通过；见 ADR-0004"
+    },
+    "cmake_graph": {
+      "state": "passing",
+      "detail": "CMake 配置成功，7 个测试目标注册；gate.contracts 与 meta.contract_checker 经 CTest 双绿"
+    },
+    "catch2_link": {
+      "state": "pending",
+      "detail": "Catch2 v3 尚未安装，qp_test_* 目标未在真实 Catch2 上链接过——P1 的唯一未完成项"
+    },
+    "layer_dependency": {
+      "tool": "scripts/check_layers.py",
+      "state": "not_implemented",
+      "detail": "P2 起需要（core 一旦有第二个模块就必须挡住反向依赖）"
+    }
+  },
+  "modules": [
+    { "path": "core/units", "layer": "L0", "state": "implemented",
+      "note": "P1 全深度纵切完成。类型契约冻结、31 个函数契约、黄金字符串、双编译器绿。缺陷修复记录见 ADR-0004。" },
+    { "path": "core/abi", "layer": "L0", "state": "planned",
+      "note": "P2 冻结；布局断言必须先于实现" },
+    { "path": "core/ports", "layer": "L0", "state": "planned", "note": "P2" },
+    { "path": "core/reflect", "layer": "L0", "state": "planned",
+      "note": "units 已完成 unit_symbol/type_name 的最小部分；剩余随 abi 一并成型" },
+    { "path": "core/diag", "layer": "L0", "state": "planned", "note": "无依赖，可随时先行" },
+    { "path": "core/plugin", "layer": "L0", "state": "planned",
+      "note": "P4；兼容策略与模糊测试同时" },
+    { "path": "core/graph/ir", "layer": "L1", "state": "planned", "note": "P3 前置；插件 API 本身" },
+    { "path": "core/graph/structure", "layer": "L1", "state": "planned", "note": "P3" },
+    { "path": "core/graph/mutate", "layer": "L1", "state": "planned", "note": "P3；撤销栈在地基" },
+    { "path": "core/graph/validate", "layer": "L1", "state": "planned", "note": "P3；加载期单位校验" },
+    { "path": "core/graph/eval", "layer": "L1", "state": "planned",
+      "note": "P3；缓存键用 Lattice::uid（旧工程用 id() 是缺陷）" },
+    { "path": "core/graph/domain", "layer": "L1", "state": "planned", "note": "P3" },
+    { "path": "core/graph/kernels", "layer": "L1", "state": "planned",
+      "note": "P3；契约在地基，Boris/蛙跳/RK4/Verlet 是插件" },
+    { "path": "core/graph/field", "layer": "L1", "state": "planned", "note": "P3" },
+    { "path": "core/runtime/run", "layer": "L2", "state": "planned",
+      "note": "挡住章程 R2/C1；三个基点中优先级最高" },
+    { "path": "core/runtime/store", "layer": "L2", "state": "planned", "note": "dataset/fit_result 结构" },
+    { "path": "core/runtime/trace", "layer": "L2", "state": "planned", "note": "C3 时间轴" },
+    { "path": "core/runtime/io", "layer": "L2", "state": "planned", "note": "格式是插件" },
+    { "path": "core/authoring/document", "layer": "L3", "state": "planned", "note": "view_layouts 分槽" },
+    { "path": "core/authoring/capability", "layer": "L3", "state": "planned", "note": "P4" },
+    { "path": "core/authoring/commands", "layer": "L3", "state": "planned",
+      "note": "P4；多视图唯一入口 + 唯一撤销栈" },
+    { "path": "core/authoring/layout", "layer": "L3", "state": "planned", "note": "算法是插件" },
+    { "path": "core/authoring/portui", "layer": "L3", "state": "planned",
+      "note": "新端口类型自动获得 UI" },
+    { "path": "views", "layer": "consumer", "state": "planned",
+      "note": "可整体删除；core 独立性门禁依赖这点" },
+    { "path": "plugins", "layer": "content", "state": "planned", "note": "可整体删除" }
+  ]
+}

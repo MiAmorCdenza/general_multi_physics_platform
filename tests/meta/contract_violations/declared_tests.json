@@ -1,0 +1,7 @@
+{
+  "_comment": "门禁自检用的『用例字典』。放在 JSON 里而不是 .cpp 里，是为了不让 meta 夹具混进 check_contracts.py 扫描的 tests/**/*.cpp —— 否则真实门禁会看到永远无人引用的孤儿用例。",
+  "test_cases": [
+    "meta.sample.case",
+    "meta.another.case"
+  ]
+}

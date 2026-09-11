@@ -1,0 +1,34 @@
+# 行尾规范化 —— 本项目跨平台（MinGW / MSVC），必须钉死，否则每次提交都是全文件 diff
+#
+# 规则：仓库内一律 LF；检出到工作区也用 LF（不做平台转换）。
+# 理由：
+#   1. 黄金回归测试做字节级比对（tests/golden/），行尾漂移会污染 diff 与哈希。
+#   2. 门禁脚本改动需要精确 review，全文件 diff 会让 review 失效。
+#   3. MSVC 与现代 MinGW 都能正确处理 LF 源码；`/utf-8` 已打开。
+* text=auto eol=lf
+
+# ── 二进制（禁止任何转换与 diff）────────────────────────────────────────────
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.webp binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.zip  binary
+*.7z   binary
+*.exe  binary
+*.dll  binary
+*.lib  binary
+*.pdb  binary
+*.bin  binary
+
+# ── 黄金基准数据：字节级比对，永不转换 ──────────────────────────────────────
+*.golden binary
+*.npy    binary
+*.npz    binary
+
+# ── 语言统计（github linguist）─────────────────────────────────────────────
+third_party/** linguist-vendored
+external/**    linguist-vendored
+build*/**      linguist-vendored
