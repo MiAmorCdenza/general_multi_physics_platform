@@ -1,0 +1,77 @@
+feat(views): add the node editor, property panel and editor window
+
+The GUI now exists and edits something. This is the first shell where the view
+layer's central claim can be checked by using it: one session, one graph, one undo
+stack, two panels showing different facets of the same thing.
+
+## The split is what makes the layer testable
+
+views/model is **Qt-free**: the enumerable node-type catalog, the built-in
+demonstrator library, and the rule that decides which control edits a port. Plain
+C++ over core types, so it is covered by the ordinary Catch2 suite on BOTH
+compilers -- including the GCC build, which cannot link Qt at all. 103 assertions
+across 8 cases.
+
+views/qt is what genuinely needs a toolkit: the canvas and the widgets.
+
+The editor-selection rule is in the Qt-free half deliberately. It is the part most
+likely to be subtly wrong, and both failure modes are invisible in a screenshot: a
+bounded control for a port that declared no range silently rejects legitimate
+values, and a numeric control for a text type displays a 0 where the user's file
+path used to be -- and the user believes it. A rule inside a QWidget can only be
+tested with a Qt harness and an event loop.
+
+## The canvas renders the session and holds no graph
+
+It owns no graph data: the items are rebuilt from `session.graph()` whenever the
+session reports a change, and every edit goes back through `session.apply(...)`.
+Two copies of a graph diverge without crashing -- the canvas would keep drawing the
+node the panel already deleted -- so `views.nodegraph.items_match_graph` asserts
+the drawn items match the graph exactly, through add, connect and remove.
+
+Positions are layout, not graph data: they go into the document's slot for view id
+"graph", and a drag deliberately does not bump the graph version or push an undo
+entry. One undo per mouse-move would take a hundred undos to reverse a single drag,
+and the graph version is what every content-addressed cache key derives from.
+
+## The panel has no per-type branch
+
+It asks the port whether it is connectable, whether it declared a range, whether it
+carries a choice list, and asks portui how the type is edited. A new port type
+arrives with its description and gets an editor without a line changing in the
+panel -- which is the charter's promise, now checkable rather than aspirational.
+
+## The window reports core state, never placeholders
+
+The status line reads nodes, edges, graph version, change count, undo availability,
+run count and the run's missing reproducibility inputs, all from the core. A line
+with hard-coded values would keep looking correct after the wiring behind it broke.
+
+## Two real defects found by running it
+
+  - `optimisation_id()` returned "release" for every MSVC build: it tested
+    `_MSC_VER`, which is defined in Debug as well. MSVC does not define
+    `__OPTIMIZE__`, so the macro that actually distinguishes the configurations is
+    `_DEBUG`. A reproducibility record that misreports the optimisation level is a
+    false statement in the one place that must not contain one.
+
+  - The window's initial framing and splitter sizing were both applied before the
+    widgets had been laid out, so the graph sat pinned to the viewport corner and
+    the property panel had no width at all. Deferred to the next event-loop turn.
+
+## Two Qt traps recorded in comments, both failing as errors that point elsewhere
+
+  - `catch_discover_tests` runs the executable at **build** time to enumerate
+    cases. This one needs Qt's DLLs and a QApplication, so discovery failed -- as a
+    modal "Qt6Widgetsd.dll not found" dialog on MSVC, blocking the build until
+    someone clicked it. Registered as a single CTest entry with the DLL directory
+    injected through the test's environment instead. The granularity lost is real
+    and named in the comment.
+
+  - Qt discovery moved to the root CMakeLists: a package found in a subdirectory
+    yields imported targets scoped to that directory, so `Qt6::Core` was invisible
+    to tests/, which needs it to locate Qt's DLLs.
+
+GCC 15.2.0 (MinGW i686) 464/464 with views off and no Qt present; MSVC 19.51 (x64)
+465/465 with views on and Qt 6.8.3. All five gates green, plus all five gate
+self-tests. qp_shell.exe verified to launch and render.

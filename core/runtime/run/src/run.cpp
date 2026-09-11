@@ -128,9 +128,20 @@ const char* optimisation_id() noexcept {
     // whenever optimisation is on, but says nothing about the level, so a record
     // that printed "-O2" here would be inventing a detail it cannot see -- and an
     // invented detail in a reproducibility record is worse than an absent one.
+    // MSVC does **not** define `__OPTIMIZE__`, and `_MSC_VER` is defined in every
+    // MSVC build including Debug -- so testing it here reported "release" for a
+    // Debug binary, which is a false statement in a reproducibility record. MSVC's
+    // Debug runtime is selected by `_DEBUG`, which is the macro that actually
+    // distinguishes the two.
 #if defined(NDEBUG)
     return "release";
-#elif defined(__OPTIMIZE__) || defined(_MSC_VER)
+#elif defined(_MSC_VER)
+#if defined(_DEBUG)
+    return "debug";
+#else
+    return "release";
+#endif
+#elif defined(__OPTIMIZE__)
     return "release";
 #else
     return "debug";

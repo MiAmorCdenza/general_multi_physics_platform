@@ -24,7 +24,7 @@
  * @invariant   Every displayed number is read from the core, never hard-coded
  * @errors      noexcept
  * @frozen      no
- * @tests       views.shell.links_core_state
+ * @tests       qt.views.shell.links_core_state
  */
 #pragma once
 
@@ -45,7 +45,7 @@ namespace qp::views {
  * @invariant   The session outlives the widget's use of it
  * @errors      noexcept
  * @frozen      no
- * @tests       views.shell.links_core_state
+ * @tests       qt.views.shell.links_core_state
  */
 class HelloView final : public QWidget {
     Q_OBJECT
@@ -66,11 +66,13 @@ public:
      * @pre         none
      * @post        The window shows the session's node count and the ledger's run count
      * @invariant   No state is stored outside the session and the ledger
-     * @errors      noexcept
+     * @errors      May allocate while building the window; failure to allocate
+     *              terminates rather than being reported, because a window that
+     *              cannot be built has nowhere to report to
      * @complexity  O(1)
      * @nondet      none
      * @frozen      no
-     * @tests       views.shell.links_core_state
+     * @tests       qt.views.shell.links_core_state
      */
     explicit HelloView(QWidget* parent = nullptr);
 

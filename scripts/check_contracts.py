@@ -366,9 +366,24 @@ def parse_header(path: Path, skip_trivial: bool = True,
     return contracts, violations
 
 
-def collect_test_ids(tests_dir: Path) -> set[str]:
+def collect_test_ids(tests_dir: Path, exclude: set[str] | None = None) -> set[str]:
+    """Every TEST_CASE id under `tests_dir`, minus the excluded subtrees.
+
+    `exclude` matches a directory **name** anywhere in the path. It exists so that
+    one consumer's tests can be handed to a second invocation: test ownership is a
+    global judgement, so two invocations must see disjoint sets of test cases or
+    each one reports the other's legitimate cases as orphans.
+    """
+    skip = exclude or set()
     ids: set[str] = set()
     for path in tests_dir.rglob("*.cpp"):
+        # A term matches either a directory name anywhere in the path (`views`) or
+        # a path fragment (`unit/views`). The fragment form exists because the
+        # directory-name form cannot tell `tests/unit/views` from
+        # `tests/unit/units`: both contain a segment starting with "unit".
+        rel = path.relative_to(tests_dir).as_posix()
+        if any(term in path.parts or term in rel for term in skip):
+            continue
         for m in TEST_CASE_RE.finditer(path.read_text(encoding="utf-8", errors="replace")):
             ids.add(m.group("id"))
     return ids
@@ -392,6 +407,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="孤儿测试用例降级为警告（默认视为失败）")
     parser.add_argument("--no-scan-tests", dest="scan_tests", action="store_false",
                         help="不把测试文件里的模块级契约块纳入用例归属统计")
+    parser.add_argument("--exclude", action="append", default=[],
+                        help="收集测试用例时跳过的目录名或路径片段（可重复）。"
+                             "用于把某个子树的用例交给另一次调用去管辖："
+                             "用例归属是**全局**判据，所以两次调用必须看到互不相交的用例集合，"
+                             "否则一方的合规用例在另一方看来全是孤儿。"
+                             "写法可以是目录名 `views`，也可以是路径片段 `unit/views`。")
     args = parser.parse_args(argv)
 
     headers_root = Path(args.headers)
@@ -405,7 +426,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"错误：测试目录不存在 {tests_root}", file=sys.stderr)
         return 1
 
-    declared_tests = collect_test_ids(tests_root)
+    declared_tests = collect_test_ids(tests_root, set(args.exclude))
     violations: list[Violation] = []
     all_contracts: list[FunctionContract] = []
     referenced: set[str] = set()

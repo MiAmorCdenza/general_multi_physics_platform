@@ -147,11 +147,33 @@ if(QP_BUILD_VIEWS)
         message(STATUS "Qt: no kit under QP_QT_ROOT (${QP_QT_ROOT}); "
                        "falling back to find_package's own search")
     endif()
+
+    # Found here rather than inside views/ so that the imported targets are visible
+    # to the whole project. A package located in a subdirectory yields targets
+    # scoped to that directory, and tests/ legitimately needs Qt6::Core -- to learn
+    # where Qt's DLLs live, so CTest can launch a GUI test at all.
+    #
+    # Only Core, Gui and Widgets. Qt Charts is deliberately absent: it is GPL-3.0
+    # rather than LGPL, and scripts/check_qt_modules.py fails the build if it ever
+    # appears on a link line.
+    find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets)
 endif()
 
 # -- Directories --------------------------------------------------------------
 # Note: the core layer is always present; views / plugins are consumers, switchable off
 add_subdirectory(core)
+
+# The Qt-FREE half of the view layer, added unconditionally.
+#
+# It lives outside core/ because it is a consumer -- core must not depend on it --
+# but it needs no Qt, so it is built in every configuration. That is deliberate: the
+# property panel's editor-selection rule is the part of the view layer most likely
+# to be subtly wrong, and keeping it here means it is asserted on BOTH compilers,
+# including the GCC build that cannot link Qt at all.
+#
+# The Qt half (views/) stays behind QP_BUILD_VIEWS.
+add_subdirectory(views/model)
+
 if(QP_BUILD_VIEWS)
     add_subdirectory(views)
 endif()

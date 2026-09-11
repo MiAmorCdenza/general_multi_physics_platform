@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "许可定为 Apache-2.0（LICENSE + NOTICE + THIRD_PARTY_NOTICES）；新增 Qt 模块许可门禁",
+  "updated": "GUI 起步：views/model（Qt 无关）+ views/qt（节点编辑器、属性面板）在 MSVC x64 + Qt 6.8.3 下可运行",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -13,7 +13,7 @@
     "contract_completeness": {
       "tool": "scripts/check_contracts.py",
       "state": "passing",
-      "detail": "270 个契约 / 418 个用例 / 0 违规 / 0 孤儿。@tests 的 id 与 tests/ 下的 TEST_CASE 逐字对应。"
+      "detail": "271 个契约 / 433 个用例 / 0 违规 / 0 孤儿（core/）。扫描加了 `--exclude`，把 views 的用例交给另一次调用管辖——用例归属是**全局**判据（既查每个 @tests id 存在，也查每个 TEST_CASE 被认领），所以两次调用必须看到互不相交的用例集合，否则一方的合规用例在另一方看来全是孤儿。views/model 的契约门禁尚未接入：还缺一个只含模型测试的测试根，已记在测试文件里的说明中。"
     },
     "gate_self_test": {
       "tool": "tests/meta/check_contract_checker.py",
@@ -59,7 +59,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 455,
+    "ctest_registered": 465,
     "compilers_green": [
       "gcc-15.2.0-i686",
       "msvc-19.51-x64"
@@ -208,7 +208,7 @@
       "path": "views",
       "layer": "consumer",
       "state": "implemented",
-      "note": "Qt 视图层骨架（`QP_BUILD_VIEWS=ON`，仅 MSVC x64）。已打通的是**风险最高的那一环**：Qt 能被找到、moc 会跑、core 能链进一个同时链 Qt 的进程、窗口能起来。这一环与面板长什么样无关，而它现在退役比在调节点编辑器时才发现便宜得多。窗口显示的是 **core 的真实状态**（节点数、图版本、变更数、运行数、缺失的复现输入）而不是占位文本——因为一个显示硬编码数字的 demo 会在 core 链接已经断掉之后继续通过。决策见 docs/adr/ADR-0006：维持 Qt 但改为 QWidgets 为主（不是 QML），不引入 Qt Charts（GPL 而非 LGPL，会让「分发二进制」这个目标直接失效），绘图改用 QCustomPlot(MIT) 或 QWT(LGPL)。工具链后果：Qt 6 无 32 位包，所以 GUI 不能用本项目的 MinGW i686 构建；core 仍双编译器验证且完全不依赖 Qt。"
+      "note": "Qt 界面层，分两半，切分本身就是让这一层可测的关键。**views/model 是 Qt 无关的**：可枚举的节点类型目录、内置演示类型库、以及「哪个控件编辑这个端口」的判定规则。全是 core 类型上的普通 C++，因此由普通 Catch2 套件在**两个编译器**上覆盖——包括根本链不了 Qt 的 GCC 构建。**views/qt 才需要工具包**：画布与控件。判定规则刻意放在 Qt 无关的一半：它是最容易悄悄出错的地方（端口没声明范围却给了有界控件会静默拒掉合法值；文本类型给了数字框会在用户原来的路径处显示 0），而写在 QWidget 里的规则只能靠 Qt 测试夹具和事件循环去测。已实现：节点编辑器（QGraphicsScene，**渲染 Session 且自身不持图**——每次变更从 session.graph() 重建；位置写进 document 的 graph 槽位，因为坐标不是图的属性）、属性面板（无任何按类型分支，控件由端口的 connectable/has_range/choice 与 portui 描述决定）、以及把它们接在同一个 Session 上的 EditorWindow。Edges/nodes/status 全部读自 core，`reproducibility gaps` 直接来自 runtime/run。实测：qp_shell.exe 在 MSVC x64 + Qt 6.8.3 下启动并渲染（三节点两连线、属性面板、真实状态栏）。尚未做：搜索/对齐/撤销按钮等编辑便利功能；Qt Charts 按 ADR-0006 明确不用。"
     },
     {
       "path": "plugins",
