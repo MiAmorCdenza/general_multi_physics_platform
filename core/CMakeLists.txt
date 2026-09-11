@@ -1,4 +1,4 @@
-# core：地基 + 图 + 运行时 + 视图服务
+﻿# core：地基 + 图 + 运行时 + 视图服务
 #
 # 铁律（standards/enforcement.md §4）：
 #   core 下不得出现任何 Qt 头文件，不得依赖 views/ 或 plugins/。
@@ -6,3 +6,4 @@
 
 add_subdirectory(units)
 add_subdirectory(diag)
+add_subdirectory(abi)

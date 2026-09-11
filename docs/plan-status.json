@@ -1,55 +1,53 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "P1 完成",
+  "updated": "P2 进行中：diag + abi 完成",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": ["planned", "contract", "specified", "implemented", "verified"],
   "gates": {
     "contract_completeness": {
       "tool": "scripts/check_contracts.py",
       "state": "passing",
-      "detail": "35 个契约 / 61 个用例 / 0 违规 / 0 孤儿；10 个短体运算符按规则豁免"
+      "detail": "64 个契约 / 110 个用例 / 0 违规 / 0 孤儿；@thread 新增 publish 角色"
     },
     "gate_self_test": {
       "tool": "tests/meta/check_contract_checker.py",
       "state": "passing",
-      "detail": "C2/C3/C4/C5 四类违规必被抓到；合规样本无误报；模块级契约与函数契约正确区分"
-    },
-    "compiler_matrix": {
-      "state": "passing",
-      "detail": "GCC 15.2.0 (MinGW i686) 与 MSVC 19.51 (x64) 双 70/70；见 ADR-0004"
-    },
-    "cmake_graph": {
-      "state": "passing",
-      "detail": "catch_discover_tests 注册 70 项（62 个 TEST_CASE + 8 个聚合项）；按 tag 过滤可用"
-    },
-    "catch2_link": {
-      "state": "passing",
-      "detail": "external/Catch2 v3.5.2（由 scripts/fetch_deps.ps1 拉取）；配置阶段默认不联网"
+      "detail": "C2/C3/C4/C5 四类违规必被抓到；合规样本无误报"
     },
     "layer_dependency": {
       "tool": "scripts/check_layers.py",
-      "state": "not_implemented",
-      "detail": "P2 引入第二个 core 模块前必须补上"
+      "state": "passing",
+      "detail": "L1 允许方向 / L2 禁 Qt / L3 Eigen 受限 / L4 禁反向依赖 / L5 未登记模块。由 tests/meta/check_layer_checker.py 用 4 反例 + 1 正例验证：只测反例会漏掉『把一切都报错』的退化实现。"
+    },
+    "compiler_matrix": {
+      "state": "passing",
+      "detail": "GCC 15.2.0 (MinGW i686) 与 MSVC 19.51 (x64) 双 123/123；见 ADR-0004"
+    },
+    "cmake_graph": {
+      "state": "passing",
+      "detail": "catch_discover_tests 注册 123 项；按 tag 过滤可用；死亡测试以独立测试项注册（判据是进程退出码 + 终止原因文本）"
+    },
+    "catch2_link": {
+      "state": "passing",
+      "detail": "external/Catch2 v3.5.2；scripts/fetch_deps.ps1 显式拉取，配置阶段默认不联网"
     }
   },
   "test_stats": {
-    "test_cases": 62,
-    "assertions": 1326,
-    "ctest_registered": 70
+    "ctest_registered": 123
   },
   "modules": [
     { "path": "core/units", "layer": "L0", "state": "verified",
-      "note": "P1 纵切完成并双编译器验证。类型契约冻结、35 个函数契约、黄金字符串、8 个真实缺陷已修（含 is_dimensionless 物理错误、分母括号、MSVC NTTP）。U6 已由 ADR-0005 决策。" },
-    { "path": "core/diag", "layer": "L0", "state": "planned",
-      "note": "P2 首选：无依赖，是其他模块的错误通道" },
-    { "path": "core/abi", "layer": "L0", "state": "planned",
-      "note": "P2；布局断言必须先于实现。量纲用 7 字节 Dim，绝不存单位字符串" },
+      "note": "P1 纵切完成并双编译器验证。类型契约冻结、黄金字符串、8 个真实缺陷已修。U6 由 ADR-0005 决策。" },
+    { "path": "core/diag", "layer": "L0", "state": "verified",
+      "note": "错误通道：ErrorCode（分域稳定编码）/ Consequence / Result<T> / Diagnostic / ISink。diag 是唯一无 core 依赖的模块。含死亡测试验证违反 @pre 必然终止。" },
+    { "path": "core/abi", "layer": "L0", "state": "verified",
+      "note": "跨边界内存布局：Version/兼容判定、FieldDim、LatticeDesc、FieldBuffer（seqlock）。唯一连 units 都不依赖的模块——ABI 必须能被外部语言绑定独立消费。布局重复用断言守而不靠依赖消除。tests/ABI_LAYOUT.md 是语言中立布局说明书。" },
     { "path": "core/ports", "layer": "L0", "state": "planned",
-      "note": "P2；必须引入 scalar_f32/scalar_f64 两个标签（ADR-0005）" },
+      "note": "P2 下一步；必须引入 scalar_f32/scalar_f64 两个标签（ADR-0005）" },
     { "path": "core/reflect", "layer": "L0", "state": "planned",
-      "note": "units 已完成 unit_symbol 部分；type_name 随 abi 一并成型" },
+      "note": "units 已完成 unit_symbol 部分；type_name 随 ports 一并成型" },
     { "path": "core/plugin", "layer": "L0", "state": "planned",
-      "note": "P4；兼容策略与模糊测试同时" },
+      "note": "P4；兼容策略（abi::check_compatible 已就位）与模糊测试同时" },
     { "path": "core/graph/ir", "layer": "L1", "state": "planned", "note": "P3 前置；插件 API 本身" },
     { "path": "core/graph/structure", "layer": "L1", "state": "planned", "note": "P3" },
     { "path": "core/graph/mutate", "layer": "L1", "state": "planned", "note": "P3；撤销栈在地基" },

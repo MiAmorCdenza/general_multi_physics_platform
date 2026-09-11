@@ -1,0 +1,46 @@
+feat(abi): 新增 core/abi 跨边界内存布局，并冻结 ABI 契约
+
+P2 第二个模块，也是整个项目**唯一不可回头**的部分：
+插件的 .dll 是独立编译的产物，宿主无法在编译期发现布局不匹配。
+静默的版本错配不崩溃，只是算出错的东西。
+
+core/abi 的类型契约
+- Version + CompatVerdict + check_compatible：兼容判定是**纯函数**，
+  可单独测试，不需要真的加载任何插件。
+  规则刻意保守：主版本必须完全相等，任何"尽力兼容"都会变成静默错误。
+  判定给出**原因**（host_too_old / plugin_too_old / plugin_too_new /
+  layout_mismatch），因为用户需要知道"为什么加载失败"。
+- FieldDim：7 字节量纲，**刻意与 units::Dim 重复定义**。
+  abi 是给外部语言绑定看的边界契约，那些绑定不编译 C++。
+  重复的代价用断言守住（abi.dim_matches_units_dim），
+  而不是用依赖消除重复。
+- LatticeDesc：32 字节格子描述 + point_count/data_bytes/is_consistent 派生量。
+  那张 256x128x64 矢量场的 data_bytes 测试就是"一张场 ≈ 24MB"、
+  也就是 ADR-0005 里 float32 决策的量化依据。
+- FieldBuffer：80 字节描述符（GCC i686 与 MSVC x64 实测一致），
+  含 seqlock 写侧/读侧协议。**不拥有数据**——19MB 的场不允许被拷贝。
+  生命周期模型是"发布方保持存活"，引用计数在结构之外，
+  因为 shared_ptr 是 C++ 运行时概念，写不进语言中立的布局说明。
+
+abi 的规矩与别处不同：只用 C 子集、零 core 依赖。
+唯一模板是 data_as<T>（static_cast 的语法糖，不进 ABI）。
+
+tests/ABI_LAYOUT.md：语言中立的布局说明书
+- 逐字节的偏移表 + flags 位定义 + seqlock 协议 + 兼容判定规则
+- 明确"若与 static_assert 不一致，以断言为准"
+- 外部绑定（Python / MATLAB / 未来 Web）读这份文件，不读 C++ 头文件
+
+被测试抓出的缺陷（全部由静态断言抓出，一个都没进运行期）
+1. reserved 数组写死 8 个初始化值，而元素个数是 8/sizeof(uint64_t)
+   —— 64 位下只有 1 个元素，"too many initializers"。
+2. 32 位布局算错：以为 data_bytes 在 52，实际 uint64 仍需 8 字节对齐，
+   填充到 56。实测两者偏移**相同**（都是 80 字节结构体），
+   于是外部绑定只需一份表——这是填充带来的好处，已写进文档。
+3. @thread 用了"仅发布线程"这样的散文，而线程角色是**受控取值集合**。
+   已把 publish 登记为正式角色（门禁 + 规范同步）。
+4. abi 头文件的 @tests 引用了不存在的用例，由门禁 C4 抓出。
+
+验证
+- CTest：123 项全绿（GCC 15.2.0 i686 与 MSVC 19.51 x64 双绿）
+- 契约门禁：64 个契约 / 110 个用例 / 0 违规 / 0 孤儿
+- 层级门禁：abi 零 core 依赖，通过

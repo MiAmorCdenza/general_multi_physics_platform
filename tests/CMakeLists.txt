@@ -138,3 +138,10 @@ if(Python3_Interpreter_FOUND)
         LABELS "gate"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 endif()
+
+# ── ABI 布局断言（enforcement.md §7）────────────────────────────────────────
+# 需要同时链接 units：用于守住 abi::FieldDim 与 units::Dim 的一致性。
+qp_add_test(qp_test_abi_layout
+    SOURCES abi/test_abi_layout.cpp
+    LIBS qp::abi qp::units
+    LABELS "abi;unit")

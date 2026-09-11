@@ -36,7 +36,16 @@ PREPROC_RE = re.compile(r"^\s*#")
 # 必填字段。注意：TAGS 字典的键是去掉 '@' 的裸名，这里必须与之一致。
 REQUIRED_TAGS = ("ownership", "thread", "pre", "post", "errors", "tests")
 OWNERSHIP_VALUES = {"pure", "owns", "observes", "borrows", "value"}
-THREAD_VALUES = {"any", "main", "eval", "ui"}
+
+# 线程角色。取值集合本身是契约的一部分：出现新角色必须显式登记，
+# 否则"这个函数到底谁能调"会变成含糊的散文。
+THREAD_VALUES = {
+    "any",      # 无共享可变状态，任意线程可调
+    "main",     # 仅主线程（UI、文档编辑）
+    "eval",     # 仅图求值线程
+    "ui",       # 仅 UI 线程（与 main 区分时使用）
+    "publish",  # 仅数据发布线程（seqlock 的写侧；见 core/abi）
+}
 
 
 @dataclass
