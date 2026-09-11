@@ -1,13 +1,13 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "P3 进行中：graph ir/structure/mutate/validate 完成（4/8）",
+  "updated": "P3 进行中：graph ir/structure/mutate/validate/eval 完成（5/8）",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": ["planned", "contract", "specified", "implemented", "verified"],
   "gates": {
     "contract_completeness": {
       "tool": "scripts/check_contracts.py",
       "state": "passing",
-      "detail": "112 个契约 / 256 个用例 / 0 违规 / 0 孤儿"
+      "detail": "122 个契约 / 289 个用例 / 0 违规 / 0 孤儿"
     },
     "gate_self_test": {
       "tool": "tests/meta/check_contract_checker.py",
@@ -21,11 +21,11 @@
     },
     "compiler_matrix": {
       "state": "passing",
-      "detail": "GCC 15.2.0 (MinGW i686) 与 MSVC 19.51 (x64) 双 274/274；见 ADR-0004"
+      "detail": "GCC 15.2.0 (MinGW i686) 与 MSVC 19.51 (x64) 双 308/308；见 ADR-0004"
     },
     "cmake_graph": {
       "state": "passing",
-      "detail": "catch_discover_tests 注册 274 项；按 tag 过滤可用；死亡测试以独立测试项注册（判据是进程退出码 + 终止原因文本）"
+      "detail": "catch_discover_tests 注册 308 项；按 tag 过滤可用；死亡测试以独立测试项注册（判据是进程退出码 + 终止原因文本）"
     },
     "catch2_link": {
       "state": "passing",
@@ -33,7 +33,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 274
+    "ctest_registered": 308
   },
   "modules": [
     { "path": "core/units", "layer": "L0", "state": "verified",
@@ -56,8 +56,8 @@
       "note": "命令总线 + 唯一撤销栈。命令是纯数据（可比较/可序列化）；撤销靠逆命令而非快照；同节点连续同类编辑合并（拖动滑块一次撤销）。撤销再重做**保持节点 id 不变**——这是整套设计最关键的性质。" },
     { "path": "core/graph/validate", "layer": "L1", "state": "verified",
       "note": "加载期校验：五层检查（结构/端口存在性/连接兼容/必需参数/域许可）一次报全部问题。含**量纲解析**——把 same_as_input 沿拓扑序解析成具体量纲，这是只有看到整张图才能完成的一步。校验只读，调用前后图与版本号不变。" },
-    { "path": "core/graph/eval", "layer": "L1", "state": "planned",
-      "note": "P3；缓存键用 Lattice::uid（旧工程用 id() 是缺陷）" },
+    { "path": "core/graph/eval", "layer": "L1", "state": "verified",
+      "note": "求值调度 + 内容寻址缓存。缓存键用 NodeId{index,generation}（修复旧工程用 id() 地址当键的缺陷）；确定性哈希（不用实现定义的 std::hash）；浮点文本用归一化的 %a 保证跨编译器一致。撤销回上一步立刻命中缓存。" },
     { "path": "core/graph/domain", "layer": "L1", "state": "planned", "note": "P3" },
     { "path": "core/graph/kernels", "layer": "L1", "state": "planned",
       "note": "P3；契约在地基，Boris/蛙跳/RK4/Verlet 是插件" },

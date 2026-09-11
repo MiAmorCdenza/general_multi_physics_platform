@@ -160,3 +160,6 @@ qp_add_test(qp_test_graph_mutate
 qp_add_test(qp_test_graph_validate
     SOURCES unit/graph/test_validate.cpp
     LIBS qp::graph_validate)
+qp_add_test(qp_test_graph_eval
+    SOURCES unit/graph/test_eval.cpp
+    LIBS qp::graph_eval)
