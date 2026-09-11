@@ -148,3 +148,6 @@ qp_add_test(qp_test_abi_layout
 qp_add_test(qp_test_ports
     SOURCES unit/ports/test_ports.cpp
     LIBS qp::ports)
+qp_add_test(qp_test_graph_ir
+    SOURCES unit/graph/test_ir.cpp
+    LIBS qp::graph_ir)

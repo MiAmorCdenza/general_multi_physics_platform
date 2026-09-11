@@ -1,13 +1,13 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "P2 完成：diag + abi + ports 三个 L0 模块全部 verified",
+  "updated": "P3 进行中：graph/ir 完成（1/8）",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": ["planned", "contract", "specified", "implemented", "verified"],
   "gates": {
     "contract_completeness": {
       "tool": "scripts/check_contracts.py",
       "state": "passing",
-      "detail": "77 个契约 / 149 个用例 / 0 违规 / 0 孤儿"
+      "detail": "85 个契约 / 171 个用例 / 0 违规 / 0 孤儿"
     },
     "gate_self_test": {
       "tool": "tests/meta/check_contract_checker.py",
@@ -21,11 +21,11 @@
     },
     "compiler_matrix": {
       "state": "passing",
-      "detail": "GCC 15.2.0 (MinGW i686) 与 MSVC 19.51 (x64) 双 163/163；见 ADR-0004"
+      "detail": "GCC 15.2.0 (MinGW i686) 与 MSVC 19.51 (x64) 双 186/186；见 ADR-0004"
     },
     "cmake_graph": {
       "state": "passing",
-      "detail": "catch_discover_tests 注册 163 项；按 tag 过滤可用；死亡测试以独立测试项注册（判据是进程退出码 + 终止原因文本）"
+      "detail": "catch_discover_tests 注册 186 项；按 tag 过滤可用；死亡测试以独立测试项注册（判据是进程退出码 + 终止原因文本）"
     },
     "catch2_link": {
       "state": "passing",
@@ -33,7 +33,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 163
+    "ctest_registered": 186
   },
   "modules": [
     { "path": "core/units", "layer": "L0", "state": "verified",
@@ -48,7 +48,8 @@
       "note": "units 已完成 unit_symbol 部分；type_name 随 ports 一并成型" },
     { "path": "core/plugin", "layer": "L0", "state": "planned",
       "note": "P4；兼容策略（abi::check_compatible 已就位）与模糊测试同时" },
-    { "path": "core/graph/ir", "layer": "L1", "state": "planned", "note": "P3 前置；插件 API 本身" },
+    { "path": "core/graph/ir", "layer": "L1", "state": "verified",
+      "note": "中间表示：NodeId 带世代（防槽位复用后静默指错对象）、PortDesc 统一 Param 与 Port（connectable 标志）、NodeDesc 三个可选钩子为上限、Edge 不可变且方向有硬不变量。IR 就是插件 API 本身。" },
     { "path": "core/graph/structure", "layer": "L1", "state": "planned", "note": "P3" },
     { "path": "core/graph/mutate", "layer": "L1", "state": "planned", "note": "P3；撤销栈在地基" },
     { "path": "core/graph/validate", "layer": "L1", "state": "planned", "note": "P3；加载期单位校验" },

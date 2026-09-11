@@ -25,6 +25,10 @@ from pathlib import Path
 
 INCLUDE_RE = re.compile(r'^\s*#\s*include\s*[<"]([^">]+)[">]')
 
+# 层目录：它们只是**分类**，不是模块。模块是层下面的一级。
+# 例：`qp/graph/ir/node.hpp` 属于模块 ir，不属于模块 graph。
+LAYER_DIRS = frozenset({"graph", "runtime", "authoring"})
+
 # ── 允许的依赖方向（模块 → 它被允许依赖的模块集合）──────────────────────────
 #
 # 与 docs/plan-tree.md §8 的白名单保持同步。新增模块必须在此登记，
@@ -83,49 +87,61 @@ class Violation:
 
 
 def module_of(include: str, core_root: Path) -> str | None:
-    """把 include 路径映射到 core 模块名。
+    """把 include 路径映射到 core 模块名，也用于源码路径。
 
-    `qp/units/dim.hpp`        → units
-    `qp/diag/result.hpp`      → diag
-    `qp/graph/ir/node.hpp`    → ir      （graph/ 是层，ir 才是模块）
-    `qp/abi/field_buffer.hpp` → abi
-    `qp/units.hpp`            → units   **伞头文件**：qp 之后直接是文件名
+    目录约定（兼容两种历史写法）：
+      `qp/units/dim.hpp`         → units
+      `qp/diag/result.hpp`       → diag
+      `qp/graph/ir/node.hpp`     → ir      （层目录被跳过）
+      `qp/abi/field_buffer.hpp`  → abi
+      `qp/units.hpp`             → units   伞头文件
+      `qp/graph/ir.hpp`          → ir      层目录下的伞头文件
 
-    伞头文件是每个模块的公开入口（`qp/units.hpp`、`qp/diag.hpp` …），
-    不能把它当成模块名 "units.hpp"。早期版本正是这样误判的。
+    实现：剔除 `include` / `src` 这类目录约定噪声后，
+    从 `qp/` 之后的目录里取**第一个非层目录**；若全被过滤掉
+    （即路径形如 `qp/<layer>/<file>`），则取文件名词干。
     """
-    parts = Path(include).parts
+    parts = [p for p in Path(include).parts if p not in ("include", "src")]
     if len(parts) < 2 or parts[0] != "qp":
         return None
 
-    # 伞头文件：qp/<module>.hpp
-    if len(parts) == 2:
-        stem = Path(parts[1]).stem
-        return stem or None
+    dirs = list(parts[1:-1])          # qp 与文件名之间的目录段
+    modules = [d for d in dirs if d not in LAYER_DIRS]
+    if modules:
+        return modules[0]
 
-    second = parts[1]
-    if second == "graph" and len(parts) >= 3:
-        return parts[2]
-    if second in ("runtime", "authoring") and len(parts) >= 3:
-        return parts[2]
-    return second
+    # 没有模块目录：路径是 qp/<layer>/<file> 或 qp/<file>
+    return Path(parts[-1]).stem or None
 
 
 def module_of_relative(rel_parts: tuple[str, ...]) -> str | None:
     """从**相对 core 根**的路径判断所属模块。
 
     支持两种目录约定：
-      - 开发约定：`<mod>/include/qp/...`  → 取第 0 段
-      - 纯头文件：`qp/<mod>/...` 或 `qp/graph/<mod>/...` → 取 qp 之后的段
+      - 开发约定：`<layer>/<mod>/include/qp/...` → 取 `qp/` 之后的段
+      - 简化约定：`<mod>/include/qp/...`         → 取第 0 段
 
-    早期版本只有后一种路径识别逻辑，导致用第一种约定的文件被判成模块 "qp"
-    ——由 tests/meta 的层级反例抓出。现在两条路径统一走本函数。
+    关键：判断逻辑必须与 `module_of()` **完全一致**，否则"文件属于哪个模块"
+    与"include 指向哪个模块"会用两套规则，产生自相矛盾的判定。
+    早期版本只做 `rel_parts[0]`，于是 `graph/ir/...` 被误判为模块 "graph"，
+    与 include 解析出的 "ir" 对不上——由层级门禁自身抓出。
+
+    因此这里统一委托给 `module_of()`：先定位路径里的 `qp` 段，
+    再把 `qp/...` 整段交给它解析。
     """
     if not rel_parts:
         return None
-    if rel_parts[0] == "qp":
-        return module_of("qp/" + "/".join(rel_parts[1:]), Path("."))
-    return rel_parts[0]
+    rest = tuple(p for p in rel_parts if p not in ("include", "src"))
+    # 路径形如 <layer>/<mod>/qp/... 或 <mod>/qp/...：从 `qp` 段开始交给 module_of
+    if "qp" in rest:
+        i = rest.index("qp")
+        return module_of("/".join(rest[i:]), Path("."))
+    # 源码路径（无 qp 段）：形如 <layer>/<mod>/<file> 或 <mod>/<file>
+    dirs = [d for d in rest[:-1] if d not in LAYER_DIRS]
+    if dirs:
+        return dirs[0]
+    # 全部被过滤（如 <layer>/<file>）：用文件名兜底
+    return Path(rest[-1]).stem if rest else None
 
 
 def check_file(path: Path, core_root: Path, root: Path,

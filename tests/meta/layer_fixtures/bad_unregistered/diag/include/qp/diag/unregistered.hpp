@@ -8,7 +8,6 @@
 #pragma once
 
 #include <qp/this_module_is_not_registered/thing.hpp>   // 非法：未登记模块
-
 namespace qp::layerfixture::bad_unregistered {
 
 [[nodiscard]] inline constexpr int f() noexcept { return 0; }
