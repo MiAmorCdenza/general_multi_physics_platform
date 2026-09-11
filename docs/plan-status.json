@@ -36,7 +36,7 @@
     },
     "compiler_matrix": {
       "state": "passing",
-      "detail": "GCC 15.2.0 (MinGW i686) 与 MSVC 19.51 (x64) 双绿（P3 收尾时双 387/387）；见 ADR-0004"
+      "detail": "GCC 15.2.0 (MinGW i686) 与 MSVC 19.51 (x64) 双 399/399；见 ADR-0004"
     },
     "cmake_graph": {
       "state": "passing",
