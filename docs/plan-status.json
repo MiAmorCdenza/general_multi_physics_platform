@@ -1,13 +1,13 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "P2 进行中：diag + abi 完成",
+  "updated": "P2 完成：diag + abi + ports 三个 L0 模块全部 verified",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": ["planned", "contract", "specified", "implemented", "verified"],
   "gates": {
     "contract_completeness": {
       "tool": "scripts/check_contracts.py",
       "state": "passing",
-      "detail": "64 个契约 / 110 个用例 / 0 违规 / 0 孤儿；@thread 新增 publish 角色"
+      "detail": "77 个契约 / 149 个用例 / 0 违规 / 0 孤儿"
     },
     "gate_self_test": {
       "tool": "tests/meta/check_contract_checker.py",
@@ -21,11 +21,11 @@
     },
     "compiler_matrix": {
       "state": "passing",
-      "detail": "GCC 15.2.0 (MinGW i686) 与 MSVC 19.51 (x64) 双 123/123；见 ADR-0004"
+      "detail": "GCC 15.2.0 (MinGW i686) 与 MSVC 19.51 (x64) 双 163/163；见 ADR-0004"
     },
     "cmake_graph": {
       "state": "passing",
-      "detail": "catch_discover_tests 注册 123 项；按 tag 过滤可用；死亡测试以独立测试项注册（判据是进程退出码 + 终止原因文本）"
+      "detail": "catch_discover_tests 注册 163 项；按 tag 过滤可用；死亡测试以独立测试项注册（判据是进程退出码 + 终止原因文本）"
     },
     "catch2_link": {
       "state": "passing",
@@ -33,7 +33,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 123
+    "ctest_registered": 163
   },
   "modules": [
     { "path": "core/units", "layer": "L0", "state": "verified",
@@ -42,8 +42,8 @@
       "note": "错误通道：ErrorCode（分域稳定编码）/ Consequence / Result<T> / Diagnostic / ISink。diag 是唯一无 core 依赖的模块。含死亡测试验证违反 @pre 必然终止。" },
     { "path": "core/abi", "layer": "L0", "state": "verified",
       "note": "跨边界内存布局：Version/兼容判定、FieldDim、LatticeDesc、FieldBuffer（seqlock）。唯一连 units 都不依赖的模块——ABI 必须能被外部语言绑定独立消费。布局重复用断言守而不靠依赖消除。tests/ABI_LAYOUT.md 是语言中立布局说明书。" },
-    { "path": "core/ports", "layer": "L0", "state": "planned",
-      "note": "P2 下一步；必须引入 scalar_f32/scalar_f64 两个标签（ADR-0005）" },
+    { "path": "core/ports", "layer": "L0", "state": "verified",
+      "note": "端口类型注册表：Value（标签联合，量纲不进值）、PortTypeDesc、PortTypeRegistry（三态注册语义）、check_connection/check_value（加载期判定）。落地了 ADR-0005 的 scalar_f32/scalar_f64 双标签与『端口边界唯一一次拓宽』。" },
     { "path": "core/reflect", "layer": "L0", "state": "planned",
       "note": "units 已完成 unit_symbol 部分；type_name 随 ports 一并成型" },
     { "path": "core/plugin", "layer": "L0", "state": "planned",

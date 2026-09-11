@@ -7,3 +7,4 @@
 add_subdirectory(units)
 add_subdirectory(diag)
 add_subdirectory(abi)
+add_subdirectory(ports)

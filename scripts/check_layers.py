@@ -35,7 +35,9 @@ ALLOWED: dict[str, set[str]] = {
     "diag": {"units"},
     "reflect": {"units"},
     "abi": {"units"},
-    "ports": {"units", "diag"},
+    # ports 需要 abi 的 LatticeDesc 作为 Value 的场句柄载荷——
+    # 端口要能传递场，而场的布局定义在 abi。这条依赖是刻意的。
+    "ports": {"units", "diag", "abi"},
     # L1 图与执行
     "ir": {"units", "diag", "ports"},
     "structure": {"units", "diag", "ir"},
@@ -87,11 +89,20 @@ def module_of(include: str, core_root: Path) -> str | None:
     `qp/diag/result.hpp`      → diag
     `qp/graph/ir/node.hpp`    → ir      （graph/ 是层，ir 才是模块）
     `qp/abi/field_buffer.hpp` → abi
+    `qp/units.hpp`            → units   **伞头文件**：qp 之后直接是文件名
+
+    伞头文件是每个模块的公开入口（`qp/units.hpp`、`qp/diag.hpp` …），
+    不能把它当成模块名 "units.hpp"。早期版本正是这样误判的。
     """
     parts = Path(include).parts
     if len(parts) < 2 or parts[0] != "qp":
         return None
-    # qp/<layer-or-module>/...
+
+    # 伞头文件：qp/<module>.hpp
+    if len(parts) == 2:
+        stem = Path(parts[1]).stem
+        return stem or None
+
     second = parts[1]
     if second == "graph" and len(parts) >= 3:
         return parts[2]

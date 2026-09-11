@@ -145,3 +145,6 @@ qp_add_test(qp_test_abi_layout
     SOURCES abi/test_abi_layout.cpp
     LIBS qp::abi qp::units
     LABELS "abi;unit")
+qp_add_test(qp_test_ports
+    SOURCES unit/ports/test_ports.cpp
+    LIBS qp::ports)
