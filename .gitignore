@@ -51,3 +51,6 @@ v-*.log
 tmp_*
 plan.json
 
+
+# aqtinstall writes this next to the working directory when it fetches Qt
+aqtinstall.log
