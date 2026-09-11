@@ -13,3 +13,6 @@
 
 add_subdirectory(capability)
 add_subdirectory(commands)
+add_subdirectory(document)
+add_subdirectory(layout)
+add_subdirectory(portui)

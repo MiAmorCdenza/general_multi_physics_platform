@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "P4 进行中：core/plugin + authoring/capability + authoring/commands 完成；authoring 余下 document/layout/portui",
+  "updated": "P4 完成（core/plugin + core/authoring 五模块全部 verified）；下一步 L2（core/runtime）",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -13,7 +13,7 @@
     "contract_completeness": {
       "tool": "scripts/check_contracts.py",
       "state": "passing",
-      "detail": "213 个契约 / 387 个用例 / 0 违规 / 0 孤儿。@tests 的 id 与 tests/ 下的 TEST_CASE 逐字对应。"
+      "detail": "244 个契约 / 403 个用例 / 0 违规 / 0 孤儿。@tests 的 id 与 tests/ 下的 TEST_CASE 逐字对应。"
     },
     "gate_self_test": {
       "tool": "tests/meta/check_contract_checker.py",
@@ -23,7 +23,7 @@
     "layer_dependency": {
       "tool": "scripts/check_layers.py",
       "state": "passing",
-      "detail": "L1 允许方向 / L2 禁 Qt / L3 Eigen 受限 / L4 禁反向依赖 / L5 未登记模块。由 tests/meta/check_layer_checker.py 用 4 反例 + 1 正例验证：只测反例会漏掉『把一切都报错』的退化实现。本阶段把 kernels -> field 加入白名单（见该文件的注释：计划树原写 abi+domain，但批次要交给算子的是『一段被描述的采样』，把它在 kernels 里复制一份会造成平台对同一概念有两个互不兼容的答案）。"
+      "detail": "L1 允许方向 / L2 禁 Qt / L3 Eigen 受限 / L4 禁反向依赖 / L5 未登记模块。由 tests/meta/check_layer_checker.py 用 4 反例 + 1 正例验证：只测反例会漏掉『把一切都报错』的退化实现。本阶段两处白名单加宽都带理由：kernels -> field（批次要交给算子的是『一段被描述的采样』，在 kernels 里复制一份会造成同一概念两个互不兼容的答案）、capability -> plugin（它协商的是 manifest，从不碰端口类型）、layout -> structure（位置是逐节点实例的，而保存实例的容器是 structure）。"
     },
     "code_dialect": {
       "tool": "scripts/check_dialect.py",
@@ -54,7 +54,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 417,
+    "ctest_registered": 436,
     "compilers_green": [
       "gcc-15.2.0-i686",
       "msvc-19.51-x64"
@@ -172,8 +172,8 @@
     {
       "path": "core/authoring/document",
       "layer": "L3",
-      "state": "planned",
-      "note": "view_layouts 分槽"
+      "state": "verified",
+      "note": "文档身份 + **按视图 id 分槽**的布局元数据。核心的一条：**节点在屏幕上的位置不是图的属性**——图说的是『一个弹簧连着一个质量』，不是『并且弹簧画在 (120, 80)』。任何把坐标塞进图的做法都会让其他视图出错：时间序列图没有 x，公式视图没有 x，读文档的脚本还得跳过它无法解释的字段。所以坐标住在 ViewLayouts 里，按视图 id 索引，核心永不读它。由此得到一句必须明说的事实：**没装节点编辑器的用户，文档里就没有 graph 那一槽**——不是缺字段，而是『不存在的视图没有布局』。负载是不透明字节（std::string），因为布局是视图自己的事；把核心的 schema 强加给它，就等于核心要为将来每一个视图定 schema。本模块**不是** Session：Session 拥有正在编辑的活图，本模块拥有『保存下来的文档是什么』。分开正是为了不让『文档』变成图的第二个可变句柄——那会把 Session 存在的意义（防止两份副本）重新引入。"
     },
     {
       "path": "core/authoring/capability",
@@ -190,20 +190,20 @@
     {
       "path": "core/authoring/layout",
       "layer": "L3",
-      "state": "planned",
-      "note": "算法是插件"
+      "state": "verified",
+      "note": "布局契约：进位置、出位置，**算法是插件**。放哪儿是有多个站得住脚的答案的设计问题——电路要分层、状态机要环形、教学演示要『作者放哪儿就哪儿』——平台替所有人选一个，对大多数人是错的。所以地基拥有契约与注册表，算法是内容，和 graph/kernels 同一种切分。compute(graph, seed) 必须是纯函数：读时钟的布局让截图回归测试不可能；用未播种 RNG 的布局让**文档不可复现**——同一实验两次运行存出的文件不同，于是两份文档的 diff 不再意味着『物理变了』。力导向算法仍然可以随机，但种子由调用者从运行给。位置是整数而不是 double：位置是图坐标而不是屏幕像素，依赖迭代顺序或宿主浮点模式的浮点布局会在某台机器上写 120.00000000000001、另一台写 120.0，于是每次保存都有假 diff。"
     },
     {
       "path": "core/authoring/portui",
       "layer": "L3",
-      "state": "planned",
-      "note": "新端口类型自动获得 UI"
+      "state": "verified",
+      "note": "端口类型驱动的属性面板。要守的承诺来自章程：**加一种端口类型不需要动任何面板代码**。守法的办法不是写一个会猜的通用面板，而是让每种端口类型**声明**自己怎么被编辑，然后有且仅有一个面板渲染任何声明；于是『新类型新编辑器』从视图层的代码改动变成一次注册。跨边界的只有**描述**：没有 widget、没有造 widget 的回调、没有任何 Qt 类型——描述里出现一个 widget 类名就等于把 Qt 从后门拖进 core，而铁律 1 禁止这件事。describe() **永不失败**：没有注册描述的类型得到只读显示并标出类型名。这正是『插件的参数暂时改不了』与『面板打不开』的区别——前者用户能绕，后者丢掉整个会话。回退是 read_only 而**绝不是 number**：未知类型可能装的是文本、句柄、或根本没有数值含义的东西，而无法表示该值的数字控件会在用户原来的文件引用处显示一个 0，然后用户会相信它。"
     },
     {
       "path": "views",
       "layer": "consumer",
       "state": "planned",
-      "note": "可整体删除；core 独立性门禁依赖这点"
+      "note": "可整体删除；core 独立性门禁依赖这点。authoring 五模块（document/capability/commands/layout/portui）是**视图服务**而非视图本身：这一层存在的唯一理由是让多个视图共存于同一个编辑会话。"
     },
     {
       "path": "plugins",

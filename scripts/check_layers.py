@@ -87,7 +87,9 @@ ALLOWED: dict[str, set[str]] = {
     # accidentally depend on the type registry being populated.
     "capability": {"units", "diag", "plugin"},
     "commands": {"units", "diag", "ir", "structure", "mutate"},
-    "layout": {"units", "diag", "ir", "document"},
+    # layout takes a whole Graph, not just the IR: a position is per node instance,
+    # and the container that holds instances is structure.
+    "layout": {"units", "diag", "ir", "structure", "document"},
     "portui": {"units", "diag", "ports", "capability"},
 }
 

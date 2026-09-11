@@ -234,3 +234,12 @@ qp_add_test(qp_test_capability
 qp_add_test(qp_test_authoring_session
     SOURCES unit/authoring/test_session.cpp
     LIBS qp::authoring_commands)
+qp_add_test(qp_test_authoring_document
+    SOURCES unit/authoring/test_document.cpp
+    LIBS qp::authoring_document)
+qp_add_test(qp_test_authoring_layout
+    SOURCES unit/authoring/test_layout.cpp
+    LIBS qp::authoring_layout)
+qp_add_test(qp_test_authoring_portui
+    SOURCES unit/authoring/test_port_ui.cpp
+    LIBS qp::authoring_portui)
