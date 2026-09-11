@@ -16,7 +16,10 @@
 | 静态布局断言 | `tests/abi/` 编译 | 布局改变 |
 | 层级依赖 | `scripts/check_layers.py`（§4） | 越界 include |
 | **契约完备性** | `scripts/check_contracts.py`（§5） | 函数缺 `@tests` |
+| **代码方言** | `scripts/check_dialect.py`（`standards/code-dialect.md`） | 注释非 ASCII / 出现象形字符 |
+| **文件编码** | `scripts/check_encoding.py`（§2.2） | 非 UTF-8 / CRLF / `.ps1` 缺 BOM |
 | **编译器矩阵** | GCC + MSVC 双编译（§2.1） | 任一编译器失败 |
+| **依赖跟踪** | `scripts/check_build_deps.ps1`（§2.2） | 改头文件不触发重编译 |
 
 ### 2.1 编译器矩阵（不可省）
 
@@ -35,6 +38,42 @@ CI 矩阵：
 | GCC（MinGW-w64 或 Linux） | C++20 | 主力开发与快速反馈 |
 | MSVC 19.4x | /std:c++20 | Windows 交付路径，必须绿 |
 | Clang（可选） | C++20 | 交叉验证，尽早发现方言差异 |
+
+### 2.2 编码与依赖跟踪（两个"编译器不管但会静默出错"的边界）
+
+这两件事都不会产生编译错误，所以只能靠门禁。
+
+**`scripts/check_encoding.py`（`gate.encoding`）** 查三件事：
+
+| 规则 | 内容 | 不管会怎样 |
+|---|---|---|
+| E1 | 所有文本文件是合法 UTF-8 | 用 GBK 存盘的源文件在 MSVC 上照样编译（ANSI 代码页刚好对得上），换台机器就全乱 |
+| E2 | 换行一律 LF | 黄金回归做字节比对，CRLF 检出会悄悄改掉每个期望值 |
+| E3 | `.ps1` 必须以 UTF-8 **带 BOM** 存盘 | Windows PowerShell 5.1 对无 BOM 脚本按 ANSI 解码，中文注释在解析期变成乱码、中文字符串在运行期变成错值。本项目踩过两次 |
+
+**`scripts/check_build_deps.ps1`（依赖跟踪回归）** 把"改头文件必须触发重编译"
+变成一次可执行的检查：
+
+```powershell
+pwsh scripts/check_build_deps.ps1 -BuildDir build        # GCC
+pwsh scripts/check_build_deps.ps1 -BuildDir build-msvc   # MSVC
+```
+
+Ninja 对 MSVC 靠 `msvc_deps_prefix` 匹配 `cl.exe` 的 `/showIncludes` 输出来建立
+头文件依赖。CMake 在编译器探测阶段用 `execute_process(ENCODING AUTO)` 解码这个
+前缀——用的是**控制台代码页**，而 `cl.exe` 输出的是 UTF-8。若控制台代码页是
+437 / 936 之类的旧代码页，CMake 记下的是乱码，于是：
+
+```
+依赖跟踪静默失效 → 改头文件后 ninja 说 "no work to do"
+                → 链接到过期二进制 → 测试跑的是旧代码 → 结论全是假的
+```
+
+它不报错、不警告，只在"改了代码却看不到变化"时暴露。本项目因此浪费过若干轮排查。
+
+修法是在配置**之前**把控制台代码页钉成 UTF-8（`scripts/build.ps1` 里的
+`chcp 65001`）。注意 `VSLANG=1033` **不能**替代它：实测本机的 `cl.exe` 无论
+`VSLANG` 为何值都输出中文前缀（语言由安装的 MUI 语言包决定，环境变量改不了）。
 
 ## 2. PR / 合并阶段
 
@@ -181,14 +220,14 @@ ctest --test-dir build-nocorecons --output-on-failure
 
 ### 8.1 两个真实的踩坑记录（写给后续维护者）
 
-**① 门禁必须测"正例"，不能只测反例**
+**(1) 门禁必须测"正例"，不能只测反例**
 
 `check_layers.py` 第一版在四个反例上全部报错、看起来很好，
 但它把**合法依赖**也报成了 L5——因为模块识别只认 `qp/<mod>/...` 一种路径约定，
 而真实仓库用的是 `<mod>/include/qp/<mod>/...`。
 加上"合法依赖不得报错"这一条断言后当场暴露。
 
-**② Windows 上的 `.ps1` 必须存成 UTF-8 带 BOM**
+**(2) Windows 上的 `.ps1` 必须存成 UTF-8 带 BOM**
 
 `scripts/build.ps1` 含中文，若存成无 BOM 的 UTF-8，
 Windows PowerShell 5.1 会按 GBK 解码，中文变成乱码**并破坏引号配对**，

@@ -1,11 +1,30 @@
 cmake_minimum_required(VERSION 3.24)
 
+# Note on MSVC dependency tracking: it is NOT fixed here.
+#
+# Ninja matches cl.exe's `/showIncludes` output against `msvc_deps_prefix` to
+# learn a translation unit's header dependencies. The prefix is localized, and
+# CMake detects it during compiler detection with `execute_process(ENCODING
+# AUTO)`, which decodes using the **console code page** while cl.exe writes
+# UTF-8. On a legacy code page (437, 936, ...) CMake records mojibake, Ninja
+# matches nothing, and dependency tracking fails silently: headers change,
+# Ninja says "no work to do", and tests run against stale binaries.
+#
+# The fix has to happen before `cmake` is invoked, because the code page is
+# process-global: see the `chcp 65001` in scripts/build.ps1. Setting VSLANG here
+# does not work -- measured on this machine, cl.exe prints the localized prefix
+# regardless of VSLANG, because the language comes from the installed MUI
+# language pack rather than the environment.
+#
+# `scripts/check_build_deps.ps1` is the regression test; run it against
+# build-msvc after any change to the build entry points.
+
 project(qp
     VERSION 0.1.0
     DESCRIPTION "General-purpose physics experiment simulation platform"
     LANGUAGES CXX)
 
-# ── 选项 ─────────────────────────────────────────────────────────────────────
+# -- Options ------------------------------------------------------------------
 option(QP_BUILD_TESTS   "构建测试"                             ON)
 option(QP_BUILD_VIEWS   "构建 Qt 视图层（消费者）"               OFF)
 option(QP_BUILD_PLUGINS "构建插件（内容）"                       OFF)
@@ -23,7 +42,7 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "" FORCE)
 endif()
 
-# ── 警告 ─────────────────────────────────────────────────────────────────────
+# -- Warnings -----------------------------------------------------------------
 add_library(qp_warnings INTERFACE)
 if(MSVC)
     target_compile_options(qp_warnings INTERFACE /W4 /permissive- /utf-8 /Zc:__cplusplus)
@@ -47,15 +66,15 @@ if(QP_SANITIZE)
     target_link_options(qp_sanitize INTERFACE -fsanitize=address,undefined)
 endif()
 
-# ── 测试依赖：Catch2 v3 ─────────────────────────────────────────────────────
+# -- Test dependency: Catch2 v3 ----------------------------------------------
 #
-# 三级探测，优先级从高到低：
-#   1. external/Catch2  —— 由 scripts/fetch_deps.ps1 显式拉取（推荐，离线可用）
-#   2. find_package     —— 系统/vcpkg 安装
-#   3. FetchContent     —— 仅当显式打开 QP_FETCH_DEPS
+# Three probes, highest priority first:
+#   1. external/Catch2  ---- fetched by scripts/fetch_deps.ps1 (recommended; works offline)
+#   2. find_package     ---- a system / vcpkg install
+#   3. FetchContent     ---- only when QP_FETCH_DEPS is explicitly enabled
 #
-# 设计意图：**配置阶段默认不联网**。否则"能否配置成功"会取决于网络，
-# 这在离线开发和 CI 缓存场景下都不可接受。
+# Design intent: **configure does not touch the network by default**. Otherwise
+# "will configure succeed" would depend on the network, unacceptable offline and in CI.
 if(QP_BUILD_TESTS)
     set(QP_CATCH2_LOCAL "${CMAKE_SOURCE_DIR}/external/Catch2")
 
@@ -89,8 +108,8 @@ if(QP_BUILD_TESTS)
     endif()
 endif()
 
-# ── 目录 ─────────────────────────────────────────────────────────────────────
-# 注意：core 层永远在，views / plugins 是消费者，可整体关闭。
+# -- Directories --------------------------------------------------------------
+# Note: the core layer is always present; views / plugins are consumers, switchable off
 add_subdirectory(core)
 if(QP_BUILD_VIEWS)
     add_subdirectory(views)
@@ -99,7 +118,7 @@ if(QP_BUILD_PLUGINS)
     add_subdirectory(plugins)
 endif()
 
-# ── 测试 ─────────────────────────────────────────────────────────────────────
+# -- Tests --------------------------------------------------------------------
 if(QP_BUILD_TESTS)
     include(CTest)
     enable_testing()

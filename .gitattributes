@@ -5,6 +5,10 @@
 #   1. 黄金回归测试做字节级比对（tests/golden/），行尾漂移会污染 diff 与哈希。
 #   2. 门禁脚本改动需要精确 review，全文件 diff 会让 review 失效。
 #   3. MSVC 与现代 MinGW 都能正确处理 LF 源码；`/utf-8` 已打开。
+#
+# 注意：`.ps1` 的 **UTF-8 BOM** 是运行前提，但 BOM 属于文件内容而非行尾，
+# 无法用 gitattributes 表达（`working-tree-encoding` 会在检出时再插一次 BOM）。
+# 它由 `scripts/check_encoding.py` 检查，并注册为 CTest 的 `gate.encoding`。
 * text=auto eol=lf
 
 # ── 二进制（禁止任何转换与 diff）────────────────────────────────────────────
