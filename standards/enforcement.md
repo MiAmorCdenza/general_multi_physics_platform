@@ -164,10 +164,54 @@ ctest --test-dir build-nocorecons --output-on-failure
 
 | 样本 | 期望 |
 |---|---|
-| 一个缺 `@tests` 的函数 | `check_contracts.py` 报错 |
-| 一个引用不存在测试 id 的函数 | 报错 |
-| 一个 `core/` 里 include `<QObject>` 的文件 | `check_layers.py` 报错 |
-| 一个违反允许方向的 include | 报错 |
-| 一个改了 `FieldBuffer` 布局的补丁 | `static_assert` 编译失败 |
+| 一个缺 `@tests` 的函数 | `check_contracts.py` 报错 C2 |
+| 一个引用不存在测试 id 的函数 | 报错 C4 |
+| 一个 `@errors noexcept` 与签名不符的函数 | 报错 C5 |
+| 一个 `@ownership` 取值非法的函数 | 报错 C3 |
+| `#include <qp/abi/...>` 出现在 units 里 | `check_layers.py` 报错 L1 |
+| `#include <QObject>` 出现在 core 里 | 报错 L2 |
+| `#include <views/...>` 出现在 core 里 | 报错 L4 |
+| 依赖未登记模块 | 报错 L5 |
+| **合法**依赖（diag → units） | **不得**报错 |
+| 一个改了 `FieldBuffer` 布局的补丁 | `static_assert` 编译失败（P2 起） |
 
 **未经验证的门禁等于没有门禁**——它给你虚假的安全感。
+
+**门禁的自检必须包含正例**：只测反例会漏掉"把一切都报错"的退化实现。
+
+### 8.1 两个真实的踩坑记录（写给后续维护者）
+
+**① 门禁必须测"正例"，不能只测反例**
+
+`check_layers.py` 第一版在四个反例上全部报错、看起来很好，
+但它把**合法依赖**也报成了 L5——因为模块识别只认 `qp/<mod>/...` 一种路径约定，
+而真实仓库用的是 `<mod>/include/qp/<mod>/...`。
+加上"合法依赖不得报错"这一条断言后当场暴露。
+
+**② Windows 上的 `.ps1` 必须存成 UTF-8 带 BOM**
+
+`scripts/build.ps1` 含中文，若存成无 BOM 的 UTF-8，
+Windows PowerShell 5.1 会按 GBK 解码，中文变成乱码**并破坏引号配对**，
+报出 "The string is missing the terminator" 这类与真实原因无关的语法错误。
+
+规则：本仓库所有 `.ps1` / `.bat` 一律 **UTF-8 with BOM**。
+
+---
+
+## 9. 一键构建入口
+
+```powershell
+pwsh scripts/build.ps1              # GCC + MSVC 全部构建与测试
+pwsh scripts/build.ps1 -Only gcc
+pwsh scripts/build.ps1 -Fresh       # 清空重建
+```
+
+**为什么需要脚本而不是手敲 cmake：**
+
+1. 编译器矩阵是硬门禁，手敲容易只跑一半。
+2. Ninja + MSVC 需要 vcvars 环境；漏了会**静默换成别的工具链**，
+   而"换工具链"恰好会让 ADR-0004 那类缺陷逃逸。
+3. MSVC 在中文 Windows 上会输出大量本地化的 `/showIncludes` 提示
+   （"注意: 包含文件: ..."），直接看屏幕会淹掉真正的错误。
+   脚本把每个工具链的 configure / build / test 各自落日志，
+   失败时只回显匹配 `error` 的行。

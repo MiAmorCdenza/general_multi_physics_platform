@@ -5,3 +5,4 @@
 #   本目录必须能在 QP_BUILD_VIEWS=OFF 且未安装 Qt 的机器上完整构建并通过测试。
 
 add_subdirectory(units)
+add_subdirectory(diag)

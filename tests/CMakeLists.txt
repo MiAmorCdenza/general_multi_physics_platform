@@ -90,6 +90,45 @@ qp_add_test(qp_test_core_standalone
     SOURCES smoke/test_core_standalone.cpp
     LABELS "smoke")
 
+qp_add_test(qp_test_diag
+    SOURCES unit/diag/test_diag.cpp
+    LIBS qp::diag)
+
+# ── 死亡测试：验证"违反 @pre 必然终止进程" ─────────────────────────────────
+#
+# 被测用例带 `[.]` 标签（Catch2 hidden），因此 catch_discover_tests 不会
+# 为它注册普通测试项——这一点很重要：否则它会以 SKIP 通过，
+# 掩盖"死亡测试根本没跑"这个事实。
+#
+# 这里的判据是**进程退出码**：
+#   - 用 PASS_REGULAR_EXPRESSION 要求终止原因确实是契约违反，
+#     否则任意崩溃都会让这个测试"通过"。
+#   - 同时要求 Catch2 报出"没有失败断言"——即进程是被 terminate 掉的，
+#     而不是某个 REQUIRE 失败导致的非零退出。
+add_test(NAME qp_test_diag.death.contract_violation
+    COMMAND ${CMAKE_COMMAND} -E env QP_TEST_SELF=$<TARGET_FILE:qp_test_diag>
+            $<TARGET_FILE:qp_test_diag> "diag.contract.violation_terminates")
+set_tests_properties(qp_test_diag.death.contract_violation PROPERTIES
+    LABELS "unit;death"
+    PASS_REGULAR_EXPRESSION "契约违反")
+
+# ── 层级依赖门禁（enforcement.md §4）───────────────────────────────────────
+if(Python3_Interpreter_FOUND)
+    add_test(NAME gate.layers
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_layers.py --quiet)
+    set_tests_properties(gate.layers PROPERTIES
+        LABELS "gate"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+    add_test(NAME meta.layer_checker
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/meta/check_layer_checker.py)
+    set_tests_properties(meta.layer_checker PROPERTIES
+        LABELS "gate"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+endif()
+
 # ── 门禁自身的测试（enforcement.md §8）─────────────────────────────────────
 if(Python3_Interpreter_FOUND)
     add_test(NAME meta.contract_checker

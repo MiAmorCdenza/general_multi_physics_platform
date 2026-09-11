@@ -33,3 +33,9 @@ venv/
 Testing/
 *.gcda
 *.gcno
+
+# ── 构建脚本的日志（scripts/build.ps1 产出）──────────────────────────────────
+build*.configure.log
+build*.build.log
+build*.test.log
+msvc_*.log
