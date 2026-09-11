@@ -1,24 +1,24 @@
 /**
  * @file result.hpp
- * @brief `Result<T>`：不抛异常的失败表达。
+ * @brief `Result<T>`: expressing failure without throwing.
  *
- * 为什么不用异常：
- *   1. **热路径禁止异常**（plan-tree.md §8 铁律 5，由 clang-tidy 强制）。
- *      数值内核每帧跑几十万次，异常表的代价与展开检查不可接受。
- *   2. 插件跨边界（DLL / 子进程 / 未来的 Web）抛出的异常**无法安全穿越**。
- *   3. 异常把失败藏在类型之外，调用方容易忘记处理；`Result` 让失败进入类型系统。
+ * Why not exceptions:
+ *   1. **Exceptions are banned on the hot path** (plan-tree.md section 8, iron rule 5, enforced by clang-tidy).
+ *      The numeric kernel runs hundreds of thousands of times per frame; exception tables and unwind checks cost too much.
+ *   2. An exception thrown across a plugin boundary (DLL / subprocess / future Web) **cannot travel safely**.
+ *   3. Exceptions hide failure outside the type, so callers forget to handle it; `Result` puts failure into the type system.
  *
- * 与 `Consequence` 的关系：
- *   `Result` 说明"这次调用失败了"，`Consequence` 说明"失败有多严重"。
- *   两者都进入类型，宿主才能做降级决策。
+ * Relation to `Consequence`:
+ *   `Result` says "this call failed", `Consequence` says "how severe the failure is".
+ *   Both enter the type, which is what lets the host make degradation decisions.
  *
- * @ownership   pure（值类型）
+ * @ownership   pure (value type)
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   要么持有值，要么持有错误码，二者不同时成立
- * @errors      noexcept（本类型自身不抛；构造失败即 std::terminate）
- * @frozen      是（类模板形状冻结）
+ * @invariant   it either holds a value or holds an error code, never both
+ * @errors      noexcept (this type itself does not throw; a failed construction means std::terminate)
+ * @frozen      yes (the class template shape is frozen)
  * @tests       diag.result.ok_value, diag.result.err_only,
  *              diag.result.value_or_fallback, diag.result.monadic_chaining,
  *              diag.result.void_specialization, diag.result.no_throw_on_access
@@ -35,24 +35,24 @@
 namespace qp::diag {
 
 /**
- * @brief 承载"值或错误码"的结果类型。
+ * @brief Result type that carries "a value or an error code".
  *
- * @tparam T 成功时的值类型。必须是可析构的完整类型。
+ * @tparam T The value type on success. Must be a destructible complete type.
  *
- * 用法约定：
- *   - 取用值**必须**先检查 `has_value()`；未检查即取是编程错误（debug 下断言）。
- *   - `value_or(fallback)` 是唯一允许的无检查取值方式。
+ * Usage rules:
+ *   - Taking the value **must** be preceded by a `has_value()` check; taking it unchecked is a programming error (asserted in debug).
+ *   - `value_or(fallback)` is the only unchecked way to take the value.
  */
 template <class T>
 class [[nodiscard]] Result final {
 public:
     using value_type = T;
 
-    /// @brief 构造成功结果。
+    /// @brief Construct a success result.
     constexpr Result(T value) noexcept(std::is_nothrow_move_constructible_v<T>)
         : value_(std::move(value)), error_(ErrorCode::ok) {}
 
-    /// @brief 构造失败结果。错误码不得为 ok。
+    /// @brief Construct a failure result. The error code must not be ok.
     constexpr Result(ErrorCode code) noexcept : value_(std::nullopt), error_(code) {}
 
     [[nodiscard]] constexpr bool has_value() const noexcept {
@@ -60,66 +60,66 @@ public:
     }
     [[nodiscard]] constexpr explicit operator bool() const noexcept { return has_value(); }
 
-    /// @brief 错误码。成功时为 `ErrorCode::ok`。
+    /// @brief The error code. `ErrorCode::ok` on success.
     [[nodiscard]] constexpr ErrorCode error() const noexcept { return error_; }
 
     /**
-     * @brief 取值的引用。
+     * @brief Reference to the value.
      *
-     * @ownership   borrows（引用指向本对象内部，本对象移动后失效）
+     * @ownership   borrows (the reference points inside this object and dangles once it moves)
      * @thread      any
      * @pre         has_value() == true
-     * @post        返回对内部值的引用，不复制
-     * @invariant   引用在 Result 存活期内有效
-     * @errors      noexcept；违反 @pre 时终止进程（不是异常，也不是 UB）
+     * @post        returns a reference to the internal value, without copying
+     * @invariant   the reference stays valid for the lifetime of the Result
+     * @errors      noexcept; violating @pre terminates the process (not an exception, and not UB)
      * @complexity  O(1)
      * @nondet      none
-     * @frozen      否
+     * @frozen      no
      * @tests       diag.result.ok_value, diag.result.no_throw_on_access
      */
     [[nodiscard]] constexpr const T& value() const noexcept {
-        // 刻意不用 std::optional::value()：它在空时抛异常，而本项目禁止用异常表达失败。
-        // 违反 @pre 是编程错误 → 终止（见 contract.hpp 的取舍说明）。
+        // Deliberately not std::optional::value(): that throws when empty, and this project forbids exceptions for failure.
+        // Violating @pre is a programming error -> terminate (see the trade-off note in contract.hpp).
         QP_PRECONDITION(value_.has_value());
         return *value_;
     }
 
     /**
-     * @brief 取值，失败时返回兜底值。**唯一允许不做检查的取值方式**。
+     * @brief Take the value, or a fallback on failure. **The only unchecked way to take a value**.
      *
      * @ownership   pure
      * @thread      any
      * @pre         none
-     * @post        成功时返回内部值的副本，失败时返回 fallback
-     * @invariant   不修改本对象
-     * @errors      noexcept；若 T 的拷贝构造抛出，则 std::terminate
-     *              （本项目不用异常表达失败，宁可确定性终止）
+     * @post        returns a copy of the internal value on success, or fallback on failure
+     * @invariant   does not modify this object
+     * @errors      noexcept; if T's copy constructor throws, std::terminate
+     *              (this project does not express failure with exceptions; it prefers deterministic termination)
      * @complexity  O(copy(T))
      * @nondet      none
-     * @frozen      否
+     * @frozen      no
      * @tests       diag.result.value_or_fallback
      */
     [[nodiscard]] constexpr T value_or(T fallback) const noexcept {
         return has_value() ? *value_ : std::move(fallback);
     }
 
-    /// @brief 失败时的后果级别。成功时返回 recoverable（无意义，仅保证全覆盖）。
+    /// @brief Consequence level on failure. Returns recoverable on success (meaningless; only keeps the switch total).
     [[nodiscard]] constexpr Consequence consequence() const noexcept {
         return has_value() ? Consequence::recoverable : default_consequence(error_);
     }
 
     /**
-     * @brief 成功时变换值，失败时原样透传错误。
+     * @brief Transform the value on success; pass the error straight through on failure.
      *
      * @ownership   pure
      * @thread      any
-     * @pre         f 可被 T 调用
-     * @post        成功时返回 f(值) 的结果；失败时返回同一错误码
-     * @invariant   错误码在链路中不被吞掉
-     * @errors      取决于 f；f 抛异常则本函数抛
-     * @complexity  取决于 f
-     * @nondet      取决于 f
-     * @frozen      否
+     * @pre         f can be called with T
+     * @post        returns the result of f(value) on success; returns the same error code on failure
+     * @invariant   the error code is never swallowed along the chain
+     * @errors      depends on f; if f throws, this function throws
+     * @complexity  depends on f
+     * @nondet      depends on f
+     * @frozen      no
      * @tests       diag.result.monadic_chaining
      */
     template <class F>
@@ -135,17 +135,17 @@ private:
 };
 
 /**
- * @brief `Result<void>`：只表达成功/失败，不携带值。
+ * @brief `Result<void>`: expresses only success/failure and carries no value.
  *
- * 这是最常用的一种——大多数图变异、校验、加载操作的失败信息就是错误码本身。
+ * This is the most common form -- for most graph mutations, validations, and load operations the failure information is the error code itself.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   要么成功，要么持有错误码
+ * @invariant   it either succeeds or holds an error code
  * @errors      noexcept
- * @frozen      是
+ * @frozen      yes
  * @tests       diag.result.void_specialization, diag.result.void_ok_is_truthy
  */
 template <>
@@ -167,10 +167,10 @@ private:
     ErrorCode error_;
 };
 
-/// @brief 构造成功结果。
+/// @brief Construct a success result.
 [[nodiscard]] constexpr Result<void> ok() noexcept { return Result<void>{}; }
 
-/// @brief 构造失败结果。
+/// @brief Construct a failure result.
 [[nodiscard]] constexpr Result<void> fail(ErrorCode code) noexcept { return Result<void>{code}; }
 
 }  // namespace qp::diag

@@ -1,30 +1,36 @@
 /**
  * @file diagnostic.hpp
- * @brief 结构化诊断：插件出错必须能被**归因给用户**。
+ * @brief Structured diagnostics: a plugin error must be **attributable to the user**.
  *
- * 设计意图（对应 plan-tree.md §2.5）：
- *   一条无主日志等于没有信息。诊断必须携带：
- *   - 哪里出的（code + 域）
- *   - 有多严重（consequence）
- *   - 是谁出的（source：插件/模块标识）
- *   - 附带的可选上下文（node_id / port_id 等，用稳定字符串而非指针）
+ * Design intent (see plan-tree.md section 2.5):
+ *   A log line with no owner carries no information. A diagnostic must carry:
+ *   - where it came from (code + domain)
+ *   - how severe it is (consequence)
+ *   - who produced it (source: plugin/module identifier)
+ *   - optional attached context (node_id / port_id, as stable strings, not pointers)
  *
- * 刻意**不携带**指向运行时对象的指针或引用：诊断会被跨线程、跨进程、
- * 跨语言传递，任何 live 对象引用都会变成悬垂。
+ * It deliberately **carries no** pointer or reference to a runtime object: diagnostics
+ * travel across threads, processes and languages, so any live reference dangles.
  */
 #pragma once
 
 #include <qp/diag/error.hpp>
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <utility>
 
 namespace qp::diag {
 
-/// @brief 诊断的来源标识：哪个插件/模块产生的。
+/// @brief Log severity. Defined in logging.hpp; forward declared so that a
+///        diagnostic can report its severity without depending on the log
+///        schema.
+enum class Severity : std::uint8_t;
+
+/// @brief Source identifier of a diagnostic: which plugin/module produced it.
 ///
-/// 用稳定字符串而非指针——插件可能已被卸载，诊断仍要能打印出来。
+/// A stable string, not a pointer -- the plugin may be gone but the text still prints.
 struct SourceId final {
     std::string value{};
 
@@ -35,27 +41,28 @@ struct SourceId final {
 };
 
 /**
- * @brief 一条结构化诊断。
+ * @brief One structured diagnostic.
  *
- * @ownership   owns（持有自己的字符串副本；不引用任何外部对象）
+ * @ownership   owns (holds its own string copies; references no external object)
  * @thread      any
  * @pre         code != ErrorCode::ok
  * @post        none
- * @invariant   code 与 consequence 一经构造不再变化
- * @errors      noexcept（除构造时的内存分配；分配失败即 std::terminate）
- * @complexity  —
+ * @invariant   code and consequence never change after construction
+ * @errors      noexcept (except allocation at construction; failure calls std::terminate)
+ * @complexity  -
  * @nondet      none
- * @frozen      否（可加字段；已有字段语义冻结）
+ * @frozen      no (fields may be added; existing field semantics are frozen)
  * @tests       diag.diagnostic.construction, diag.diagnostic.stable_text,
- *              diag.diagnostic.no_live_references
+ *              diag.diagnostic.no_live_references,
+ *              diag.diagnostic.severity_is_derived_from_domain
  */
 class Diagnostic final {
 public:
-    /// @brief 构造。`consequence` 缺省时按错误域推断。
+    /// @brief Constructs. A defaulted `consequence` is inferred from the error domain.
     ///
-    /// 只有一个构造函数：早期还提供了三参数重载，与四参数版（第四参有默认值）
-    /// 在 `Diagnostic{a, b, c}` 形式下**产生歧义**，编译期就报错。
-    /// 一个构造函数 + 默认参数已能表达全部用法。
+    /// Only one constructor: an earlier three-parameter overload was ambiguous with
+    /// the four-parameter form (defaulted fourth argument) in `Diagnostic{a, b, c}`
+    /// and failed to compile. One constructor plus defaults covers every usage.
     Diagnostic(ErrorCode code, std::string message, SourceId source = {},
                std::optional<Consequence> consequence = std::nullopt)
         : code_(code),
@@ -69,13 +76,31 @@ public:
     [[nodiscard]] const SourceId& source() const noexcept { return source_; }
     [[nodiscard]] const std::string& message() const noexcept { return message_; }
 
-    /// @brief 覆盖后果级别。返回自身引用以便链式书写。
+    /// @brief Log severity, derived from the error domain.
+    ///
+    /// Declared here and defined in logging.hpp so that this header keeps its
+    /// "no dependency on the log schema" property; diagnostics exist whether or
+    /// not anyone logs them.
+    ///
+    /// @ownership   pure
+    /// @thread      any
+    /// @pre         none
+    /// @post        Returns the severity implied by code()
+    /// @invariant   Same diagnostic always reports the same severity
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       diag.diagnostic.severity_is_derived_from_domain
+    [[nodiscard]] Severity severity() const noexcept;
+
+    /// @brief Overrides the consequence. Returns `*this` so calls can be chained.
     Diagnostic& with_consequence(Consequence c) noexcept {
         consequence_ = c;
         return *this;
     }
 
-    /// @brief 附加一段上下文说明（不改 code / consequence）。
+    /// @brief Attaches a context note (does not change code / consequence).
     Diagnostic& with_detail(std::string detail) {
         if (!detail.empty()) {
             if (!message_.empty()) message_ += "；";
@@ -84,20 +109,20 @@ public:
         return *this;
     }
 
-    /// @brief 构造用户可见的一行文本。
+    /// @brief Builds the single user-visible line of text.
     ///
-    /// 格式：`<source>: <code> — <message>`
-    /// 这是**展示**，不是判定依据；判定一律用 code。
+    /// Format: `<source>: <code> - <message>`
+    /// This is **display**, not the basis for a decision; always decide on code.
     ///
     /// @ownership   pure
     /// @thread      any
     /// @pre         none
-    /// @post        返回非空字符串；source 为空时省略前缀
-    /// @invariant   同一诊断每次调用返回同一字符串
-    /// @errors      noexcept；分配失败即 std::terminate
+    /// @post        Returns a non-empty string; the prefix is omitted when source is empty
+    /// @invariant   The same diagnostic returns the same string on every call
+    /// @errors      noexcept; allocation failure calls std::terminate
     /// @complexity  O(len)
     /// @nondet      none
-    /// @frozen      否（展示格式可变）
+    /// @frozen      no (the display format may change)
     /// @tests       diag.diagnostic.stable_text
     [[nodiscard]] std::string to_text() const {
         std::string out;

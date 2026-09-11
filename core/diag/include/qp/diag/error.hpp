@@ -1,22 +1,22 @@
 /**
  * @file error.hpp
- * @brief 错误码与后果级别：全平台统一的失败分类。
+ * @brief Error codes and consequence levels: one platform-wide failure taxonomy.
  *
- * 设计意图：插件的失败必须能被**归因给用户**，而不是变成一条无主日志。
- * 因此错误不是自由文本，而是分层的枚举：
- *   - ErrorCode  说明"哪里错了"（用于程序分支与测试断言）
- *   - Consequence 说明"错了会怎样"（用于宿主决定降级还是中止）
- *   - 自由文本只作为补充，永远不是判定依据
+ * Design intent: a plugin failure must be **attributable to the user**, not turn into
+ * an ownerless log line. So an error is not free text but a layered enumeration:
+ *   - ErrorCode says "what went wrong" (for program branches and test assertions)
+ *   - Consequence says "what happens then" (for the host to degrade or abort)
+ *   - Free text is supplementary only and is never the basis for a decision
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   每个错误码恰好归属一个错误域
+ * @invariant   Every error code belongs to exactly one error domain
  * @errors      noexcept
  * @complexity  —
  * @nondet      none
- * @frozen      是（枚举值一旦发布即不可重新编号）
+ * @frozen      yes (a published enumerator value can never be renumbered)
  * @tests       diag.error_code_values_are_stable, diag.error_domain_mapping
  */
 #pragma once
@@ -26,26 +26,26 @@
 
 namespace qp::diag {
 
-/// @brief 错误码。数值不得重排——它是稳定标识，不是内部序号。
+/// @brief Error code. Values must never be reordered -- each is a stable id, not a counter.
 ///
-/// 分域编码：高 8 位是域，低 8 位是域内序号。这样新增域不影响既有数值。
+/// Domain-tagged: high 8 bits are the domain, low 8 bits the index, so a new domain shifts no value.
 enum class ErrorCode : std::uint16_t {
     ok = 0,
 
-    // ── 1xxx 输入与格式 ──────────────────────────────────────────────────────
+    // -- 1xxx input and formatting --------------------------------------------
     invalid_argument = 0x0101,
     malformed_document = 0x0102,
     unsupported_version = 0x0103,
     missing_field = 0x0104,
     out_of_range = 0x0105,
 
-    // ── 2xxx 类型与量纲 ──────────────────────────────────────────────────────
+    // -- 2xxx types and dimensions --------------------------------------------
     unknown_port_type = 0x0201,
     type_mismatch = 0x0202,
     dimension_mismatch = 0x0203,
     unit_mismatch = 0x0204,
 
-    // ── 3xxx 图结构 ──────────────────────────────────────────────────────────
+    // -- 3xxx graph structure -------------------------------------------------
     unknown_node = 0x0301,
     unknown_port = 0x0302,
     cycle_detected = 0x0303,
@@ -53,53 +53,53 @@ enum class ErrorCode : std::uint16_t {
     not_connected = 0x0305,
     graph_busy = 0x0306,
 
-    // ── 4xxx 插件 ────────────────────────────────────────────────────────────
+    // -- 4xxx plugins ---------------------------------------------------------
     plugin_not_found = 0x0401,
     plugin_incompatible = 0x0402,
     plugin_load_failed = 0x0403,
     plugin_capability_missing = 0x0404,
 
-    // ── 5xxx 运行与数据 ──────────────────────────────────────────────────────
+    // -- 5xxx runs and data ---------------------------------------------------
     run_not_found = 0x0501,
     seed_required = 0x0502,
     dataset_empty = 0x0503,
     fit_failed = 0x0504,
 
-    // ── 9xxx 内部 ────────────────────────────────────────────────────────────
+    // -- 9xxx internal --------------------------------------------------------
     internal_error = 0x0901,
     not_implemented = 0x0902,
     cancelled = 0x0903,
 };
 
 /**
- * @brief 失败的后果级别。宿主据此决定降级、重试还是中止。
+ * @brief Consequence level of a failure. The host decides degrade, retry, or abort from it.
  *
- * 这是"错误处理"与"错误报告"的分界：
- *   ErrorCode 给程序看，Consequence 给**调度决策**看。
+ * This is the line between "handling an error" and "reporting an error":
+ *   ErrorCode is for the program; Consequence is for the **scheduling decision**.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   顺序即严重程度（可比较、可排序）
+ * @invariant   The order is the severity (comparable and sortable)
  * @errors      noexcept
  * @complexity  —
  * @nondet      none
- * @frozen      是
+ * @frozen      yes
  * @tests       diag.consequence_ordering
  */
 enum class Consequence : std::uint8_t {
-    /// 可忽略：本次操作无效，但系统状态完好。
+    /// Ignorable: the operation did nothing, but system state is intact.
     recoverable = 0,
-    /// 该节点/插件本次失效，图上其余部分仍可继续。
+    /// This node/plugin failed this time; the rest of the graph can carry on.
     degraded = 1,
-    /// 本次运行无法继续，但进程与文档完好。
+    /// This run cannot continue, but the process and the document are intact.
     run_aborted = 2,
-    /// 文档或进程状态不可信，必须停止。
+    /// Document or process state is untrustworthy; execution must stop.
     fatal = 3,
 };
 
-/// @brief 错误域。用于把错误码分组展示给用户。
+/// @brief Error domain. Groups error codes for display to the user.
 enum class ErrorDomain : std::uint8_t {
     input = 0,
     typing = 1,
@@ -110,17 +110,17 @@ enum class ErrorDomain : std::uint8_t {
 };
 
 /**
- * @brief 取错误码的域。
+ * @brief Returns the domain of an error code.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        返回 code 高 8 位对应的域；ok 归入 internal（无意义，仅保证全覆盖）
- * @invariant   同一域内的所有错误码，其域编号相同
+ * @post        Domain for the high 8 bits of code; ok maps to internal (meaningless, total-only)
+ * @invariant   All error codes inside one domain report the same domain number
  * @errors      noexcept
  * @complexity  O(1)
  * @nondet      none
- * @frozen      否
+ * @frozen      no
  * @tests       diag.error_domain_mapping
  */
 [[nodiscard]] constexpr ErrorDomain domain_of(ErrorCode code) noexcept {
@@ -137,19 +137,19 @@ enum class ErrorDomain : std::uint8_t {
 }
 
 /**
- * @brief 错误码的稳定短名。用于日志、测试断言与序列化。
+ * @brief Stable short name of an error code. Used by logs, test assertions, and serialization.
  *
- * 自由文本不是判定依据，这个短名才是。
+ * Free text is not the basis for a decision; this short name is.
  *
  * @ownership   pure
  * @thread      any
  * @pre         none
- * @post        返回非空的稳定标识符（ASCII、下划线分隔）
- * @invariant   同一 code 永远返回同一字符串；不同 code 不返回同一字符串
+ * @post        Returns a non-empty stable identifier (ASCII, underscore separated)
+ * @invariant   One code always yields one string; distinct codes never share a string
  * @errors      noexcept
  * @complexity  O(1)
  * @nondet      none
- * @frozen      是（改名即破坏兼容）
+ * @frozen      yes (renaming it breaks compatibility)
  * @tests       diag.error_code_values_are_stable
  */
 [[nodiscard]] constexpr std::string_view to_string(ErrorCode code) noexcept {
@@ -185,16 +185,66 @@ enum class ErrorDomain : std::uint8_t {
     return "unknown";
 }
 
-/// @brief 每个错误码的默认后果级别。插件可在具体场合覆盖。
+/**
+ * @brief Stable short name for `Consequence`. Safe to grep and alert on.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        Returns a non-empty ASCII identifier
+ * @invariant   Distinct values never share a name
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      yes (renaming breaks log consumers)
+ * @tests       diag.consequence_names_are_stable, diag.error_domain_names_are_stable
+ */
+[[nodiscard]] constexpr std::string_view to_string(Consequence c) noexcept {
+    switch (c) {
+        case Consequence::recoverable: return "recoverable";
+        case Consequence::degraded: return "degraded";
+        case Consequence::run_aborted: return "run_aborted";
+        case Consequence::fatal: return "fatal";
+    }
+    return "unknown";
+}
+
+/**
+ * @brief Stable short name for `ErrorDomain`.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        Returns a non-empty ASCII identifier
+ * @invariant   Distinct values never share a name
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      yes
+ * @tests       diag.error_domain_names_are_stable
+ */
+[[nodiscard]] constexpr std::string_view to_string(ErrorDomain d) noexcept {
+    switch (d) {
+        case ErrorDomain::input: return "input";
+        case ErrorDomain::typing: return "typing";
+        case ErrorDomain::graph: return "graph";
+        case ErrorDomain::plugin: return "plugin";
+        case ErrorDomain::runtime: return "runtime";
+        case ErrorDomain::internal: return "internal";
+    }
+    return "unknown";
+}
+
+/// @brief Default consequence level of each error code. A plugin may override it case by case.
 [[nodiscard]] constexpr Consequence default_consequence(ErrorCode code) noexcept {
     switch (domain_of(code)) {
         case ErrorDomain::input:
         case ErrorDomain::typing:
-            return Consequence::recoverable;   // 用户改一下参数即可
+            return Consequence::recoverable;   // the user just changes a parameter
         case ErrorDomain::graph:
-            return Consequence::degraded;      // 该节点失效，其余可继续
+            return Consequence::degraded;      // this node fails, the rest carries on
         case ErrorDomain::plugin:
-            return Consequence::degraded;      // 插件失效不该拖垮文档
+            return Consequence::degraded;      // a failed plugin must not sink the document
         case ErrorDomain::runtime:
             return Consequence::run_aborted;
         case ErrorDomain::internal:

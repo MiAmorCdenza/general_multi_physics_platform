@@ -1,18 +1,29 @@
-# core/diag：错误通道。header-only，零依赖。
+# core/diag: error channel and unified logging.
 #
-# 依赖规则：diag 允许依赖 units，但当前实际不依赖任何 core 模块
-#（见 plan-tree.md §8 铁律 4 与 scripts/check_layers.py 的 ALLOWED）。
+# Dependency rule: diag may depend on units, but in practice depends on no core
+# module at all (see plan-tree.md section 8, iron rule 4, and the ALLOWED table
+# in scripts/check_layers.py).
+#
+# Static rather than INTERFACE since logging.cpp exists: the JSON formatter is
+# real code, and header-only would force every consumer to compile it.
 
-add_library(qp_diag INTERFACE)
+# CollectingSink uses a mutex, so the thread library must be resolved before the
+# link line is generated.
+find_package(Threads REQUIRED)
+
+add_library(qp_diag STATIC
+    src/logging.cpp)
+
 add_library(qp::diag ALIAS qp_diag)
 
-target_include_directories(qp_diag INTERFACE
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<INSTALL_INTERFACE:include>)
+target_include_directories(qp_diag
+    PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        $<INSTALL_INTERFACE:include>
+    PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-target_compile_features(qp_diag INTERFACE cxx_std_20)
-target_link_libraries(qp_diag INTERFACE qp_warnings qp_sanitize)
-
-# 诊断模块用到线程（CollectingSink 的互斥）
-find_package(Threads REQUIRED)
-target_link_libraries(qp_diag INTERFACE Threads::Threads)
+target_compile_features(qp_diag PUBLIC cxx_std_20)
+target_link_libraries(qp_diag
+    PUBLIC Threads::Threads
+    PRIVATE qp_warnings qp_sanitize)

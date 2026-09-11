@@ -1,21 +1,21 @@
 /**
  * @file sink.hpp
- * @brief 诊断出口：诊断产生后去哪儿。
+ * @brief Diagnostic sink: where a diagnostic goes after it is produced.
  *
- * 为什么出口是**接口**而不是全局日志对象：
- *   1. "可变全局状态"是归属不清最常见的物理形态（enforcement.md §3 的
- *      `qp-no-mutable-global` 规则）。诊断出口若是全局单例，测试之间会互相污染。
- *   2. 不同宿主需要不同出口：CLI 打到 stderr，GUI 收到面板里，
- *      测试收集到断言列表里。三者不该互相知道。
- *   3. 多线程求值下，"谁来同步这个全局对象"会变成无法回答的问题。
+ * Why the sink is an **interface**, not a global log object:
+ *   1. "Mutable global state" is the most common shape of unclear ownership (enforcement.md
+ *      §3's `qp-no-mutable-global`); a global singleton sink lets tests pollute each other.
+ *   2. Hosts differ: the CLI writes to stderr, the GUI collects into a panel, tests into an
+ *      assertion list. The three should not know about each other.
+ *   3. Under multi-threaded evaluation, "who synchronizes this global object" has no answer.
  *
- * @ownership   observes（Sink 不拥有诊断，只读后即可丢弃）
- * @thread      any（实现方负责线程安全；求值线程与主线程都可能产生诊断）
+ * @ownership   observes (the Sink does not own the diagnostic; it may discard it after reading)
+ * @thread      any (the implementer ensures thread safety; both the eval thread and the main thread may emit)
  * @pre         none
  * @post        none
- * @invariant   实现方不得保存传入 Diagnostic 的引用
- * @errors      emit 不得抛出（宿主在最坏情况下也要能记录）
- * @frozen      是（接口形状冻结）
+ * @invariant   The implementer must not store a reference to the passed-in Diagnostic
+ * @errors      emit must not throw (the host must be able to record even in the worst case)
+ * @frozen      yes (the interface shape is frozen)
  * @tests       diag.sink.collecting_sink, diag.sink.null_sink
  */
 #pragma once
@@ -30,11 +30,11 @@
 namespace qp::diag {
 
 /**
- * @brief 诊断出口接口。
+ * @brief Diagnostic sink interface.
  *
- * 实现方约定：
- *   - `emit` 必须 noexcept 语义（不抛）；内部失败自行吞掉。
- *   - **不得保存** `const Diagnostic&`；需要留存必须拷贝。
+ * Implementer contract:
+ *   - `emit` must have noexcept semantics (it never throws); it swallows internal failures.
+ *   - **Must not store** a `const Diagnostic&`; retaining one requires a copy.
  */
 class ISink {
 public:
@@ -45,14 +45,14 @@ public:
     ISink(ISink&&) = delete;
     ISink& operator=(ISink&&) = delete;
 
-    /// @brief 接收一条诊断。实现方负责线程安全。
+    /// @brief Receive one diagnostic. The implementer is responsible for thread safety.
     virtual void emit(const Diagnostic& d) noexcept = 0;
 
-    /// @brief 出口的稳定短名，用于诊断"日志去哪了"这类问题。
+    /// @brief Stable short name of the sink; used to answer "where did the log go".
     [[nodiscard]] virtual const char* name() const noexcept = 0;
 };
 
-/// @brief 丢弃一切诊断。用于不需要诊断的场景（性能基准、纯计算测试）。
+/// @brief Discards every diagnostic. For scenarios that need none (benchmarks, pure-computation tests).
 class NullSink final : public ISink {
 public:
     void emit(const Diagnostic&) noexcept override {}
@@ -60,31 +60,31 @@ public:
 };
 
 /**
- * @brief 收集诊断到内存。测试与"运行结束统一展示"的宿主使用。
+ * @brief Collects diagnostics in memory. Used by tests and by hosts that display them at the end.
  *
- * 线程安全：`emit` 与 `items` 都加锁（诊断可能来自求值线程）。
+ * Thread safety: both `emit` and `items` take the lock (a diagnostic may come from an eval thread).
  *
- * @ownership   owns（拷贝保存每条诊断）
+ * @ownership   owns (copies and stores every diagnostic)
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   items() 的顺序是 emit 的先后顺序
- * @errors      emit noexcept（分配失败即 terminate；诊断出口不允许成为新的失败源）
- * @frozen      否
+ * @invariant   The order of items() is the order in which emit was called
+ * @errors      emit is noexcept (allocation failure terminates; a sink must not become a new failure source)
+ * @frozen      no
  * @tests       diag.sink.collecting_sink, diag.sink.collecting_sink_thread_safe
  */
 class CollectingSink final : public ISink {
 public:
     void emit(const Diagnostic& d) noexcept override {
-        // 刻意不做异常处理：分配失败即 terminate。
-        // 诊断出口若自己会失败，"错误处理"就变成了错误的来源。
+        // Deliberately no exception handling: allocation failure means terminate.
+        // If the sink itself could fail, "error handling" would become a source of errors.
         const std::lock_guard<std::mutex> lock(mutex_);
         items_.push_back(d);
     }
 
     [[nodiscard]] const char* name() const noexcept override { return "collecting"; }
 
-    /// @brief 已收集的诊断数量。
+    /// @brief Number of collected diagnostics.
     [[nodiscard]] std::size_t size() const noexcept {
         const std::lock_guard<std::mutex> lock(mutex_);
         return items_.size();
@@ -94,19 +94,19 @@ public:
         return items_.empty();
     }
 
-    /// @brief 已收集诊断的**副本**。返回副本而不是引用：引用会在锁释放后失效。
+    /// @brief A **copy** of the collected diagnostics. A copy, not a reference: a reference dies when the lock is released.
     [[nodiscard]] std::vector<Diagnostic> items() const {
         const std::lock_guard<std::mutex> lock(mutex_);
         return items_;
     }
 
-    /// @brief 清空。测试用例之间必须清空，否则会互相污染。
+    /// @brief Clear. Test cases must clear between cases, or they pollute each other.
     void clear() noexcept {
         const std::lock_guard<std::mutex> lock(mutex_);
         items_.clear();
     }
 
-    /// @brief 是否收到过至少一条指定错误码的诊断。
+    /// @brief Whether at least one diagnostic with the given error code was received.
     [[nodiscard]] bool contains(ErrorCode code) const noexcept {
         const std::lock_guard<std::mutex> lock(mutex_);
         for (const auto& d : items_) {
@@ -115,7 +115,7 @@ public:
         return false;
     }
 
-    /// @brief 收到的诊断中最严重的后果级别。
+    /// @brief The worst consequence level among the collected diagnostics.
     [[nodiscard]] Consequence worst_consequence() const noexcept {
         const std::lock_guard<std::mutex> lock(mutex_);
         auto worst = Consequence::recoverable;
@@ -126,7 +126,7 @@ public:
     }
 
 private:
-    mutable std::mutex mutex_;   ///< mutable：const 查询也要加锁
+    mutable std::mutex mutex_;   ///< mutable: const queries must lock too
     std::vector<Diagnostic> items_;
 };
 
