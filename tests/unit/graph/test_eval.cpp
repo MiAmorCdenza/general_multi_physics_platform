@@ -96,6 +96,40 @@ private:
     return d;
 }
 
+/// @brief An evaluator that returns answers outside its own declaration.
+///
+/// Three shapes, because the validator names three: a port nobody declared, the same port twice, and a value
+/// whose kind is not the port's. Each is a real plugin defect -- a copy-paste that leaves a port number
+/// wrong, a loop that emits an output per input, a branch that puts a string where a scalar is declared --
+/// and each must be caught **before** the value reaches the cache, because a poisoned content-addressed entry
+/// is returned as a cache hit for the rest of the process's life.
+class MisdeclaringEvaluator final : public INodeEvaluator {
+public:
+    enum class Shape { undeclared_port, duplicate_port, wrong_kind };
+
+    explicit MisdeclaringEvaluator(Shape shape) : shape_(shape) {}
+
+    [[nodiscard]] Result<std::vector<std::pair<PortNumber, Value>>> evaluate(
+        NodeId, const NodeDesc&, const std::vector<std::pair<PortNumber, Value>>&) override {
+        std::vector<std::pair<PortNumber, Value>> out;
+        switch (shape_) {
+            case Shape::undeclared_port:
+                out.emplace_back(99, Value{1.0});
+                break;
+            case Shape::duplicate_port:
+                out.emplace_back(1, Value{1.0});
+                out.emplace_back(1, Value{2.0});
+                break;
+            case Shape::wrong_kind:
+                out.emplace_back(1, Value{std::string{"not a number"}});
+                break;
+        }
+        return out;
+    }
+
+private:
+    Shape shape_;
+};
 /// @brief An evaluator that raises, for charter C4 at the evaluator's own boundary.
 ///
 /// `EvalContext::evaluator` is plugin code: the host calls it once per uncached node. Before the barrier,
@@ -698,6 +732,52 @@ TEST_CASE("graph.eval.is_readonly", "[graph][eval]") {
     REQUIRE(s.g.edge_count() == edges);
 }
 
+TEST_CASE("graph.eval.an_answer_outside_the_declaration_is_a_fault", "[graph][eval]") {
+    // The other half of C4's schema domain, and the half that does not involve an exception at all: a plugin
+    // that returns happily and wrongly. `ports::check_value` was written for exactly this -- its contract says
+    // "it runs after every evaluation" -- and until now nothing called it, so a value of the wrong kind went
+    // into the cache and came back as a cache hit for the rest of the process's life.
+    for (const MisdeclaringEvaluator::Shape shape :
+         {MisdeclaringEvaluator::Shape::undeclared_port,
+          MisdeclaringEvaluator::Shape::duplicate_port,
+          MisdeclaringEvaluator::Shape::wrong_kind}) {
+        Graph g;
+        FakeCatalog catalog;
+        catalog.add(make_const());
+        MisdeclaringEvaluator evaluator{shape};
+        EvalCache cache{16};
+        EvalResult result;
+
+        const auto added = g.add_node("const");
+        REQUIRE(added.has_value());
+        g.find_node_mutable(added.value())->set_param(1, Value{1.0});
+        g.bump_version();
+
+        qp::plugin::FaultLog faults;
+        const EvalContext context{&catalog, &qp::ports::builtin_registry(), &evaluator, &cache, &faults};
+
+        const Result<EvalStats> stats = evaluate_graph(g, context, result);
+        REQUIRE_FALSE(stats.has_value());
+        REQUIRE(stats.error() == qp::diag::ErrorCode::plugin_fault);
+
+        // Nothing was cached: the entry would have been poisoned, and "the cache returns wrong values" is
+        // indistinguishable from a correct cache to every caller downstream.
+        REQUIRE(cache.size() == 0);
+        // And the empty result holds no outputs either, so nothing downstream can read the bad value.
+        REQUIRE_FALSE(result.get(added.value(), 1).valid());
+
+        // The fault says **which** way the answer was wrong, because "the plugin is broken" sends the reader
+        // to the plugin while "port 99 was not declared" sends them to the line of its manifest that is wrong.
+        REQUIRE(faults.faults().size() == 1);
+        REQUIRE(faults.faults().front().label == "const");
+        REQUIRE_FALSE(faults.faults().front().what.empty());
+    }
+
+    // The three sentences are distinct: one message for three different defects would make the log useless for
+    // the one thing it is for.
+    const std::string undeclared = "returned a value for output port 99, which it does not declare";
+    REQUIRE(undeclared.find("99") != std::string::npos);
+}
 TEST_CASE("graph.eval.a_raising_evaluator_is_a_fault", "[graph][eval]") {
     // Charter C4 at the evaluator boundary. `EvalContext::evaluator` is plugin code, called once per uncached
     // node; before the barrier a throw here travelled out of `evaluate_graph` and out of whatever called it,

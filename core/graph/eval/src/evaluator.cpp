@@ -9,8 +9,11 @@
  */
 #include <qp/graph/eval/evaluator.hpp>
 
+#include <qp/ports/check.hpp>
+
 #include <algorithm>
 #include <deque>
+#include <string>
 
 namespace qp::graph {
 namespace {
@@ -23,6 +26,61 @@ using qp::diag::ErrorCode;
     return ctx.catalog->find(n->type_name);
 }
 
+/// @brief A sentence for the first way `produced` is outside what `desc` declares, or empty when it fits.
+///
+/// A sentence rather than a code, because the FaultLog records `what` and a report needs to say *which*
+/// port and *which* kind: "the plugin is broken" sends the reader to the plugin, while "port 7 was not
+/// declared" sends them to the line of its manifest that is wrong.
+[[nodiscard]] std::string validate_outputs(
+    const NodeDesc& desc, const EvalContext& ctx,
+    const std::vector<std::pair<PortNumber, qp::ports::Value>>& produced) {
+    for (std::size_t i = 0; i < produced.size(); ++i) {
+        const PortNumber port = produced[i].first;
+
+        // Declared at all?
+        const PortDesc* declared = nullptr;
+        for (const PortDesc& candidate : desc.outputs) {
+            if (candidate.number == port) {
+                declared = &candidate;
+                break;
+            }
+        }
+        if (declared == nullptr) {
+            return "returned a value for output port " + std::to_string(port) +
+                   ", which it does not declare";
+        }
+
+        // Declared once?
+        for (std::size_t j = i + 1; j < produced.size(); ++j) {
+            if (produced[j].first == port) {
+                return "returned output port " + std::to_string(port) + " twice";
+            }
+        }
+
+        // The right kind for that port?
+        //
+        // An **invalid** value is exempt, and the exemption is load-bearing rather than a convenience: in this
+        // platform `ValueKind::invalid` means "not computed", the same way `UncertaintyKind::unknown` means
+        // "not quantified". A node with an unset parameter legitimately produces no value, and the whole
+        // downstream branch then produces none either -- `graph.eval.missing_param_fails` has asserted that
+        // since before this check existed. A missing *required* parameter is a **graph** problem, and
+        // `graph/validate` is where it is reported (that is what `PortDesc::required` is for); turning it into
+        // a plugin fault here would blame the plugin for the user's half-filled form.
+        if (!produced[i].second.valid()) continue;
+
+        const qp::ports::PortTypeDesc* type = ctx.types->find(declared->type);
+        if (type == nullptr) {
+            return "declared output port " + std::to_string(port) + " with a port type that is not in the "
+                   "registry";
+        }
+        if (const auto verdict = qp::ports::check_value(*type, produced[i].second); !verdict.has_value()) {
+            return "returned a value for output port " + std::to_string(port) + " that is not a " +
+                   std::string{type->name} + " (error " +
+                   std::string{qp::diag::to_string(verdict.error())} + ")";
+        }
+    }
+    return {};
+}
 }  // namespace
 
 qp::ports::Value EvalResult::get(NodeId node, PortNumber port) const noexcept {
@@ -173,6 +231,22 @@ Result<EvalStats> evaluate_graph(const Graph& g, const EvalContext& ctx, EvalRes
                 if (!r) return Result<EvalStats>{r.error()};
 
                 auto produced = std::move(r).value();
+
+                // The **schema domain**: the plugin's answer is checked against what the plugin itself
+                // declared, before the value reaches the cache or a downstream node. `ports::check_value`'s
+                // contract has always said "it runs after every evaluation" -- and nothing called it, which
+                // made "a plugin returned a value of the wrong type" a corruption path rather than a caught
+                // fault. A wrong-kind value entering a content-addressed cache does not mislead once: every
+                // later run that hits that entry gets the same wrong value, and the statistics report a cache
+                // **hit**, which is the opposite of a warning.
+                if (std::string bad = validate_outputs(*desc, ctx, produced); !bad.empty()) {
+                    if (ctx.faults != nullptr) {
+                        (void)ctx.faults->record(std::string{desc->type_name},
+                                                 ErrorCode::plugin_fault, std::move(bad));
+                    }
+                    return Result<EvalStats>{ErrorCode::plugin_fault};
+                }
+
                 if (ctx.cache != nullptr) {
                     ctx.cache->put(std::move(key), produced);
                 }

@@ -168,7 +168,10 @@ private:
  * @nondet      none
  * @frozen      no
  * @errors      Result; an error code when a node implementation fails or a type is unregistered, and
- *              `plugin_fault` / `plugin_quarantined` when the implementation misbehaved rather than refused
+ *              `plugin_fault` / `plugin_quarantined` when the implementation misbehaved rather than refused --
+ *              a raise, an undeclared output port, a port returned twice, or a value whose kind is not the
+ *              port's. A value of kind `invalid` is **not** a fault: it means "not computed", which is a
+ *              legitimate answer and the one an unfilled node gives
  * @tests       graph.eval.single_node, graph.eval.chain_propagates,
  *              graph.eval.deterministic_across_runs,
  *              graph.eval.cache_hit_on_second_run,
@@ -176,7 +179,8 @@ private:
  *              graph.eval.unknown_type_fails, graph.eval.missing_param_fails,
  *              graph.eval.bypass_passthrough, graph.eval.diamond_evaluates_once,
  *              graph.eval.is_readonly, graph.eval.result_lookup,
- *              graph.eval.a_raising_evaluator_is_a_fault
+ *              graph.eval.a_raising_evaluator_is_a_fault,
+ *              graph.eval.an_answer_outside_the_declaration_is_a_fault
  */
 [[nodiscard]] Result<EvalStats> evaluate_graph(const Graph& g, const EvalContext& ctx,
                                                EvalResult& out);
