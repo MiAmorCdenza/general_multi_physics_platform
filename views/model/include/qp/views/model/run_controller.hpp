@@ -80,6 +80,13 @@ struct RunReport final {
     std::string node_type{};
     /// The run identity the trace carries, so a caller can look it up in the ledger.
     qp::runtime::RunId run{};
+    /// How many **errors** `graph/validate` found before the run started. Reported rather than enforced: the
+    /// kernels do not check dimensions, so a graph with a mismatch still runs and produces numbers that look
+    /// fine -- which is exactly why the count is carried out to a status line instead of staying inside the
+    /// pre-flight. Zero for a graph with nothing wrong with it.
+    std::size_t validation_errors = 0;
+    /// The first validation error as a sentence, or empty. Shown when the count is not zero.
+    std::string first_problem{};
     /// What to tell the user. A sentence for the status line, not an error code: the codes are already
     /// in the log, and a student reading the window needs to know what to change.
     std::string message{};
@@ -146,6 +153,9 @@ public:
      * @param session The editing session, read-only. Borrowed, not copied: a controller over a copy of
      *                the graph would run something the user is not looking at.
      * @param binders Consulted in order; the first that claims a node runs it.
+     * @param resolve The catalog and port registry `graph/validate` needs. Passed in rather than reached for,
+     *                because a controller that found them itself would be deciding which registry is
+     *                authoritative -- and the window already knows.
      *
      * @ownership   observes `session`
      * @thread      ui
@@ -159,7 +169,8 @@ public:
      * @tests       run.controller.refuses_a_graph_with_nothing_to_run
      */
     RunController(const qp::authoring::Session& session,
-                  std::vector<graph::execution::IOperatorBinder*> binders);
+                  std::vector<graph::execution::IOperatorBinder*> binders,
+                  qp::graph::ResolveContext resolve);
 
     /**
      * @brief The sentence a UI can show before the user presses Run.
@@ -222,7 +233,8 @@ public:
      * @tests       run.controller.refuses_a_graph_with_nothing_to_run,
      *              run.controller.damping_is_reported_not_hidden,
      *              run.controller.runs_a_node_and_records_its_trace,
-     *              run.controller.a_second_run_is_a_second_entry
+     *              run.controller.a_second_run_is_a_second_entry,
+     *              run.controller.reports_validation_without_refusing
      */
     [[nodiscard]] RunResult run() const;
 
@@ -232,6 +244,7 @@ private:
 
     const qp::authoring::Session* session_;
     std::vector<graph::execution::IOperatorBinder*> binders_;
+    qp::graph::ResolveContext resolve_{};
     /// Mutable because `run()` is const: the controller does not change what it runs, but starting a run
     /// is an event the ledger records. Marking the method non-const would say the graph might change,
     /// which is the property worth keeping.

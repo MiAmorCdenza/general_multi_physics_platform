@@ -167,7 +167,8 @@ EditorWindow::EditorWindow(QWidget* parent) : QMainWindow(parent) {
     // state -- a build with no plugins has none -- and the Run action's message for that case is
     // already true and actionable.
     run_controller_ = std::make_unique<qp::views::model::RunController>(
-        session_, qp::views::model::execution_binders());
+        session_, qp::views::model::execution_binders(),
+        qp::graph::ResolveContext{&catalog_, &qp::ports::builtin_registry()});
     auto* tools = addToolBar(tr("Experiment"));
     tools->setMovable(false);
     run_action_ = tools->addAction(tr("Run"));

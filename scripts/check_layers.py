@@ -89,7 +89,7 @@ ALLOWED: dict[str, set[str]] = {
     # execution calls a plugin's operator once per step, so it needs the same fault barrier eval uses:
     # charter C4 does not stop at the evaluator's edge. plugin is L0, so this is downward, not an inversion.
     "execution": {"units", "diag", "ir", "structure",
-                  "run", "store", "trace", "plugin"},
+                  "run", "store", "trace", "plugin", "validate"},
     "kernels": {"units", "diag", "abi", "field", "domain"},
     # L2 runs and data
     "run": {"units", "diag", "abi", "ports"},

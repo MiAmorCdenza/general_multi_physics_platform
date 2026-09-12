@@ -23,26 +23,13 @@ namespace rt = qp::runtime;
 /// it, this becomes the default.
 constexpr std::uint64_t kSeed = 20240517;
 
-/// @brief Whether any binder handles `type_name` with `layout`.
-///
-/// Asks `can_bind`, not `bind`. The difference is the whole point: a binder that owns a type but cannot
-/// honour a particular instance still answers true here, which is what lets the caller report "this node
-/// asks for something no operator provides" instead of "nothing in this graph can run".
-[[nodiscard]] bool any_binder_handles(const std::vector<execution::IOperatorBinder*>& binders,
-                                      std::string_view type_name,
-                                      const execution::StateView& layout) {
-    for (const execution::IOperatorBinder* binder : binders) {
-        if (binder == nullptr) continue;
-        if (binder->can_bind(type_name, layout)) return true;
-    }
-    return false;
-}
 
 }  // namespace
 
 RunController::RunController(const qp::authoring::Session& session,
-                             std::vector<execution::IOperatorBinder*> binders)
-    : session_(&session), binders_(std::move(binders)) {}
+                             std::vector<execution::IOperatorBinder*> binders,
+                             qp::graph::ResolveContext resolve)
+    : session_(&session), binders_(std::move(binders)), resolve_(resolve) {}
 
 std::string RunController::description() const {
     // Stated in the same sentence the status line shows, so the numbers are never a surprise after the
@@ -70,33 +57,29 @@ rt::RunSpec RunController::spec_for() const {
 RunResult RunController::run() const {
     RunResult out;
 
-    // -- 1. find a node to run -------------------------------------------------
+    // -- 1. ask before doing ---------------------------------------------------
     //
-    // The first node any binder claims, in graph order. Not "the selected node": a run whose subject
-    // depends on a selection the user may have changed for unrelated reasons would sometimes run the
-    // wrong thing, and the trace would look plausible either way.
+    // The search and the refusal both belong to `graph/execution::check_run`, which is where the loop that
+    // would do the work lives. This used to be a hand-rolled search here -- the framework function written
+    // once in the view layer and not at all in the framework -- and the difference is not tidiness: the
+    // framework version also asks `graph/validate`, so a caller can see the graph's problems *before* waiting
+    // for a run rather than after.
     const qp::graph::Graph& graph = session_->graph();
-    const qp::graph::Node* candidate = nullptr;
-    // The layout the run will actually use, so a binder's refusal here is the same refusal `prepare`
-    // would give rather than an artefact of a probe with the wrong shape.
-    const execution::StateView probe = execution::StateView::zeroed(1);
-
-    for (const qp::graph::NodeSlot& slot : graph.slots()) {
-        if (!slot.node.id.valid()) continue;
-        if (!any_binder_handles(binders_, slot.node.type_name, probe)) continue;
-        candidate = &slot.node;
-        break;
-    }
-
-    if (candidate == nullptr) {
-        // The distinction matters to the reader: an empty graph is a different problem from a graph full
-        // of nodes no binder knows.
-        out.report.message = graph.node_count() == 0
-                                 ? "nothing to run: the graph is empty"
-                                 : "nothing to run: no node in this graph has an operator yet";
+    const execution::RunReadiness ready = execution::check_run(graph, resolve_, binders_);
+    if (!ready.ok()) {
+        out.report.message = ready.detail;
+        out.report.node_type = ready.type_name;
         return out;
     }
-    out.report.node_type = candidate->type_name;
+    out.report.node_type = ready.type_name;
+
+    const qp::graph::Node* candidate = graph.find_node(ready.node);
+    if (candidate == nullptr) {
+        // The graph changed between the answer and its use. Refused rather than run: a node that is gone is not
+        // a node to run, and continuing would be running whatever now occupies that slot.
+        out.report.message = "the graph changed while the run was being prepared";
+        return out;
+    }
 
     // -- 2. bind, before anything is written down ------------------------------
     //
@@ -159,6 +142,20 @@ RunResult RunController::run() const {
     out.report.message = "ran " + out.report.operator_name + " on " + candidate->type_name + " for " +
                          std::to_string(kSteps) + " steps, recorded " +
                          std::to_string(out.report.samples) + " samples";
+
+    // The pre-flight's validation findings travel with the outcome even on success, and the message says so.
+    // The run produced numbers; these are the reasons to distrust them, and a status line that reported only
+    // "ran ... 4097 samples" would be telling the user everything is fine about a graph the framework already
+    // knows is inconsistent. Reported rather than enforced, because refusing a dimension mismatch would make
+    // the button stricter than the engine -- see `graph/execution::check_run`.
+    out.report.validation_errors = ready.validation_errors;
+    out.report.first_problem = ready.first_problem;
+    if (ready.validation_errors > 0) {
+        out.report.message += " -- but the graph has " + std::to_string(ready.validation_errors) +
+                              " validation problem";
+        out.report.message += ready.validation_errors == 1 ? "" : "s";
+        out.report.message += " (" + ready.first_problem + ")";
+    }
     return out;
 }
 

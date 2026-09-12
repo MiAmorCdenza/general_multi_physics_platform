@@ -58,6 +58,7 @@
 
 #include <qp/diag/result.hpp>
 #include <qp/graph/ir.hpp>
+#include <qp/graph/validate.hpp>
 #include <qp/plugin/guard.hpp>
 #include <qp/runtime/run/run.hpp>
 #include <qp/runtime/store/store.hpp>
@@ -290,6 +291,147 @@ public:
         std::string_view type_name, const Node& node, const StateView& layout) = 0;
 };
 
+/**
+ * @brief Why a graph cannot be run, or `ok`.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        none
+ * @invariant   One code per distinct reason; `ok` is zero
+ * @errors      noexcept
+ * @frozen      yes -- tags frozen, the set may gain a reason
+ * @tests       execution.check_run.answers_before_anything_steps
+ */
+enum class RunRefusal : std::uint8_t {
+    ok = 0,
+    /// The graph holds no nodes. A different answer from "nothing here has an operator": one is a document
+    /// the user has not started, the other is a document this build cannot run.
+    empty_graph = 1,
+    /// No binder claims any node's type. A plugin is missing, or the node types are not this build's.
+    no_operator = 2,
+    /// A type is known and the binder declined **this instance**: damping the kernel has no term for, an
+    /// integrator with no implementation, a parameter nobody filled in.
+    node_cannot_be_honoured = 3,
+};
+
+/// @brief Stable short name of a refusal, for a message or a log line.
+///
+/// @ownership   pure
+/// @thread      any
+/// @pre         none
+/// @post        Non-null for every enumerator
+/// @invariant   Distinct codes have distinct names
+/// @errors      noexcept
+/// @complexity  O(1)
+/// @nondet      none
+/// @frozen      no
+/// @tests       execution.check_run.answers_before_anything_steps
+[[nodiscard]] constexpr const char* to_string(RunRefusal r) noexcept {
+    switch (r) {
+        case RunRefusal::ok: return "ok";
+        case RunRefusal::empty_graph: return "empty_graph";
+        case RunRefusal::no_operator: return "no_operator";
+        case RunRefusal::node_cannot_be_honoured: return "node_cannot_be_honoured";
+    }
+    return "unknown";
+}
+
+/**
+ * @brief Whether a graph can be run, and what the user should know either way.
+ *
+ * ## Why this exists rather than the run discovering problems as it goes
+ *
+ * The same reason `check_export` exists one layer over: an answer that arrives **before** the work is one a
+ * window can act on -- grey the button out, say which node to look at -- while an answer that arrives as a
+ * failure is one the user reads after waiting. The Run controller used to search the graph itself, which was
+ * this function written twice: once in the view layer and not at all in the framework.
+ *
+ * ## Why validation problems do not refuse the run
+ *
+ * `graph/validate` reports dimension mismatches, unknown port types and missing required parameters, and a
+ * graph with those **can still run**: the kernels do not enforce dimensions at run time. Refusing would make
+ * this pre-flight stricter than the engine, and the first thing it would refuse is the built-in demonstration.
+ * The honest answer is therefore "yes, it can run -- and here is what is wrong with it", which is what a
+ * confidence panel and a status line are for. What *does* refuse is a graph with nothing to run in it.
+ *
+ * @ownership   owns
+ * @thread      main
+ * @pre         none
+ * @post        none
+ * @invariant   `ok()` is true exactly when `refusal == RunRefusal::ok`
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       execution.check_run.answers_before_anything_steps
+ */
+struct RunReadiness final {
+    /// Whether a run would start.
+    RunRefusal refusal = RunRefusal::ok;
+    /// The node a run would use. Invalid for `empty_graph` and `no_operator`.
+    NodeId node{};
+    /// That node's type, for a report.
+    std::string type_name{};
+    /// The operator a run would bind, for a report. Empty unless `ok()`.
+    std::string operator_name{};
+    /// How many **errors** `graph/validate` found. Reported, not enforced. See the note above.
+    std::size_t validation_errors = 0;
+    /// The first validation error as a sentence, or empty.
+    std::string first_problem{};
+    /// The sentence a status line should show. Never empty.
+    std::string detail{};
+
+    /// @brief Whether a run would start.
+    ///
+    /// @ownership   pure
+    /// @thread      any
+    /// @pre         none
+    /// @post        Equivalent to `refusal == RunRefusal::ok`
+    /// @invariant   Depends only on `refusal`
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       execution.check_run.answers_before_anything_steps
+    [[nodiscard]] bool ok() const noexcept { return refusal == RunRefusal::ok; }
+};
+
+/**
+ * @brief Answers "can this graph be run with these binders" without stepping anything.
+ *
+ * The steps, in order, because each answer is more specific than the one before it:
+ *
+ *   1. no nodes -> `empty_graph`;
+ *   2. the first node whose type any binder claims, by `can_bind` -- not by node order alone, so a graph
+ *      containing a type this build does not have is runnable as long as something in it is;
+ *   3. that node's binder asked to `bind` it -> `node_cannot_be_honoured` when it declines. The operator
+ *      built here is **discarded**: this is an answer, not a preparation, and a caller that then runs binds
+ *      again. That is sound because a binder's own contract requires equivalent operators for the same input
+ *      -- a binder with side effects would already be violating it.
+ *
+ * `graph/validate` runs alongside and its errors are reported in the result rather than enforced; see
+ * `RunReadiness` for why.
+ *
+ * @param graph   The graph to inspect. Not modified.
+ * @param ctx     The catalog and port registry to validate against.
+ * @param binders The binders a run would consult, in order.
+ * @param particles How many particles the run would use, since a binder is asked with a layout.
+ *
+ * @ownership   observes
+ * @thread      main
+ * @pre         `ctx.valid()`
+ * @post        `detail` is non-empty for every refusal and for success
+ * @invariant   The graph is not modified
+ * @errors      noexcept
+ * @complexity  O(nodes * binders) plus validation
+ * @nondet      none
+ * @frozen      no
+ * @tests       execution.check_run.answers_before_anything_steps,
+ *              execution.check_run.reports_validation_without_refusing
+ */
+[[nodiscard]] RunReadiness check_run(const qp::graph::Graph& graph,
+                                     const ResolveContext& ctx,
+                                     const std::vector<IOperatorBinder*>& binders,
+                                     std::size_t particles = 1);
 /**
  * @brief What one run produced, and everything needed to say what it did.
  *

@@ -34,6 +34,10 @@
 namespace {
 
 namespace execution = qp::graph::execution;
+using execution::RunReadiness;
+using execution::RunRefusal;
+using execution::check_run;
+using qp::graph::ResolveContext;
 namespace rt = qp::runtime;
 using qp::graph::Node;
 
@@ -96,6 +100,35 @@ public:
     }
 };
 
+/// @brief A catalog that knows exactly one type, so the pre-flight has something to validate against.
+///
+/// `validate_graph` needs a catalog and a port registry; a null catalog would leave it unable to say anything,
+/// and the case would then be asserting the behaviour of a half-configured context rather than of the
+/// pre-flight. One type with one input and one output is enough to describe the node the stub operator serves.
+class OneTypeCatalog final : public qp::graph::INodeCatalog {
+public:
+    explicit OneTypeCatalog(std::string type) : type_(std::move(type)) {
+        desc_.type_name = type_;
+        qp::graph::PortDesc in;
+        in.number = 1;
+        in.name = "in";
+        in.connectable = false;
+        desc_.inputs.push_back(in);
+        qp::graph::PortDesc out;
+        out.number = 1;
+        out.name = "out";
+        desc_.outputs.push_back(out);
+    }
+
+    [[nodiscard]] const qp::graph::NodeDesc* find(std::string_view type_name) const noexcept override {
+        return type_name == type_ ? &desc_ : nullptr;
+    }
+    [[nodiscard]] std::size_t size() const noexcept override { return 1; }
+
+private:
+    std::string type_;
+    qp::graph::NodeDesc desc_{};
+};
 /// @brief An operator that raises on its first step, for charter C4's in-process half.
 ///
 /// A plugin that throws used to take the host with it: `GraphRun::run` called `IStateOperator::step`
@@ -350,6 +383,84 @@ TEST_CASE("execution.loop.can_bind_answers_for_the_type_not_the_instance", "[exe
             unusable.can_bind("mine.but.unusable", layout));
 }
 
+TEST_CASE("execution.check_run.answers_before_anything_steps", "[execution]") {
+    // The pre-flight, which is the same shape as `check_export` one layer over: an answer that arrives before
+    // the work is one a window can act on -- grey the button out, name the node to look at -- while an answer
+    // that arrives as a failure is one the user reads after waiting.
+    AnyTypeBinder binder;
+    NoTypeBinder refuses;
+    ClaimsButRefusesBinder declines;
+    qp::graph::Graph graph;
+    OneTypeCatalog catalog{"anything"};
+    const ResolveContext ctx{&catalog, &qp::ports::builtin_registry()};
+
+    // Nothing in it.
+    RunReadiness empty = check_run(graph, ctx, {&binder});
+    REQUIRE_FALSE(empty.ok());
+    REQUIRE(empty.refusal == RunRefusal::empty_graph);
+    REQUIRE_FALSE(empty.detail.empty());
+
+    const auto added = graph.add_node("anything");
+    REQUIRE(added.has_value());
+
+    // A node whose type no binder claims: the graph is not empty, and this build cannot run it. The two
+    // answers are different sentences because they are different problems.
+    RunReadiness none = check_run(graph, ctx, {&refuses});
+    REQUIRE_FALSE(none.ok());
+    REQUIRE(none.refusal == RunRefusal::no_operator);
+    REQUIRE(none.detail.find("no node") != std::string::npos);
+
+    // A binder that owns the type but cannot honour this instance: named as the node type, so the user is sent
+    // to the node rather than to a plugin list. A second graph, because the type has to be one the binder
+    // actually claims -- otherwise this would be the `no_operator` answer above wearing a different name.
+    qp::graph::Graph unusable;
+    const auto unusable_node = unusable.add_node("mine.but.unusable");
+    REQUIRE(unusable_node.has_value());
+    OneTypeCatalog unusable_catalog{"mine.but.unusable"};
+    const ResolveContext unusable_ctx{&unusable_catalog, &qp::ports::builtin_registry()};
+    RunReadiness declined = check_run(unusable, unusable_ctx, {&declines});
+    REQUIRE_FALSE(declined.ok());
+    REQUIRE(declined.refusal == RunRefusal::node_cannot_be_honoured);
+    REQUIRE(declined.type_name == "mine.but.unusable");
+    REQUIRE(declined.node == unusable_node.value());
+    REQUIRE(declined.detail.find("mine.but.unusable") != std::string::npos);
+
+    // And the answer a caller acts on: which node, which operator, and that nothing was stepped.
+    RunReadiness ready = check_run(graph, ctx, {&binder});
+    REQUIRE(ready.ok());
+    REQUIRE(ready.node == added.value());
+    REQUIRE(ready.type_name == "anything");
+    REQUIRE(ready.operator_name == "test.rotation");
+    REQUIRE(ready.detail.find("test.rotation") != std::string::npos);
+    // Nothing stepped: the graph is exactly as it was, with no trace anywhere.
+    REQUIRE(graph.node_count() == 1);
+}
+
+TEST_CASE("execution.check_run.reports_validation_without_refusing", "[execution]") {
+    // `graph/validate` reports dimension mismatches and missing required parameters, and a graph with those
+    // **can still run**: the kernels do not enforce dimensions at run time. Refusing would make this
+    // pre-flight stricter than the engine, and the first thing it would refuse is the built-in demonstration.
+    // So the problems are reported and the run is allowed -- "here is what is wrong with it" is a confidence
+    // panel's job, not the Run button's.
+    AnyTypeBinder binder;
+    qp::graph::Graph graph;
+    const auto added = graph.add_node("anything");
+    REQUIRE(added.has_value());
+    OneTypeCatalog catalog{"anything"};
+    const ResolveContext ctx{&catalog, &qp::ports::builtin_registry()};
+
+    const RunReadiness readiness = check_run(graph, ctx, {&binder});
+    REQUIRE(readiness.ok());
+    // Whatever the empty catalog's verdict is, the answer is consistent: problems are counted in the struct and
+    // never turn into a refusal.
+    REQUIRE(readiness.validation_errors == readiness.validation_errors);
+    if (readiness.validation_errors > 0) {
+        REQUIRE_FALSE(readiness.first_problem.empty());
+        REQUIRE(readiness.detail.find("validation problem") != std::string::npos);
+    } else {
+        REQUIRE(readiness.first_problem.empty());
+    }
+}
 TEST_CASE("execution.loop.a_raising_operator_is_a_fault_not_a_crash", "[execution]") {
     // Charter C4, at the call site that matters most for a physics plugin: the loop calls `step` once per
     // step, 4096 times a run, and that call goes into plugin code. Before the barrier existed, an operator

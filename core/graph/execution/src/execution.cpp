@@ -123,6 +123,81 @@ void GraphRun::set_omega(double omega) noexcept {
     }
 }
 
+RunReadiness check_run(const qp::graph::Graph& graph, const ResolveContext& ctx,
+                       const std::vector<IOperatorBinder*>& binders, std::size_t particles) {
+    RunReadiness out;
+
+    if (graph.node_count() == 0) {
+        // Different from "nothing here has an operator": one is a document nobody has started, the other is a
+        // document this build cannot run, and the sentences a user needs are different.
+        out.refusal = RunRefusal::empty_graph;
+        out.detail = "nothing to run: the graph is empty";
+        return out;
+    }
+
+    // Validation runs alongside the search rather than gating it: see `RunReadiness` for why a dimension
+    // mismatch is reported instead of refused. A caller that wants to refuse can read the count.
+    const Report report =
+        validate_graph(graph, ctx);
+    for (const Issue& issue : report.issues()) {
+        if (!issue.is_error()) continue;
+        ++out.validation_errors;
+        if (out.first_problem.empty()) out.first_problem = issue.to_text();
+    }
+
+    // The search, by `can_bind` rather than by node order alone: a graph holding a type this build does not
+    // have is still runnable as long as something in it is.
+    const StateView probe = StateView::zeroed(particles);
+    const Node* candidate = nullptr;
+    for (const qp::graph::NodeSlot& slot : graph.slots()) {
+        if (!slot.occupied) continue;
+        for (IOperatorBinder* binder : binders) {
+            if (binder == nullptr) continue;
+            if (binder->can_bind(slot.node.type_name, probe)) {
+                candidate = &slot.node;
+                break;
+            }
+        }
+        if (candidate != nullptr) break;
+    }
+
+    if (candidate == nullptr) {
+        out.refusal = RunRefusal::no_operator;
+        out.detail = "nothing to run: no node in this graph has an operator yet";
+        return out;
+    }
+    out.node = candidate->id;
+    out.type_name = candidate->type_name;
+
+    // Asked, and the answer is discarded: this is a pre-flight, not a preparation. A binder's contract already
+    // requires equivalent operators for the same input, so binding again for the real run is sound.
+    for (IOperatorBinder* binder : binders) {
+        if (binder == nullptr) continue;
+        std::unique_ptr<IStateOperator> candidate_operator = binder->bind(candidate->type_name, *candidate, probe);
+        if (candidate_operator == nullptr) continue;
+        out.operator_name = std::string{candidate_operator->name()};
+        break;
+    }
+    if (out.operator_name.empty()) {
+        // The type is known -- `can_bind` said so -- and this instance cannot be honoured. Named as the node
+        // type rather than as a code, because the useful thing to know is which node and which settings.
+        out.refusal = RunRefusal::node_cannot_be_honoured;
+        out.detail = "cannot run " + candidate->type_name +
+                     ": no operator can honour this node as configured (check its parameters, damping and "
+                     "integrator settings)";
+        return out;
+    }
+
+    out.detail = "ready: " + out.operator_name + " would run " + out.type_name;
+    if (out.validation_errors > 0) {
+        // Said out loud rather than hidden: the run will produce numbers, and these are the reasons to distrust
+        // them. Refusing would be stricter than the engine and would refuse the built-in demonstration first.
+        out.detail += " (" + std::to_string(out.validation_errors) + " validation problem";
+        out.detail += out.validation_errors == 1 ? "" : "s";
+        out.detail += ": " + out.first_problem + ")";
+    }
+    return out;
+}
 RunOutcome GraphRun::run(std::size_t steps, double dt) {
     RunOutcome out;
     out.operator_name = operator_name_;

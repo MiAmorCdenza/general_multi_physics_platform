@@ -33,6 +33,9 @@
 
 #include <qp/views/model/run_controller.hpp>
 
+#include <qp/views/model/demo_library.hpp>
+#include <qp/views/model/type_catalog.hpp>
+
 #include <qp/plugins/mechanics/mechanics_binder.hpp>
 
 #include <qp/graph/execution/execution.hpp>
@@ -91,6 +94,14 @@ public:
 
     [[nodiscard]] const qp::authoring::Session& session() const noexcept { return session_; }
 
+    /// @brief The catalog and port registry the framework pre-flight validates against.
+    ///
+    /// The built-in demonstrator library, because it is the same catalog the window gives the Run action --
+    /// a test that invented one would validate a graph against types the real application does not have.
+    [[nodiscard]] qp::graph::ResolveContext resolve() const noexcept {
+        return qp::graph::ResolveContext{&catalog_, &qp::ports::builtin_registry()};
+    }
+
     void set(qp::graph::PortNumber port, qp::ports::Value value) {
         const auto applied = session_.apply(qp::graph::SetParam{node_, port, std::move(value)});
         REQUIRE(applied.has_value());
@@ -98,7 +109,14 @@ public:
 
 private:
     qp::authoring::Session session_{};
+    qp::views::TypeCatalog catalog_{};
     qp::graph::NodeId node_{};
+    /// Registers the demonstrator types, so `graph/validate` has something to check the fixture's node against
+    /// rather than reporting an unknown type for every case.
+    struct Register {
+        explicit Register(qp::views::TypeCatalog& c) { (void)qp::views::register_demo_library(c); }
+    };
+    Register registered_{catalog_};
 };
 
 }  // namespace
@@ -108,7 +126,7 @@ TEST_CASE("run.controller.refuses_a_graph_with_nothing_to_run", "[run]") {
     // one the user has. "Nothing to run" alone would leave someone staring at three nodes wondering why.
     {
         Fixture fixture{Shape::empty};
-        RunController controller{fixture.session(), binders()};
+        RunController controller{fixture.session(), binders(), fixture.resolve()};
         const RunResult result = controller.run();
         REQUIRE_FALSE(result.report.ok);
         REQUIRE(result.report.message.find("empty") != std::string::npos);
@@ -124,7 +142,7 @@ TEST_CASE("run.controller.refuses_a_graph_with_nothing_to_run", "[run]") {
         // "the operator exists and cannot honour this node". Reporting the first would tell the user to
         // install a plugin they already have.
         Fixture fixture{Shape::unparameterised};
-        RunController controller{fixture.session(), binders()};
+        RunController controller{fixture.session(), binders(), fixture.resolve()};
         const RunResult result = controller.run();
         REQUIRE_FALSE(result.report.ok);
         REQUIRE(result.report.message.find("cannot run demo.spring_damper") != std::string::npos);
@@ -136,7 +154,7 @@ TEST_CASE("run.controller.refuses_a_graph_with_nothing_to_run", "[run]") {
     {
         // No binders at all: a build with no plugins. Still a sentence rather than a crash.
         Fixture fixture{Shape::ready};
-        RunController controller{fixture.session(), {}};
+        RunController controller{fixture.session(), {}, fixture.resolve()};
         const RunResult result = controller.run();
         REQUIRE_FALSE(result.report.ok);
         REQUIRE(result.trace.empty());
@@ -146,7 +164,7 @@ TEST_CASE("run.controller.refuses_a_graph_with_nothing_to_run", "[run]") {
     // report nobody can read, and the count a supervisor looks at would be wrong.
     {
         Fixture fixture{Shape::empty};
-        RunController controller{fixture.session(), binders()};
+        RunController controller{fixture.session(), binders(), fixture.resolve()};
         for (int i = 0; i < 3; ++i) (void)controller.run();
         REQUIRE(controller.ledger().size() == 0);
     }
@@ -157,7 +175,7 @@ TEST_CASE("run.controller.damping_is_reported_not_hidden", "[run]") {
     // honoured, and the message names the node type and the two settings that caused it rather than
     // reporting an error code -- the useful thing for a user to know is *which node* and *what to change*.
     Fixture fixture{Shape::ready, 200.0, 0.5, /*c=*/0.5};
-    RunController controller{fixture.session(), binders()};
+    RunController controller{fixture.session(), binders(), fixture.resolve()};
     const RunResult result = controller.run();
 
     REQUIRE_FALSE(result.report.ok);
@@ -170,7 +188,7 @@ TEST_CASE("run.controller.damping_is_reported_not_hidden", "[run]") {
     // An unimplemented integrator is reported the same way, for the same reason: the user chose `verlet`
     // to get different behaviour, and running RK4 would contradict the choice silently.
     Fixture verlet{Shape::ready, 200.0, 0.5, 0.0, /*integrator=*/2};
-    RunController other{verlet.session(), binders()};
+    RunController other{verlet.session(), binders(), verlet.resolve()};
     REQUIRE_FALSE(other.run().report.ok);
 }
 
@@ -182,7 +200,7 @@ TEST_CASE("run.controller.runs_a_node_and_records_its_trace", "[run]") {
     // frequency component and the kernel's parameter block agree, and a disagreement would show up here
     // as a trajectory at the wrong period.
     Fixture fixture{Shape::ready};
-    RunController controller{fixture.session(), binders()};
+    RunController controller{fixture.session(), binders(), fixture.resolve()};
     const RunResult result = controller.run();
 
     REQUIRE(result.report.ok);
@@ -223,12 +241,46 @@ TEST_CASE("run.controller.runs_a_node_and_records_its_trace", "[run]") {
             RunController::kInitialDisplacement);
 }
 
+TEST_CASE("run.controller.reports_validation_without_refusing", "[run]") {
+    // The pre-flight validates as well as searches, and its findings travel with a **successful** run. A graph
+    // whose types the catalog does not know still runs -- the kernels do not check dimensions at run time --
+    // and the numbers it produces look exactly like correct ones. A status line that reported only "ran ...
+    // 4097 samples" would be telling the user everything is fine about a graph the framework already knows is
+    // inconsistent.
+    Fixture fixture{Shape::ready};
+
+    // A catalog that knows nothing: every node in the graph is an unknown type, which is a validation error and
+    // is still runnable, because the binder claims the type regardless of what the catalog says.
+    qp::views::TypeCatalog empty_catalog{};
+    const qp::graph::ResolveContext blind{&empty_catalog, &qp::ports::builtin_registry()};
+
+    RunController controller{fixture.session(), binders(), blind};
+    const RunResult result = controller.run();
+
+    REQUIRE(result.report.ok);
+    REQUIRE(result.report.samples == RunController::kSteps + 1);
+    REQUIRE(result.report.validation_errors > 0);
+    REQUIRE_FALSE(result.report.first_problem.empty());
+    // The message says so, in the same sentence the status line shows: the run happened, and here is what is
+    // wrong with the graph it happened on.
+    REQUIRE(result.report.message.find("validation problem") != std::string::npos);
+    REQUIRE(result.report.message.find("ran rk4_oscillator") != std::string::npos);
+
+    // And with a catalog that knows the demonstrator types, the same graph validates cleanly: the findings are
+    // measurements of the graph, not a standing complaint about the fixture.
+    RunController informed{fixture.session(), binders(), fixture.resolve()};
+    const RunResult clean = informed.run();
+    REQUIRE(clean.report.ok);
+    REQUIRE(clean.report.validation_errors == 0);
+    REQUIRE(clean.report.first_problem.empty());
+    REQUIRE(clean.report.message.find("validation problem") == std::string::npos);
+}
 TEST_CASE("run.controller.a_second_run_is_a_second_entry", "[run]") {
     // Each press of Run is its own run: its own id, its own trace. A controller that reused an id would
     // make two experiments share a record, and the ledger could no longer say which numbers came from
     // which configuration.
     Fixture fixture{Shape::ready};
-    RunController controller{fixture.session(), binders()};
+    RunController controller{fixture.session(), binders(), fixture.resolve()};
 
     const RunResult first = controller.run();
     REQUIRE(first.report.ok);
@@ -251,7 +303,7 @@ TEST_CASE("run.controller.description_states_what_it_will_do", "[run]") {
     // A button that does not say what it will do is a button that surprises. The description names the
     // step count and size, and those are the two numbers that decide whether the answer is right.
     Fixture fixture{Shape::ready};
-    RunController controller{fixture.session(), binders()};
+    RunController controller{fixture.session(), binders(), fixture.resolve()};
     const std::string text = controller.description();
 
     REQUIRE_FALSE(text.empty());
