@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "章程 C8 落地（置信度面板：能量漂移可见且拒绝在不可测时报零）；四条承诺全部可自动验收",
+  "updated": "修复发行包把 Debug 构建发出去（用户实测「找不到 Qt6Core.dll」）；package.ps1 现在检查导入表",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -60,7 +60,7 @@
     "packaging": {
       "tool": "scripts/package.ps1",
       "state": "passing",
-      "detail": "组装可分发目录：qp_shell.exe + Qt DLL + 平台插件 + LICENSE / NOTICE / THIRD_PARTY_NOTICES.md + LICENSE.LGPLv3，并**验证产物在把 Qt 目录从 PATH 移除后仍能启动**——只在构建机上能跑的包会通过其它所有检查，所以这一步才是「可分发」这个词的凭据。LGPLv3 全文刻意不入库（仓库里没有 Qt 代码，入库会造成误导），脚本从已安装副本定位，找不到就失败而不是产出一个看起来完整的包。包内容**必须与 NOTICE 声明一致**：首次运行产物里有 Qt6Network 与 tls/networkinformation 插件，而 NOTICE 只声明三个模块——两份文件各自为真却互相矛盾，接收者读到的许可文件描述的是另一个产物。弥合方向是收窄包（--no-network），不是放宽 NOTICE：给一个没有网络功能的课堂工具塞进整套网络栈，既更大又凭空扩大许可面。Qt6Svg 确实会被图标引擎拉进来，因此写进了声明。"
+      "detail": "组装可分发目录：qp_shell.exe + Qt DLL + 平台插件 + LICENSE / NOTICE / THIRD_PARTY_NOTICES.md + LICENSE.LGPLv3，并**验证产物在把 Qt 目录从 PATH 移除后仍能启动**——只在构建机上能跑的包会通过其它所有检查，所以这一步才是「可分发」这个词的凭据。LGPLv3 全文刻意不入库（仓库里没有 Qt 代码，入库会造成误导），脚本从已安装副本定位，找不到就失败而不是产出一个看起来完整的包。包内容**必须与 NOTICE 声明一致**：首次运行产物里有 Qt6Network 与 tls/networkinformation 插件，而 NOTICE 只声明三个模块——两份文件各自为真却互相矛盾；弥合方向是收窄包（--no-network），不是放宽 NOTICE。Qt6Svg 确实会被图标引擎拉进来，因此写进了声明。**本阶段补上一次真实故障**：加完测量面板与置信度面板后重新打包、交给用户试跑，报「找不到 Qt6Core.dll」——而 Qt6Core.dll 就在包里、就在 exe 旁边。真正的导入表是 Qt6Cored.dll / MSVCP140D.dll / VCRUNTIME140D.dll / ucrtbased.dll：一个 **Debug** 可执行文件。本脚本用 windeployqt --release，于是它在调试版二进制旁边部署了发布版 Qt，而调试版 CRT 根本不可再发行（MSVCP140D.dll 来自 Visual Studio，不属于任何人的应用程序）。**为什么原先看不见**：脚本检查的是「qp_shell.exe 在不在」和「带着本机的 Qt 能不能跑起来」——而 windeployqt 确实为调试版 exe 需要的每个 Qt 模块部署了东西，除了调试版变体本身；启动检查之所以通过，是因为构建机的 PATH 正好提供了 C:\\Qt\\...\\bin 里的 Qt6Cored.dll 与 VC 再发行目录里的调试 CRT。也就是说，**「在本机能跑吗」回答的不是要问的问题**：要紧的性质是**可执行文件导入表的性质**，而那不需要启动任何东西就能读。现在脚本读导入表并拒绝任何 Qt/CRT 的调试版依赖，失败信息直接给出 Release 构建的命令，因为这个失败不是「你的 exe 坏了」而是「你打包了错误的配置」。**该守卫的反例已验证**：对 Debug 构建目录运行它会点名全部 7 个调试版导入并以非零退出；对 Release 目录则通过，且产物在把 Qt 与 VC 都从 PATH 移除后确实启动。另外验证了一件与 C7 相关的事：**golden 用例在 Release 下也通过**——Release 正是合并（contraction）会生效的配置，所以这同时是 CMakeLists 里 `-ffp-contract=off` / `/fp:precise` 确实在起作用的证据，而不只是一条预防性注释。"
     },
     "core_standalone": {
       "tool": "tests/meta/check_core_standalone.py",
@@ -244,7 +244,7 @@
     "reason": "章程的核心断言是「views/ 与 plugins/ 可以整个删掉，core/ 仍能编译并通过全部测试」，即 core 被设计成**可复用的地基**。可复用的地基应该让它尽可能容易被复用（含专利授权、无 copyleft 摩擦），而不是给它加一道需要法律判断的门槛。否决 LGPL-3.0 的要点：core 是静态库，LGPL-3.0 §4 只允许走 §4(d)(0)（须提供目标代码让用户可重新链接）；LGPL 是为「库」写的而本项目同时是应用与框架；它会给插件生态制造一条取决于构建方式的分界线（DLL 插件不受传染、静态链接 core 的插件受传染），而插件作者不该需要先读许可法才能判断能否闭源。",
     "qt_obligations": "Qt 6.8.3 以 LGPL-3.0 动态链接使用（Qt6Core/Gui/Widgets），未修改 Qt 源码。LGPL-3.0 全文**刻意不入库**——仓库里没有 Qt 代码，入库会产生「这里有 LGPL 代码」的误导；全文属于发行包，由打包步骤作为 LICENSE.LGPLv3 放入。Qt Charts 刻意不用（GPL-3.0 而非 LGPL），绘图改用 QCustomPlot(MIT) 或 QWT(LGPL)。",
     "outstanding": [
-      "在一台没装 Qt 的机器上解压发行包并运行（package.ps1 验证的是 PATH 隔离，不是全新机器）；接收方已确认在另一台机器上正常运行一次"
+      "在一台没装 Qt 的机器上解压发行包并运行（package.ps1 验证的是 PATH 隔离，不是全新机器）；接收方已确认在另一台机器上正常运行过一次——但那一次是**旧包**，本阶段修复 Debug/Release 之后重新产出的包尚未在第三方机器上验证"
     ]
   }
 }

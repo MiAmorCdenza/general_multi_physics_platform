@@ -80,6 +80,53 @@ try {
     if (-not $exe) {
         Fail "在 $BuildDir 下找不到 qp_shell.exe。视图层需要 -DQP_BUILD_VIEWS=ON 才会构建。"
     }
+
+    # -- Refuse a Debug build ----------------------------------------------------
+    #
+    # This block exists because of a real failure: after the measurement and confidence panels were
+    # added, I repackaged and handed the user a build that reported "cannot find Qt6Core.dll" -- with
+    # Qt6Core.dll **present in the package**, right beside the exe.
+    #
+    # The actual imports were Qt6Cored.dll, MSVCP140D.dll, VCRUNTIME140D.dll and ucrtbased.dll: a
+    # **Debug** executable. This script runs `windeployqt --release`, so it deployed release Qt
+    # beside a debug binary -- and the debug CRT is not redistributable at all. MSVCP140D.dll comes
+    # from Visual Studio and ships with nobody's application.
+    #
+    # Why the script could not see it before: it checked that qp_shell.exe existed, and that the
+    # package launched **with the build machine's Qt on PATH**. windeployqt did deploy something for
+    # every Qt module the debug exe needed, except the debug variants, which it does not deploy by
+    # design. The launch check passed because the build machine's PATH supplies Qt6Cored.dll from
+    # C:\Qt\...\bin and the debug CRT from the VC redist directory.
+    #
+    # So "does it run here" was answering a question nobody was asking. **The property that matters
+    # is a property of the executable's import table**, and that is readable without launching
+    # anything.
+    #
+    # The test is exact rather than heuristic: the release builds of these libraries carry no `d`
+    # suffix, and the names worth watching for are a known set.
+    $debugImports = @()
+    $dumpbin = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\*\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" -ErrorAction SilentlyContinue |
+               Select-Object -First 1
+    if ($dumpbin) {
+        $imports = & $dumpbin.FullName /DEPENDENTS $exe.FullName 2>$null
+        $debugImports = $imports | Where-Object {
+            $_ -match '^\s*(Qt6\w+d|MSVCP\d+D|VCRUNTIME\d+D|VCRUNTIME\d+_\d+D|ucrtbased)\.dll\s*$'
+        } | ForEach-Object { $_.Trim() }
+    } else {
+        Write-Host "  [warn] 找不到 dumpbin，无法检查导入表是否为 Debug 版" -ForegroundColor Yellow
+    }
+
+    if ($debugImports.Count -gt 0) {
+        Fail ("$($exe.FullName) 是 Debug 构建，不能打包：`n" +
+              "        它导入 " + ($debugImports -join '、') + "`n" +
+              "        本脚本用 windeployqt --release，会在调试版二进制旁部署发布版 Qt，`n" +
+              "        而调试版 CRT 不可再发行——用户机器上会报「找不到 Qt6Core.dll」。`n" +
+              "        请改用 Release 构建目录：`n" +
+              "          cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DQP_BUILD_VIEWS=ON -DQP_BUILD_PLUGINS=ON`n" +
+              "          cmake --build build-release --target qp_shell`n" +
+              "          pwsh scripts/package.ps1 -BuildDir build-release")
+    }
+    Write-Host "  [ok]   导入表无调试版依赖" -ForegroundColor Green
     Ok "可执行文件：$($exe.FullName)"
 
     # -- 2. Find windeployqt and Qt's bin -----------------------------------
