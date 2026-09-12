@@ -345,6 +345,79 @@ TEST_CASE("host.a_builtin_type_is_attributed_and_removable", "[host]") {
     CHECK(contains(h.mounted_ids(), kContentId));
 }
 
+TEST_CASE("host.a_builtin_instrument_is_attributed_and_removable", "[host]") {
+    // The device counterpart of the case above, and it exists because the two are **not** the same code path:
+    // a built-in node type goes through `register_type` and the catalog, a built-in device through
+    // `InstrumentRegistry::add` and a ledger of ids. The first version of `clear_builtin_instruments` reset the
+    // whole built-in ledger instead of withdrawing the devices, which silently removed every built-in node type
+    // as well -- and this case is what holds the two apart.
+    host::PluginHost h{kGrant};
+
+    // A minimal device. It is a fixture rather than a real instrument for the same reason the node type above is
+    // a fixture: this file is about the host's record, and `plugins/instruments` has its own cases for what a
+    // device reads.
+    class Stub final : public runtime::IInstrument {
+    public:
+        Stub() {
+            desc_.id = "builtin.stub";
+            desc_.label = "Stub device";
+            desc_.quantity = "length";
+            desc_.dim = units::dims::length;
+            desc_.finest_resolution = 1.0e-3;
+            desc_.adjustable = false;
+        }
+        [[nodiscard]] const runtime::InstrumentDesc& describe() const noexcept override { return desc_; }
+        [[nodiscard]] double resolution() const noexcept override { return desc_.finest_resolution; }
+        [[nodiscard]] diag::Result<void> set_resolution(double) override {
+            return diag::ErrorCode::not_implemented;
+        }
+        [[nodiscard]] diag::Result<runtime::UncertainValue> measure(
+            double truth, const runtime::MeasureContext&) override {
+            return runtime::UncertainValue::measured(truth, 0.0, desc_.dim);
+        }
+
+    private:
+        runtime::InstrumentDesc desc_{};
+    };
+
+    Stub device;
+    REQUIRE(h.add_builtin_instrument(&device) == diag::ErrorCode::ok);
+    CHECK(h.instruments().find("builtin.stub") == &device);
+    CHECK(h.origin_of("builtin.stub") == host::PluginHost::kBuiltinOrigin);
+
+    // Still not a plugin, for the reason the case above gives.
+    CHECK(h.mounted_ids().empty());
+
+    // A duplicate is refused by the same rule a plugin's duplicate meets, because it is the same registry -- and
+    // a null device is refused too, rather than registering a pointer nothing can describe.
+    Stub clash;
+    CHECK(h.add_builtin_instrument(&clash) == diag::ErrorCode::duplicate_connection);
+    CHECK(h.add_builtin_instrument(nullptr) == diag::ErrorCode::invalid_argument);
+
+    // **The half that matters.** A built-in node type and a built-in device live in one ledger, and clearing the
+    // devices must leave the types alone: a window that cleared its instruments to register a second rack would
+    // otherwise lose its palette, and the failure would look like a registration bug somewhere else entirely.
+    qp::graph::NodeDesc type;
+    type.type_name = "builtin.demo";
+    type.label = "Built-in Demo";
+    type.category = "fixture";
+    REQUIRE(h.add_builtin_node_type(type) == diag::ErrorCode::ok);
+
+    h.clear_builtin_instruments();
+    CHECK(h.instruments().find("builtin.stub") == nullptr);
+    CHECK(h.instruments().size() == 0);
+    CHECK(h.origin_of("builtin.stub").empty());
+    CHECK(catalog_has(h, "builtin.demo"));
+    CHECK(h.origin_of("builtin.demo") == host::PluginHost::kBuiltinOrigin);
+
+    // And clearing the types leaves a plugin's contributions alone, which is the case above's assertion repeated
+    // here so that the two directions of "only the built-ins" are both covered.
+    REQUIRE(h.load(QP_HOST_FIXTURE_content).ok());
+    h.clear_builtin_node_types();
+    CHECK_FALSE(catalog_has(h, "builtin.demo"));
+    CHECK(catalog_has(h, kNodeType));
+}
+
 TEST_CASE("host.mounts_and_refuses_the_loaders_own_fixtures", "[host]") {
     // End to end with the fixtures this repository already had, and they are the right subject for a reason
     // that is easy to miss: `tests/fixtures/plugin/` is built from **hand-written bytes** and deliberately does

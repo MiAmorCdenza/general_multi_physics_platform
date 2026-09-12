@@ -27,4 +27,8 @@
 if(QP_BUILD_PLUGINS)
     add_subdirectory(formats)
     add_subdirectory(mechanics)
+    # The measuring devices. They are `instruments/` rather than part of `mechanics/` because the plan tree
+    # splits content by what a thing **is**: a caliper is not a rigid-body model, and the one interface they
+    # share is `runtime/instrument`'s, which no other content implements.
+    add_subdirectory(instruments)
 endif()

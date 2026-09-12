@@ -495,23 +495,80 @@ public:
     void clear_builtin_node_types() noexcept;
 
     /**
-     * @brief Which plugin contributed `type_name`, or an empty view when nothing did.
+     * @brief Adds a measuring device that this build ships rather than loads.
+     *
+     * The device counterpart of `add_builtin_node_type`, and it exists for the same reason one level up: a
+     * build whose only instruments arrive through `add_instrument` from a plugin has **no** instrument until a
+     * plugin is mounted, so the measurement loop -- the one thing this platform does that a spreadsheet plus a
+     * simulator does not -- is unreachable in a build with no plugins loaded. That was the state of this
+     * repository before this method existed: `runtime/instrument` had a full contract, a registry, a fault
+     * barrier and thirteen test cases, and **nothing in production ever registered a device**.
+     *
+     * A device registered here is attributed to `kBuiltinOrigin` and appears in the same ledger, so `origin_of`
+     * answers for it and `clear_builtin_instruments` takes it back. It is not a mounted plugin, so it does not
+     * appear in `mounted_ids()`.
+     *
+     * The host does **not** own the instrument: `InstrumentRegistry` holds non-owning pointers, exactly as it
+     * does for a plugin's device, so the caller keeps the object alive for as long as the host is used. A
+     * built-in whose storage was a temporary would leave the registry pointing at freed memory the first time
+     * somebody took a reading.
+     *
+     * @param instrument The device. Borrowed, and must be non-null.
+     *
+     * @ownership   observes `instrument`
+     * @thread      main
+     * @pre         `instrument` outlives this host, or is removed first
+     * @post        On success `instruments().find(id)` returns it and `origin_of(id)` names `kBuiltinOrigin`
+     * @invariant   On failure the registry is unchanged
+     * @errors      noexcept; `invalid_argument` for a null device or an empty id, `duplicate_connection` for an
+     *              id already served
+     * @complexity  O(devices)
+     * @nondet      none
+     * @frozen      no
+     * @tests       host.a_builtin_instrument_is_attributed_and_removable
+     */
+    [[nodiscard]] diag::ErrorCode add_builtin_instrument(runtime::IInstrument* instrument) noexcept;
+
+    /**
+     * @brief Removes every built-in measuring device.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        No device attributed to `kBuiltinOrigin` remains registered
+     * @invariant   No plugin's device is touched
+     * @errors      noexcept
+     * @complexity  O(devices)
+     * @nondet      none
+     * @frozen      no
+     * @tests       host.a_builtin_instrument_is_attributed_and_removable
+     */
+    void clear_builtin_instruments() noexcept;
+
+    /**
+     * @brief Which plugin contributed `name`, or an empty view when nothing did.
      *
      * The answer comes from the host's own record, not from `NodeDesc::source`: a plugin that misspelled its
      * own id would otherwise be believed.
+     *
+     * `name` is a **node type name or a measuring device's id**, and the two share one lookup because they share
+     * one question: "where did this come from". A device that a graph can name -- the readout node a reading is
+     * attributed to -- needs exactly the answer a node type needs, and two lookups would be two records of the
+     * same contribution.
      *
      * @ownership   borrows from this object
      * @thread      main
      * @pre         none
      * @post        none
-     * @invariant   Empty exactly when no mounted plugin registered that type
+     * @invariant   Empty exactly when no mounted plugin and no built-in registered that name
      * @errors      noexcept
      * @complexity  O(mounted plugins)
      * @nondet      none
      * @frozen      no
-     * @tests       host.loads_a_real_plugin_and_mounts_what_it_registers
+     * @tests       host.loads_a_real_plugin_and_mounts_what_it_registers,
+     *              host.a_builtin_instrument_is_attributed_and_removable
      */
-    [[nodiscard]] std::string_view origin_of(std::string_view type_name) const noexcept;
+    [[nodiscard]] std::string_view origin_of(std::string_view name) const noexcept;
 
     /**
      * @brief Loads one plugin and lets it install its contributions.

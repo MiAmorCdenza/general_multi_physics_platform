@@ -195,14 +195,23 @@ diag::ErrorCode PluginHost::refuse(const char* reason) noexcept {
     return diag::ErrorCode::plugin_load_failed;
 }
 
-std::string_view PluginHost::origin_of(std::string_view type_name) const noexcept {
+std::string_view PluginHost::origin_of(std::string_view name) const noexcept {
     for (const Mounted& entry : mounted_) {
-        for (const std::string& name : entry.ledger.node_types) {
-            if (name == type_name) return std::string_view{entry.id};
+        for (const std::string& type_name : entry.ledger.node_types) {
+            if (type_name == name) return std::string_view{entry.id};
+        }
+        // A device's id answers here too. The two are one record of "what did this plugin contribute" because
+        // the question a caller asks is one question -- where did this name come from -- and a second lookup
+        // would be a second list that could fall out of step with the first.
+        for (const std::string& id : entry.ledger.instruments) {
+            if (id == name) return std::string_view{entry.id};
         }
     }
-    for (const std::string& name : builtins_.node_types) {
-        if (name == type_name) return kBuiltinOrigin;
+    for (const std::string& type_name : builtins_.node_types) {
+        if (type_name == name) return kBuiltinOrigin;
+    }
+    for (const std::string& id : builtins_.instruments) {
+        if (id == name) return kBuiltinOrigin;
     }
     return std::string_view{};
 }
@@ -222,6 +231,28 @@ diag::ErrorCode PluginHost::add_builtin_node_type(graph::NodeDesc desc) noexcept
 void PluginHost::clear_builtin_node_types() noexcept {
     withdraw(builtins_);
     builtins_ = Ledger{};
+}
+
+diag::ErrorCode PluginHost::add_builtin_instrument(runtime::IInstrument* instrument) noexcept {
+    // Read the id before registering, for the reason `add_instrument` gives: a failure returns without touching
+    // the record, and a success needs the id to name what it added.
+    const std::string id =
+        instrument != nullptr ? std::string{instrument->describe().id} : std::string{};
+    const diag::Result<void> added = instruments_.add(instrument);
+    if (!added) return added.error();
+    builtins_.instruments.push_back(id);
+    ++builtins_.total;
+    return diag::ErrorCode::ok;
+}
+
+void PluginHost::clear_builtin_instruments() noexcept {
+    // Only the instruments, not the whole built-in ledger: clearing a device must not take a node type with it,
+    // and a caller that wants both gone calls both. The first version of this method reset `builtins_`, which
+    // silently removed every built-in node type as well -- and the window that called it to make room for a
+    // second set of devices lost its palette.
+    for (const std::string& id : builtins_.instruments) (void)instruments_.remove(id);
+    builtins_.total -= builtins_.instruments.size();
+    builtins_.instruments.clear();
 }
 
 bool PluginHost::is_mounted(std::string_view plugin_id) const noexcept {

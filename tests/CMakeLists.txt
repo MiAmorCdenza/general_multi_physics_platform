@@ -397,6 +397,15 @@ if(QP_BUILD_PLUGINS)
         SOURCES unit/plugins/test_csv_exporter.cpp
         LIBS qp::plugins::csv qp::runtime_io qp::runtime_trace qp::runtime_store qp::runtime_run
              qp::units)
+
+    # The measuring devices. It links the host as well as the plugin, because two of its cases are about
+    # **registration** rather than about a reading: that a built-in device is attributable and removable, and
+    # that the rack arrives through the same ledger a plugin's contribution does. Those are the properties that
+    # were missing when `runtime/instrument` had a contract, a registry and thirteen passing cases and no
+    # production caller.
+    qp_add_test(qp_test_plugins_instruments
+        SOURCES unit/plugins/test_instruments.cpp
+        LIBS qp::plugins::instruments qp::host qp::runtime_instrument qp::units)
 endif()
 
 # The run loop. Qt-free and graph-only: every case drives a stub operator, so it belongs to the loop's
