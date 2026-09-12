@@ -15,12 +15,15 @@
 #include <QGraphicsItem>
 #include <QGraphicsLineItem>
 #include <QGraphicsSceneMouseEvent>
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
+#include <QScrollBar>
 #include <QSizeF>
 #include <QString>
 #include <QTimer>
+#include <QWheelEvent>
 
 #include <algorithm>
 #include <cmath>
@@ -665,6 +668,13 @@ NodeGraphView::NodeGraphView(qp::authoring::Session& session, const qp::graph::N
     setRenderHint(QPainter::Antialiasing, true);
     setDragMode(QGraphicsView::RubberBandDrag);
     setBackgroundBrush(qt::theme::to_qcolor(qt::theme::palette().surface));
+    // The canvas takes focus on a click, which is what makes the Delete key reach `keyPressEvent` rather than the
+    // palette list. `StrongFocus` rather than `ClickFocus`: a canvas a user has tabbed to should also respond.
+    setFocusPolicy(Qt::StrongFocus);
+    // The scene rect is the scrollable area, and it is set from the graph plus a margin in `frame_graph`. Without
+    // this, a graph dragged past its own bounds would scroll into empty space with no limit -- a canvas a user can
+    // lose their graph in.
+    setSceneRect(scene_->sceneRect());
 
     bridge_ = std::make_unique<Bridge>(*this);
     // Registered before the first rebuild, so a change landing between
@@ -844,6 +854,15 @@ bool NodeGraphView::connect_ports(qp::graph::NodeId from_node, qp::graph::PortIn
 }
 
 void NodeGraphView::mousePressEvent(QMouseEvent* event) {
+    if (event->button() == Qt::MiddleButton) {
+        // Middle-drag pans. `QGraphicsView::ScrollHandDrag` would be the built-in answer and it is not available:
+        // it drags with the **left** button, and the left button is already carrying three gestures (rubber-band
+        // select, move a node, draw a connection). A pan that costs a gesture would cost one of those.
+        last_pan_pos_ = event->pos();
+        setCursor(Qt::ClosedHandCursor);
+        event->accept();
+        return;
+    }
     if (event->button() != Qt::LeftButton || scene_ == nullptr) {
         QGraphicsView::mousePressEvent(event);
         return;
@@ -880,6 +899,18 @@ void NodeGraphView::mousePressEvent(QMouseEvent* event) {
 }
 
 void NodeGraphView::mouseMoveEvent(QMouseEvent* event) {
+    if (event->buttons() & Qt::MiddleButton) {
+        // Pan by the delta in **device** pixels, applied to the scrollbars. `QGraphicsView::ScrollHandDrag` would
+        // be the built-in answer and it is not available: it drags with the **left** button, and the left button is
+        // already carrying three gestures (rubber-band select, move a node, draw a connection). A pan that costs a
+        // gesture would cost one of those.
+        const QPoint delta = event->pos() - last_pan_pos_;
+        last_pan_pos_ = event->pos();
+        horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
+        verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
+        event->accept();
+        return;
+    }
     if (drag_from_ == nullptr || drag_line_ == nullptr) {
         QGraphicsView::mouseMoveEvent(event);
         return;
@@ -889,7 +920,116 @@ void NodeGraphView::mouseMoveEvent(QMouseEvent* event) {
     event->accept();
 }
 
+void NodeGraphView::wheelEvent(QWheelEvent* event) {
+    // The wheel **zooms**, and that is a decision rather than the default: a node graph is a diagram, not a
+    // document, and a user reaching for the wheel over a diagram expects to scale it. Panning stays on the middle
+    // button, the scrollbars and the arrow keys, so nothing is lost by re-purposing the wheel.
+    const int steps = event->angleDelta().y();
+    if (steps == 0) {
+        QGraphicsView::wheelEvent(event);
+        return;
+    }
+    zoom_by(steps > 0 ? 1.1 : 1.0 / 1.1);
+    event->accept();
+}
+
+void NodeGraphView::keyPressEvent(QKeyEvent* event) {
+    switch (event->key()) {
+        case Qt::Key_Delete:
+        case Qt::Key_Backspace:
+            if (delete_selection()) {
+                event->accept();
+                return;
+            }
+            break;
+        case Qt::Key_F:
+            // The zoom-to-fit a user reaches for after scrolling away. The same call `rebuild` makes, so there is
+            // one framing rule rather than a shortcut that frames differently from the initial view.
+            frame_graph();
+            event->accept();
+            return;
+        default:
+            break;
+    }
+    QGraphicsView::keyPressEvent(event);
+}
+
+void NodeGraphView::zoom_by(qreal factor) {
+    const qreal current = transform().m11();
+    const qreal clamped = std::clamp(current * factor, kMinimumScale, kMaximumScale);
+    if (std::abs(clamped - current) < 1e-9) return;  // Already at the limit; do not jitter.
+
+    // Anchored on the **viewport centre** rather than on the cursor. Cursor-anchored zoom is right for a map and
+    // wrong for a diagram: a user has usually selected something in the middle and is about to drag it, and a zoom
+    // that slides that node out from under the cursor makes their next click land somewhere else.
+    const QPointF centre = viewport_centre_in_scene();
+    resetTransform();
+    scale(clamped, clamped);
+    centerOn(centre);
+}
+
+QPointF NodeGraphView::viewport_centre_in_scene() const {
+    return mapToScene(viewport()->rect().center());
+}
+
+void NodeGraphView::reveal(qp::graph::NodeId node) {
+    const auto it = node_items_.find(key_of(node));
+    if (it == node_items_.end()) return;
+    // A quarter-viewport of margin, so the node lands inside the view with room to see what it connects to rather
+    // than against the edge. `ensureVisible` rather than `centerOn`: centring moves the whole picture, and a
+    // canvas that jumps whenever something is added is one where a user loses their place.
+    ensureVisible(it->second->sceneBoundingRect(), std::max(24, viewport()->width() / 4),
+                  std::max(24, viewport()->height() / 4));
+}
+
+bool NodeGraphView::delete_selection() {
+    const std::optional<qp::graph::NodeId> chosen = selected_node();
+    if (!chosen.has_value()) return false;
+
+    // The session decides what removing a node means -- including the edges that touched it, which the graph
+    // layer drops with it. A canvas that also issued a `Disconnect` per edge would be duplicating a rule it does
+    // not own, and the duplication would be wrong the first time the rule changed.
+    qp::graph::RemoveNode command;
+    command.id = *chosen;
+    const qp::diag::Result<void> applied = session_.apply(command);
+    if (!applied.has_value()) {
+        Q_EMIT mutation_failed(describe(applied.error()));
+        return false;
+    }
+    return true;
+}
+
+bool NodeGraphView::disconnect_selection() {
+    const std::optional<qp::graph::NodeId> chosen = selected_node();
+    if (!chosen.has_value()) return false;
+
+    // The first **fed** input. "Remove the edge" is ambiguous when a node has several, and the choice has to be
+    // one a user can predict: the topmost input with a wire is the one they are looking at when they aim at the
+    // node, and the graph's edges come back in insertion order.
+    for (const qp::graph::Edge& edge : session_.graph().edges()) {
+        if (edge.to.node != *chosen) continue;
+
+        qp::graph::Disconnect command;
+        command.input = edge.to;
+        const qp::diag::Result<void> applied = session_.apply(command);
+        if (!applied.has_value()) {
+            Q_EMIT mutation_failed(describe(applied.error()));
+            return false;
+        }
+        return true;
+    }
+    return false;
+}
+
 void NodeGraphView::mouseReleaseEvent(QMouseEvent* event) {
+    if (event->button() == Qt::MiddleButton) {
+        // The pan ends with the button that started it. `ScrollHandDrag` cannot be used for this because it takes
+        // over the left button, which is already spoken for by selection, node dragging and drawing connections --
+        // so a hand-rolled middle-button pan is the option that does not cost a gesture.
+        setCursor(Qt::ArrowCursor);
+        event->accept();
+        return;
+    }
     if (drag_from_ == nullptr || drag_line_ == nullptr) {
         QGraphicsView::mouseReleaseEvent(event);
         return;
@@ -1044,6 +1184,16 @@ std::optional<qp::graph::NodeId> NodeGraphView::selected_node() const {
         }
     }
     return std::nullopt;
+}
+
+void NodeGraphView::select_node(qp::graph::NodeId node) {
+    const auto it = node_items_.find(key_of(node));
+    if (it == node_items_.end()) return;
+    // Through the scene's own selection model, not a flag of our own: the highlight, `selectedItems()` and the
+    // `selectionChanged` signal Qt emits all follow from it, so a test selecting a node exercises the same path a
+    // click does. A second notion of "selected" is how a panel comes to disagree with a canvas.
+    scene_->clearSelection();
+    it->second->setSelected(true);
 }
 
 }  // namespace qp::views

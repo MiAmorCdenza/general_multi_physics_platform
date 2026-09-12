@@ -1,0 +1,57 @@
+views/qt: make the canvas navigable, and record what "a view plugin" means here
+
+The user's question -- is the node UI foundation or a plugin? -- had two different answers in
+this repository and the code had only delivered one of them, so the plan tree now says which
+is which instead of leaving a table line claiming something that does not exist.
+
+**The honest answer.** The node editor is a **built-in consumer**, statically linked into
+`qp_shell`. It is not an `IView` plugin, because no `IView` interface exists anywhere in the
+repository -- `Capability::view_items` is declared, stringable and negotiated by the host, and
+it points at a promise no plugin can keep today. What plugins *do* contribute is everything
+the canvas renders: node types, ports, category colours, tooltips. That means "adding a node
+type touches no view code", which is the promise that matters. "Adding a *kind* of view" is a
+recompile, and the section states what making it a plugin would require -- an `IView`
+interface, a view registry, and a way to name a Qt widget across a boundary, which collides
+with the iron rule that `core/` may not include Qt and therefore has to live on the consumer
+side.
+
+The criterion is not static versus dynamic linking: it is **who may depend on whom**. The iron
+rule is that `core/` must not depend on `views/`, which is machine-checked by deleting
+`views/` and rebuilding. That rule does not distinguish a statically linked view from a
+dynamically loaded one.
+
+**What changed in the code, on the instruction to get the UI usable first.** The canvas was a
+picture: framed once when the graph was built, then immovable. Four things were missing and
+are now there.
+
+  - **Pan** on the middle button, because `ScrollHandDrag` takes the left button and the left
+    button already carries three gestures (rubber-band select, move a node, draw a connection).
+    A pan that costs a gesture would cost one of those.
+  - **Zoom** on the wheel, anchored on the viewport centre rather than the cursor -- cursor
+    anchoring is right for a map and wrong for a diagram, where a user has usually selected
+    something in the middle and is about to drag it. Clamped at both ends by the **same**
+    `kMinimumScale` `frame_graph` respects, so no interactive gesture can undo the type size,
+    and at `kMaximumScale` so one node cannot fill the window.
+  - **Delete** removes the selected node, and the View menu has a matching entry because a
+    shortcut nobody can find is a feature that does not exist for most users. It issues
+    `RemoveNode` and nothing else: the graph layer already drops the edges that touched the
+    node, and a canvas that also sent a `Disconnect` per edge would be duplicating a rule it
+    does not own.
+  - **Remove connection** for the edge feeding the selected node's first connected input --
+    the counterpart to drawing one, since an input holds at most one edge and a mis-drawn wire
+    could previously only be undone from the Edit menu.
+  - **`Fit graph`** (Ctrl+0) and `F` in the canvas reach the same `frame_graph` the initial
+    framing uses, so there is one framing rule rather than a menu item that frames differently.
+
+Two cases hold it, and the pan/zoom one asserts the anchor rather than just the scale:
+
+  qt.views.nodegraph.the_canvas_can_be_panned_and_zoomed
+  qt.views.nodegraph.delete_removes_the_node_and_its_edges
+
+Writing them corrected two of my own assumptions: four nodes do not fit a 480x370 viewport, so
+framing lands on the floor (which is the property worth asserting, not "scale == 1.0"), and Qt
+scrolls in whole device pixels, so a centre anchor rounds by a little over one scene unit at
+0.9 scale -- asserting equality would be asserting that a scrollbar can be positioned
+fractionally.
+
+GCC 662/662, MSVC 664/664; all four contract partitions and the static gates green.

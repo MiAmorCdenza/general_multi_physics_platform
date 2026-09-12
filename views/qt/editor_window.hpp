@@ -240,6 +240,8 @@ private:
     void refresh_panels();
     /// @brief Builds the File menu's actions and shortcuts.
     void build_file_menu();
+    /// @brief Builds the View menu: framing, zoom and the two removals the canvas has gestures for.
+    void build_view_menu();
 
     qp::authoring::Session session_{};
     // The composition root this window reads its content from. Borrowed, and the only source of node types: the
@@ -282,6 +284,13 @@ private:
     QAction* save_action_ = nullptr;
     QAction* save_as_action_ = nullptr;
     QAction* export_action_ = nullptr;
+
+    // The View menu's actions, kept for the same reason: a test drives the same path the menu does.
+    QAction* fit_action_ = nullptr;
+    QAction* zoom_in_action_ = nullptr;
+    QAction* zoom_out_action_ = nullptr;
+    QAction* delete_action_ = nullptr;
+    QAction* unlink_action_ = nullptr;
 
     /// @brief Whether the run's clamp count has been pushed into the confidence model yet.
     ///

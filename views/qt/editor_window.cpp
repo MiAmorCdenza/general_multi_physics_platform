@@ -190,6 +190,7 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
     connect(run_action_, &QAction::triggered, this, &EditorWindow::run_once);
 
     build_file_menu();
+    build_view_menu();
 
     status_ = new QLabel(this);
     statusBar()->addWidget(status_);
@@ -249,6 +250,50 @@ void EditorWindow::build_file_menu() {
     save_action_->setEnabled(has_format);
     save_as_action_->setEnabled(has_format);
     export_action_->setEnabled(!qp::views::model::export_formats().all().empty());
+}
+
+void EditorWindow::build_view_menu() {
+    // A View menu rather than more toolbar buttons, and the split is the same one the File menu makes: the toolbar
+    // is about the **experiment** (run it, watch it), while framing and zooming are about the picture. A toolbar
+    // that grew a zoom control would be a list again.
+    //
+    // Every entry here is a call the canvas already exposes. A menu item that reimplemented zooming would be a
+    // second rule for how far the view may shrink, and the legibility floor is worth having exactly one of.
+    QMenu* view = menuBar()->addMenu(tr("&View"));
+
+    fit_action_ = view->addAction(tr("&Fit graph"));
+    fit_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+0")));
+    fit_action_->setToolTip(tr("Frame the whole graph, at no less than the legibility floor"));
+    connect(fit_action_, &QAction::triggered, this, [this] { canvas_->frame_graph(); });
+
+    zoom_in_action_ = view->addAction(tr("Zoom &in"));
+    zoom_in_action_->setShortcut(QKeySequence::ZoomIn);
+    connect(zoom_in_action_, &QAction::triggered, this, [this] { canvas_->zoom_by(1.25); });
+
+    zoom_out_action_ = view->addAction(tr("Zoom &out"));
+    zoom_out_action_->setShortcut(QKeySequence::ZoomOut);
+    connect(zoom_out_action_, &QAction::triggered, this, [this] { canvas_->zoom_by(1.0 / 1.25); });
+
+    view->addSeparator();
+    // The two removals the canvas had no gesture for. Both go through the session like every other edit, so both
+    // are undoable -- and these menu entries exist as well as the Delete key because a shortcut nobody can find is
+    // a feature that does not exist for most users.
+    delete_action_ = view->addAction(tr("&Delete node"));
+    delete_action_->setShortcut(QKeySequence::Delete);
+    connect(delete_action_, &QAction::triggered, this, [this] {
+        if (!canvas_->delete_selection()) {
+            status_->setText(tr("Select a node first"));
+        }
+    });
+
+    unlink_action_ = view->addAction(tr("Remove &connection"));
+    unlink_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+D")));
+    unlink_action_->setToolTip(tr("Removes the edge feeding the selected node's first connected input"));
+    connect(unlink_action_, &QAction::triggered, this, [this] {
+        if (!canvas_->disconnect_selection()) {
+            status_->setText(tr("Nothing to unlink on the selected node"));
+        }
+    });
 }
 
 void EditorWindow::report_document(const qp::views::model::DocumentReport& report) {

@@ -729,6 +729,96 @@ TEST_CASE("qt.views.nodegraph.a_dragged_connection_joins_two_ports", "[views][qt
     REQUIRE_FALSE(reported.isEmpty());
 }
 
+TEST_CASE("qt.views.nodegraph.the_canvas_can_be_panned_and_zoomed", "[views][qt]") {
+    // The canvas used to be a picture: it was framed once when the graph was built and then could not be moved.
+    // A graph wider than the viewport was reachable only by scrolling with the scrollbars, and there was no way to
+    // zoom in on a node to read it. `frame_graph` was reachable from exactly one place -- `rebuild` -- so the
+    // "zoom to fit" a user reaches for after scrolling away did not exist either.
+    qp::authoring::Session session;
+    qp::authoring::Document document;
+    qp::graph::NodeTypeRegistry catalog;
+    REQUIRE(qp::views::register_demo_library(catalog).has_value());
+
+    qp::views::NodeGraphView canvas{session, catalog, document};
+    canvas.resize(500, 400);
+    canvas.viewport()->resize(480, 370);
+    for (const char* type : {"demo.signal", "demo.spring_damper", "demo.instrument", "demo.export"}) {
+        REQUIRE(add_node(session, type).valid());
+    }
+    canvas.frame_graph();
+    // Four nodes do not fit a 480x370 viewport, so framing lands on the floor -- which is itself the property
+    // worth asserting here: framing may not shrink past the legibility floor.
+    REQUIRE(canvas.scale_factor() >= qp::views::NodeGraphView::kMinimumScale);
+    const qreal framed = canvas.scale_factor();
+
+    // Zoom in, and the anchor is the viewport centre: the scene point in the middle stays in the middle, because a
+    // zoom that slides the thing under the cursor out from under it makes the next click land elsewhere.
+    const QPointF centre_before = canvas.viewport_centre_in_scene();
+    canvas.zoom_by(1.1);
+    REQUIRE(canvas.scale_factor() > framed);
+    const QPointF centre_after = canvas.viewport_centre_in_scene();
+    // Within a few **scene** units, not exactly equal: Qt scrolls in whole device pixels, so anchoring on a scene
+    // point rounds, and at a scale near 0.9 one device pixel is a little over one scene unit. Asserting equality
+    // here would be asserting that a scrollbar can be positioned fractionally, which it cannot.
+    REQUIRE(std::abs(centre_after.x() - centre_before.x()) < 3.0);
+    REQUIRE(std::abs(centre_after.y() - centre_before.y()) < 3.0);
+
+    // And it is clamped, in **both** directions. The lower bound is the same legibility floor `frame_graph`
+    // respects -- no interactive gesture may undo the type size -- and the upper bound stops one node filling the
+    // window with a title the user then has to scroll to read.
+    for (int i = 0; i < 40; ++i) canvas.zoom_by(1.5);
+    REQUIRE(canvas.scale_factor() <= qp::views::NodeGraphView::kMaximumScale);
+    for (int i = 0; i < 40; ++i) canvas.zoom_by(1.0 / 1.5);
+    REQUIRE(canvas.scale_factor() >= qp::views::NodeGraphView::kMinimumScale);
+    REQUIRE(canvas.scale_factor() == qp::views::NodeGraphView::kMinimumScale);
+}
+
+TEST_CASE("qt.views.nodegraph.delete_removes_the_node_and_its_edges", "[views][qt]") {
+    // Two removals the canvas had no gesture for. The commands existed in the bus -- `RemoveNode` and `Disconnect`
+    // -- so the graph could be edited by a test helper and by nothing else, which is the same gap drawing a
+    // connection had.
+    qp::authoring::Session session;
+    qp::authoring::Document document;
+    qp::graph::NodeTypeRegistry catalog;
+    REQUIRE(qp::views::register_demo_library(catalog).has_value());
+
+    qp::views::NodeGraphView canvas{session, catalog, document};
+    const qp::graph::NodeId source = add_node(session, "demo.signal");
+    const qp::graph::NodeId model = add_node(session, "demo.spring_damper");
+    REQUIRE(canvas.connect_ports(source, 1, model, 1));
+    REQUIRE(session.graph().edge_count() == 1);
+
+    // Nothing selected: nothing happens, and the caller is told rather than left guessing.
+    REQUIRE_FALSE(canvas.delete_selection());
+    REQUIRE_FALSE(canvas.disconnect_selection());
+    REQUIRE(session.graph().node_count() == 2);
+
+    // Removing the **edge**: the input is freed, and the two nodes stay.
+    canvas.select_node(model);
+    REQUIRE(canvas.disconnect_selection());
+    REQUIRE(session.graph().edge_count() == 0);
+    REQUIRE(session.graph().node_count() == 2);
+    // Idempotent in the sense that matters: a second attempt reports that there was nothing to remove, rather than
+    // reporting success for an edit it did not make.
+    REQUIRE_FALSE(canvas.disconnect_selection());
+
+    // Removing the **node**: the session's `RemoveNode` drops the edges that touched it, which is why the canvas
+    // does not issue a `Disconnect` first -- duplicating that rule would be wrong the first time it changed.
+    REQUIRE(canvas.connect_ports(source, 1, model, 1));
+    canvas.select_node(source);
+    REQUIRE(canvas.delete_selection());
+    REQUIRE(session.graph().node_count() == 1);
+    REQUIRE(session.graph().edge_count() == 0);
+    REQUIRE(canvas.node_item_count() == 1);
+    REQUIRE(canvas.edge_item_count() == 0);
+    REQUIRE(canvas.items_match_graph());
+
+    // Both are ordinary undoable edits, so a user who deletes the wrong node gets it back from the Edit menu.
+    REQUIRE(session.undo().has_value());
+    REQUIRE(session.graph().node_count() == 2);
+    REQUIRE(session.graph().edge_count() == 1);
+}
+
 TEST_CASE("qt.views.canvas.whole_graph_is_visible", "[views][qt]") {
     // The assertion that would have caught the framing defect directly.
     //

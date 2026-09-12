@@ -230,6 +230,119 @@ public:
     [[nodiscard]] std::optional<qp::graph::NodeId> selected_node() const;
 
     /**
+     * @brief Selects `node` as if the user had clicked it, and reports it.
+     *
+     * The selection a delete or a disconnect acts on. Exposed so a test can reach those two operations without
+     * synthesising a click: what is worth asserting is the command and the resulting items, not Qt's event
+     * delivery -- the same reasoning as `connect_ports`.
+     *
+     * @param node The node to select.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         none
+     * @post        `selected_node()` returns `node` when it exists in the graph, and the item is highlighted
+     * @invariant   `node_selected` is emitted, so a property panel follows exactly as it does for a click
+     * @errors      Reports nothing: it either finds the item and selects it, or does nothing. Qt's
+     *              `setSelected` is what may raise a signal, and a signal is not a failure
+     * @complexity  O(nodes)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.nodegraph.delete_removes_the_node_and_its_edges
+     */
+    void select_node(qp::graph::NodeId node);
+
+    /**
+     * @brief Removes the node the user has selected, with every edge that touched it.
+     *
+     * The gesture-side counterpart of the command, exposed for the same reason `connect_ports` is: what is worth
+     * asserting is the command and the resulting items, not Qt's event delivery.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         none
+     * @post        With a node selected, the session holds one fewer node and its edges are gone; without a
+     *              selection nothing happens and this returns false
+     * @invariant   The edit goes through the session, so it is undoable and every panel is told
+     * @errors      A refusal emits `mutation_failed` and returns false
+     * @complexity  O(nodes + edges) through the session's notification
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.nodegraph.delete_removes_the_node_and_its_edges
+     */
+    [[nodiscard]] bool delete_selection();
+
+    /**
+     * @brief Removes the edge feeding the selected node's first fed input.
+     *
+     * The counterpart to drawing a connection, and it exists because an input holds at most one edge: without a
+     * way to remove one, a mis-drawn wire can only be undone from the Edit menu -- which means the user has to
+     * know that the connection they just drew is an undoable edit.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         none
+     * @post        With a node whose input is fed, that edge is gone; otherwise nothing happens
+     * @invariant   The edit goes through the session
+     * @errors      A refusal emits `mutation_failed` and returns false
+     * @complexity  O(edges)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.nodegraph.delete_removes_the_node_and_its_edges
+     */
+    [[nodiscard]] bool disconnect_selection();
+
+    /**
+     * @brief Scales the view by `factor`, keeping the viewport's centre fixed.
+     *
+     * Bounded by `kMinimumScale` and `kMaximumScale`. The lower bound is the **same** legibility floor
+     * `frame_graph` respects, so no interactive gesture can undo the type size either -- which is the whole point
+     * of having a floor rather than a preference.
+     *
+     * @param factor The multiplier. `> 1` zooms in.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         `factor > 0`
+     * @post        The scale is in `[kMinimumScale, kMaximumScale]` and the same scene point is still centred
+     * @invariant   Never magnifies past `kMaximumScale` nor shrinks below `kMinimumScale`
+     * @errors      May allocate through Qt's scrollbar geometry in `centerOn`; the clamps mean a call at
+     *              either limit is a no-op
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.nodegraph.the_canvas_can_be_panned_and_zoomed
+     */
+    void zoom_by(qreal factor);
+
+    /// @brief The largest scale the interactive zoom reaches. Past this one node fills the window.
+    static constexpr qreal kMaximumScale = 2.5;
+
+    /// @brief The scene point at the centre of the viewport, and half of what `zoom_by` anchors on.
+    [[nodiscard]] QPointF viewport_centre_in_scene() const;
+
+    /**
+     * @brief Brings `node` into view **without** changing the zoom.
+     *
+     * `ensureVisible` with a margin rather than `centerOn`: centring on a node the user just created moves the
+     * whole picture, and a canvas that jumps whenever something is added is one where a user loses their place.
+     *
+     * @param node The node to reveal.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         none
+     * @post        The node's box is inside the viewport, or the view is already at its scroll limit
+     * @invariant   The scale is unchanged
+     * @errors      May allocate through Qt's scrollbar geometry in `ensureVisible`
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.nodegraph.the_canvas_can_be_panned_and_zoomed
+     */
+    void reveal(qp::graph::NodeId node);
+
+    /**
      * @brief The current zoom factor: 1.0 is a node drawn at its authored size.
      *
      * Exposed because "how large is the text" is otherwise only answerable by looking, and charter C5 asks for
@@ -364,6 +477,12 @@ protected:
     /// @brief Finishes the gesture: connects, or abandons if the release is not on a port.
     void mouseReleaseEvent(QMouseEvent* event) override;
 
+    /// @brief Zooms towards the viewport centre, bounded by the legibility floor.
+    void wheelEvent(QWheelEvent* event) override;
+
+    /// @brief Delete removes the selected node; F frames the graph.
+    void keyPressEvent(QKeyEvent* event) override;
+
     /**
      * @brief How far from a stub a press still counts, in **device** pixels.
      *
@@ -394,6 +513,8 @@ private:
     std::unordered_map<std::uint64_t, NodeItem*> node_items_;
     /// Every edge item, so a node drag can refresh the ones that touch it. Borrowed: the scene owns them.
     std::vector<EdgeItem*> edge_items_;
+    /// The last cursor position of a middle-button pan, in device pixels.
+    QPoint last_pan_pos_{};
     /// The connection being drawn by hand, if any. See `mousePressEvent`.
     NodeItem* drag_from_ = nullptr;
     qp::graph::PortIndex drag_from_port_ = qp::graph::kNoPort;
