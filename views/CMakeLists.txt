@@ -170,4 +170,17 @@ if(QP_BUILD_PLUGINS)
     # beside it -- so this definition and `QP_HAS_FORMAT_PLUGINS` are both required at the call site.
     target_compile_definitions(qp_shell PRIVATE QP_HAS_EXPERIMENT_PLUGIN)
     target_link_libraries(qp_shell PRIVATE qp::plugins::experiments)
+
+    # The magnetosphere kit: a field model, an emitter and a pusher, three node types the palette can show and a
+    # graph can be drawn from. Linked here for the same reason as the instruments -- the types must be in the
+    # catalog whether or not anything was loaded from disk, or the kit is reachable only from a test fixture.
+    #
+    # **What this does not yet do is run them.** `views/model`'s run controller drives `IStateOperator`s over its
+    # own `StateView`, and this kit's particles live in a `ParticleState` that a `MagnetosphereRun` builds from
+    # the graph's emitter. That second run path belongs to the view layer and the framework, not to a kit, and it
+    # is not written: pressing Run on a magnetosphere graph says so (see `run_controller.cpp`). Mounting the
+    # types without that path is deliberate -- a palette entry that can be placed, wired and saved is a real
+    # capability, and it is honest about the one it does not have.
+    target_compile_definitions(qp_shell PRIVATE QP_HAS_MAGNETOSPHERE_PLUGIN)
+    target_link_libraries(qp_shell PRIVATE qp::plugins::magnetosphere)
 endif()

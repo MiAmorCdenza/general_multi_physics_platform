@@ -541,7 +541,8 @@ struct RunReadiness final {
  * @frozen      no
  * @tests       execution.check_run.answers_before_anything_steps,
  *              execution.check_run.reports_validation_without_refusing,
- *              execution.check_run.asks_each_binder_with_the_layout_it_will_use
+ *              execution.check_run.asks_each_binder_with_the_layout_it_will_use,
+ *              execution.check_run.names_a_node_of_another_domain
  */
 [[nodiscard]] RunReadiness check_run(const qp::graph::Graph& graph,
                                      const ResolveContext& ctx,

@@ -196,6 +196,33 @@ RunReadiness check_run(const qp::graph::Graph& graph, const ResolveContext& ctx,
 
     if (candidate == nullptr) {
         out.refusal = RunRefusal::no_operator;
+        // **A node of another domain is worth naming.** "No node in this graph has an operator yet" is true, and
+        // about a graph holding a particle kit's nodes it is also unhelpful: those types *are* registered, the
+        // wires *are* drawn, and the reason nothing runs is that the nodes belong to a domain whose state is a
+        // particle batch driven by its own loop rather than by this one's `StateView`. The sentence says which
+        // node and which domain, so the reader's next question is "what drives that" rather than "which plugin
+        // is missing" -- the same distinction `IOperatorBinder::can_bind`'s own documentation was written for.
+        //
+        // The two domains are named separately because what they need is different: a field node has to be
+        // **baked** before anything can run, and a particle node has to be **launched** first. A single "another
+        // domain" message would leave the reader to guess which.
+        for (const qp::graph::NodeSlot& slot : graph.slots()) {
+            if (!slot.occupied) continue;
+            const qp::graph::NodeDesc* desc =
+                ctx.catalog == nullptr ? nullptr : ctx.catalog->find(slot.node.type_name);
+            if (desc == nullptr || !desc->has_compute) continue;
+            if (desc->allow_in_particle_domain && !desc->allow_in_field_domain) {
+                out.detail = "nothing to run: '" + slot.node.type_name +
+                             "' belongs to the particle domain, whose state is a particle batch rather than "
+                             "this loop's state";
+                return out;
+            }
+            if (desc->allow_in_field_domain && !desc->allow_in_particle_domain) {
+                out.detail = "nothing to run: '" + slot.node.type_name +
+                             "' belongs to the field domain, which is baked rather than run";
+                return out;
+            }
+        }
         out.detail = "nothing to run: no node in this graph has an operator yet";
         return out;
     }

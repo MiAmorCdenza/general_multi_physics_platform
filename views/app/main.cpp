@@ -61,6 +61,12 @@
 #include <qp/plugins/experiments/experiments.hpp>
 #endif
 
+#if defined(QP_HAS_MAGNETOSPHERE_PLUGIN)
+#include <qp/plugins/magnetosphere/emitter.hpp>
+#include <qp/plugins/magnetosphere/field_nodes.hpp>
+#include <qp/plugins/magnetosphere/plan.hpp>
+#endif
+
 #include <QApplication>
 #include <QDebug>
 #include <QtGlobal>
@@ -194,6 +200,28 @@ int main(int argc, char** argv) {
     if (mounted_devices != qp::plugins::instruments::builtin_count()) {
         qWarning().noquote() << "instruments: mounted" << mounted_devices << "of"
                              << qp::plugins::instruments::builtin_count();
+    }
+#endif
+
+    // The magnetosphere kit's node types: the field model, the emitter and the pusher.
+    //
+    // **Mounted even though the Run action cannot drive them yet**, and the alternative was worse: a kit whose
+    // types are registered only by a test fixture is a kit no user can reach, which is the failure
+    // `docs/plan-tree.md` section 9.9 calls out by name -- "a capability only a test fixture can reach looks
+    // green in every check". What a user *can* do with them today is real: place a dipole, wire a ring emitter
+    // and a Boris push to it, set the pitch angle and the L shell, and save the document. What they cannot do is
+    // press Run, because the particle domain is driven by `MagnetosphereRun` -- a run path the view layer does
+    // not have -- and the Run action says exactly that rather than starting something else.
+    //
+    // The count is reported rather than asserted, for the reason the instruments' is: a name clash is one
+    // palette entry missing, not a build that cannot open a window.
+#if defined(QP_HAS_MAGNETOSPHERE_PLUGIN)
+    const std::size_t mounted_field_types = qp::plugins::magnetosphere::FieldNodes::mount(content_host);
+    const std::size_t mounted_pushers = qp::plugins::magnetosphere::PusherNodes::mount(content_host);
+    const std::size_t mounted_emitters = qp::plugins::magnetosphere::EmitterNodes::mount(content_host);
+    if (mounted_field_types + mounted_pushers + mounted_emitters != 3) {
+        qWarning().noquote() << "magnetosphere: mounted" << mounted_field_types + mounted_pushers + mounted_emitters
+                             << "of 3 node types";
     }
 #endif
 

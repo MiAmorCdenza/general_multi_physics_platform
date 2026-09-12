@@ -983,3 +983,79 @@ TEST_CASE("execution.model.interleaved_instances_do_not_disturb_each_other", "[e
     // tolerance check, and the property is about isolation rather than about accuracy.
     REQUIRE(interleaved.values == alone.values);
 }
+
+
+namespace {
+
+/// @brief A catalog holding one descriptor of a caller's choosing, for the domain-message case.
+///
+/// A local fixture rather than a new one in the shared scene, because the case is about what the *message* says
+/// about a node of another domain and the scene's catalog has no domains to speak of.
+class OneDescCatalog final : public qp::graph::INodeCatalog {
+public:
+    explicit OneDescCatalog(qp::graph::NodeDesc desc) : desc_(std::move(desc)) {}
+
+    [[nodiscard]] const qp::graph::NodeDesc* find(std::string_view name) const noexcept override {
+        return name == desc_.type_name ? &desc_ : nullptr;
+    }
+    [[nodiscard]] std::size_t size() const noexcept override { return 1; }
+
+private:
+    qp::graph::NodeDesc desc_;
+};
+
+}  // namespace
+
+TEST_CASE("execution.check_run.names_a_node_of_another_domain", "[execution]") {
+    // **"No node has an operator" is true and unhelpful.** A graph holding a particle kit's nodes has registered
+    // types, drawn wires, and a reason nothing runs that has nothing to do with a missing plugin: those nodes
+    // belong to a domain whose state is a particle batch, driven by its own loop rather than by this one's
+    // `StateView`. The sentence names the node and the domain, so the reader's next question is "what drives
+    // that" rather than "which plugin is missing" -- and the two domains are named separately because a field
+    // node has to be baked and a particle node has to be launched first, which are different next steps.
+    NoTypeBinder refuses;
+
+    qp::graph::NodeDesc pusher;
+    pusher.type_name = "kit.pusher";
+    pusher.has_compute = true;
+    pusher.allow_in_field_domain = false;
+    pusher.allow_in_particle_domain = true;
+    OneDescCatalog particle_catalog{pusher};
+    qp::graph::Graph particle_graph;
+    REQUIRE(particle_graph.add_node("kit.pusher").has_value());
+    const ResolveContext particle_ctx{&particle_catalog, &qp::ports::builtin_registry()};
+
+    const RunReadiness particle = check_run(particle_graph, particle_ctx, {&refuses},
+                                            execution::StateView::zeroed(1));
+    REQUIRE_FALSE(particle.ok());
+    REQUIRE(particle.refusal == RunRefusal::no_operator);
+    REQUIRE(particle.detail.find("kit.pusher") != std::string::npos);
+    REQUIRE(particle.detail.find("particle domain") != std::string::npos);
+
+    qp::graph::NodeDesc field = pusher;
+    field.type_name = "kit.field";
+    field.allow_in_field_domain = true;
+    field.allow_in_particle_domain = false;
+    OneDescCatalog field_catalog{field};
+    qp::graph::Graph field_graph;
+    REQUIRE(field_graph.add_node("kit.field").has_value());
+    const ResolveContext field_ctx{&field_catalog, &qp::ports::builtin_registry()};
+
+    const RunReadiness baked = check_run(field_graph, field_ctx, {&refuses}, execution::StateView::zeroed(1));
+    REQUIRE(baked.refusal == RunRefusal::no_operator);
+    REQUIRE(baked.detail.find("field domain") != std::string::npos);
+
+    // A description that is **not** computed keeps the general sentence: a node with no implementation is a
+    // different problem (an unfinished palette entry, or a declaration-only render node), and naming a domain
+    // for it would send the reader looking for a loop that was never the issue.
+    qp::graph::NodeDesc inert = pusher;
+    inert.type_name = "kit.inert";
+    inert.has_compute = false;
+    OneDescCatalog inert_catalog{inert};
+    qp::graph::Graph inert_graph;
+    REQUIRE(inert_graph.add_node("kit.inert").has_value());
+    const ResolveContext inert_ctx{&inert_catalog, &qp::ports::builtin_registry()};
+    const RunReadiness nothing = check_run(inert_graph, inert_ctx, {&refuses}, execution::StateView::zeroed(1));
+    REQUIRE(nothing.refusal == RunRefusal::no_operator);
+    REQUIRE(nothing.detail.find("no node") != std::string::npos);
+}
