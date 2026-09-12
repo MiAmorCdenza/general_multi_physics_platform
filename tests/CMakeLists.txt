@@ -445,6 +445,16 @@ if(QP_BUILD_PLUGINS)
     qp_add_test(qp_test_plugins_value_text
         SOURCES unit/plugins/test_value_text.cpp
         LIBS qp::plugins::value_text qp::authoring_persist qp::ports qp::units)
+
+    # The experiment bundle, and the evidence that a second format consumer did **not** need a second copy of the
+    # graph marshalling: the cases load a hand-written teacher file through `QpJsonFormat`, and one of them is
+    # about that format's own refusal coming back through this one. It links the models because the last case runs
+    # the loaded graph rather than only parsing it, which is the claim "adding an experiment does not mean
+    # recompiling" as a measurement rather than as a sentence.
+    qp_add_test(qp_test_plugins_experiments
+        SOURCES unit/plugins/test_experiments.cpp
+        LIBS qp::plugins::experiments qp::plugins::qpjson qp::plugins::models qp::authoring_persist
+             qp::graph_ir qp::graph_structure qp::graph_execution qp::units)
 endif()
 
 # The run loop. Qt-free and graph-only: every case drives a stub operator, so it belongs to the loop's

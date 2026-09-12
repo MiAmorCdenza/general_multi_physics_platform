@@ -50,4 +50,10 @@ if(QP_BUILD_PLUGINS)
     # other three: an example is a model, driven by the loop, with a reading taken by an instrument and a fit
     # run over the results. See its CMakeLists for why examples are code rather than saved documents.
     add_subdirectory(examples)
+
+    # A teacher's experiment file: the graph, its name, and the inputs a student may turn. It is **content**
+    # rather than a format directory because the meaning it adds is not syntax -- see its CMakeLists. It is also
+    # the second document format consumer, and it composes with the first rather than copying it, which is what
+    # section 9.9 of the plan tree said could not be done without extracting the marshalling first.
+    add_subdirectory(experiments)
 endif()
