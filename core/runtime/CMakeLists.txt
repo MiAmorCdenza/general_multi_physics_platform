@@ -5,6 +5,7 @@
 #   4.3 trace/  timeline, snapshots, reading series
 #   4.4 io/     format adapters (the formats themselves are plugins)
 #   4.5 file/   whole-file I/O and the one UTF-8 path conversion
+#   4.6 instrument/  the contract a measuring device answers (C6)
 #
 # The plan tree calls this layer out explicitly: the old abstraction had "a graph
 # + a version number + slots" and no concept of "one experiment run". Without it
@@ -14,4 +15,5 @@ add_subdirectory(run)
 add_subdirectory(store)
 add_subdirectory(trace)
 add_subdirectory(file)
+add_subdirectory(instrument)
 add_subdirectory(io)

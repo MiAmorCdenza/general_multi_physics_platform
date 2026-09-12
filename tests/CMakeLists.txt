@@ -584,6 +584,12 @@ qp_add_test(qp_test_runtime_io
 qp_add_test(qp_test_runtime_file
     SOURCES unit/runtime/test_file.cpp
     LIBS qp::runtime_file)
+# Instruments are a framework contract (charter C6), so their cases are foundation: the stub devices here are
+# deliberately awkward -- fixed precision, noisy, broken -- because what the framework owes is that a plugin
+# cannot be written in a way that breaks R1, promise 3, or repeatability.
+qp_add_test(qp_test_runtime_instrument
+    SOURCES unit/runtime/test_instrument.cpp
+    LIBS qp::runtime_instrument qp::runtime_store qp::plugin qp::units)
 
 # The Qt-FREE half of the view layer. It is listed here, in the ordinary suite,
 # precisely because it does not need Qt: that is what lets the properties panel's

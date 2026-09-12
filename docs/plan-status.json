@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "C4 的 schema 域补齐：插件返回值按**它自己的声明**校验（未声明端口/重复端口/类型不符 ⇒ plugin_fault），不再进入内容寻址缓存；双编译器 631-632 全绿",
+  "updated": "章程 C6 补齐：新增 L2 模块 core/runtime/instrument（IInstrument + 注册表 + 分辨率→不确定度模型），仪器只产出带不确定度的读数、误差模型随精度变化、同种子可重复，三条都由测试钉住；双编译器 640-641 全绿",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -13,7 +13,7 @@
     "contract_completeness": {
       "tool": "scripts/check_contracts.py",
       "state": "passing",
-      "detail": "**四个分区**，用例集合互不相交：`gate.contracts`（core，351 契约）、`gate.contracts.views`（views/model，57 契约）、`gate.contracts.views_qt`（views/qt + views/include，17 契约）、`gate.contracts.plugins`（plugins，41 契约）。views_qt 是本阶段新增的：测量面板的 `@tests` 落在 Qt 头文件里，而那道分区此前无人认领，一个新用例被改名或删掉时全套门禁仍然全绿。为此 `--headers` 改为可重复——视图层的头文件分布在 views/qt 与 views/include 两处，只给一个目录的调用看不见另一个目录里声明的契约，于是把那边认领的用例报成孤儿（`qt.views.shell.links_core_state` 就真的这样被误报过）。拼写不对称也一并修掉：`--only` 原先只比对相对路径而 `--exclude` 还比对绝对路径，于是 `--only tests/model` 静默匹配 0 个用例并报出 12 处无关孤儿。 **本阶段新增一条规则：契约的 @tests 必须落在能看见该头文件的那一次调用里。** persist 的接口在 `core/`（第一分区），而唯一实现它的格式是插件（第四分区）——如果把往返用例全写在 `tests/unit/plugins/` 下，第一分区会报 core 头文件引用了不存在的用例，第四分区则完全看不到那些头文件。修法不是放宽门禁，而是让**每个头文件只认领同一分区里真实存在的用例**：接口自己的保证由 `tests/unit/authoring/test_persist.cpp` 用一个桩格式断言（`persist.refusal.*`、`persist.format.*`、`persist.snapshot.*`），具体格式的往返与拒绝由 `tests/unit/plugins/test_qpjson_format.cpp` 断言（`persist.qpjson.*`），两边的契约各写在各自模块的头文件里。同一课在上一项（Run 控制器用例放错分区）已经付过一次学费，这一项是把它变成规则写下来。 本阶段计数：core 345（含新模块 `persist`/`file` 与 `Session::replace_graph`）、views/model 56（两个新控制器）、views_qt 17、plugins 41。另记一条门禁的**读法**：契约门禁只读块注释，`///` 行被当作普通注释——用 `///` 写成的契约（带全套标签与 `@tests`）对门禁不可见，它认领的用例反而被报成孤儿。CSV 导出器第一次提交时正是这样被抓住的，修法是把那两个契约改成块注释。这不是门禁的漏洞，是写法越出了它读的范围。"
+      "detail": "**四个分区**，用例集合互不相交：`gate.contracts`（core，365 契约）、`gate.contracts.views`（views/model，57 契约）、`gate.contracts.views_qt`（views/qt + views/include，17 契约）、`gate.contracts.plugins`（plugins，41 契约）。views_qt 是本阶段新增的：测量面板的 `@tests` 落在 Qt 头文件里，而那道分区此前无人认领，一个新用例被改名或删掉时全套门禁仍然全绿。为此 `--headers` 改为可重复——视图层的头文件分布在 views/qt 与 views/include 两处，只给一个目录的调用看不见另一个目录里声明的契约，于是把那边认领的用例报成孤儿（`qt.views.shell.links_core_state` 就真的这样被误报过）。拼写不对称也一并修掉：`--only` 原先只比对相对路径而 `--exclude` 还比对绝对路径，于是 `--only tests/model` 静默匹配 0 个用例并报出 12 处无关孤儿。 **本阶段新增一条规则：契约的 @tests 必须落在能看见该头文件的那一次调用里。** persist 的接口在 `core/`（第一分区），而唯一实现它的格式是插件（第四分区）——如果把往返用例全写在 `tests/unit/plugins/` 下，第一分区会报 core 头文件引用了不存在的用例，第四分区则完全看不到那些头文件。修法不是放宽门禁，而是让**每个头文件只认领同一分区里真实存在的用例**：接口自己的保证由 `tests/unit/authoring/test_persist.cpp` 用一个桩格式断言（`persist.refusal.*`、`persist.format.*`、`persist.snapshot.*`），具体格式的往返与拒绝由 `tests/unit/plugins/test_qpjson_format.cpp` 断言（`persist.qpjson.*`），两边的契约各写在各自模块的头文件里。同一课在上一项（Run 控制器用例放错分区）已经付过一次学费，这一项是把它变成规则写下来。 本阶段计数：core 345（含新模块 `persist`/`file` 与 `Session::replace_graph`）、views/model 56（两个新控制器）、views_qt 17、plugins 41。另记一条门禁的**读法**：契约门禁只读块注释，`///` 行被当作普通注释——用 `///` 写成的契约（带全套标签与 `@tests`）对门禁不可见，它认领的用例反而被报成孤儿。CSV 导出器第一次提交时正是这样被抓住的，修法是把那两个契约改成块注释。这不是门禁的漏洞，是写法越出了它读的范围。"
     },
     "gate_self_test": {
       "tool": "tests/meta/check_contract_checker.py",
@@ -42,7 +42,7 @@
     },
     "compiler_matrix": {
       "state": "passing",
-      "detail": "GCC 15.2.0 (MinGW i686) 631/631 与 MSVC 19.51 (x64) 632/632（MSVC 多一项是 Qt 视图层测试：Qt 只有 MSVC x64 套件）；见 ADR-0004。**视图层与插件内容都在矩阵里**：QP_BUILD_VIEWS 与 QP_BUILD_PLUGINS 默认 OFF，而 build.ps1 从不传它们，于是『双编译器全绿』指的只是 core/——views/qt/（画布、属性面板、编辑器窗口）不被任何门禁、任何矩阵条目、任何测试运行编译，它可以停止编译而整个仓库的每个信号都保持绿色。这是最坏的一种缺口，因为界面正是用户唯一碰得到的部分，而它此前只靠「有人记得手工配置一次」来验证。现在两档都显式打开。这一档立刻赚回了成本：GCC 因为 libstdc++ 的传递包含而接受了 test_loader.cpp 缺少 <algorithm>，MSVC 以 C2039 拒绝。"
+      "detail": "GCC 15.2.0 (MinGW i686) 640/640 与 MSVC 19.51 (x64) 641/641（MSVC 多一项是 Qt 视图层测试：Qt 只有 MSVC x64 套件）；见 ADR-0004。**视图层与插件内容都在矩阵里**：QP_BUILD_VIEWS 与 QP_BUILD_PLUGINS 默认 OFF，而 build.ps1 从不传它们，于是『双编译器全绿』指的只是 core/——views/qt/（画布、属性面板、编辑器窗口）不被任何门禁、任何矩阵条目、任何测试运行编译，它可以停止编译而整个仓库的每个信号都保持绿色。这是最坏的一种缺口，因为界面正是用户唯一碰得到的部分，而它此前只靠「有人记得手工配置一次」来验证。现在两档都显式打开。这一档立刻赚回了成本：GCC 因为 libstdc++ 的传递包含而接受了 test_loader.cpp 缺少 <algorithm>，MSVC 以 C2039 拒绝。"
     },
     "cmake_graph": {
       "state": "passing",
@@ -81,7 +81,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 632,
+    "ctest_registered": 641,
     "compilers_green": [
       "gcc-15.2.0-i686",
       "msvc-19.51-x64"
@@ -255,6 +255,12 @@
       "layer": "L2",
       "state": "verified",
       "note": "整文件读写，以及**一件事只在这里做一次**：把 UTF-8 路径交给平台的打开调用。它单独立一个模块而不是塞进某个格式契约，理由是它有两个分属不同层的调用者——迹导出器（`plugins/formats/csv`）与文档存取契约（`core/authoring/persist`）都要「把字节搬到路径上」。谁托管这两个函数，另一个就得依赖一个主题不是它的模块：一个 CSV 导出器为了打开路径去 include 文档契约，或者导出契约硬说它那句「本模块自己不写文件」还成立。**平台知识**：这里的路径是 UTF-8，因为它来自 Qt 的文件对话框、也因为学生的目录名多半不是 ASCII；而 C 运行时的打开调用把窄字符串按**进程代码页**解释，于是中文 Windows 上打开的不是用户挑的那个文件——更常见的是什么都没打开，然后用户被告知文件不存在。写一次写对，比写对两次便宜。**`absent` 自成一码**：「没有这个文件」与「文件在，但不许我读」是两种问题、两种修法：前者是用户要改路径，后者是权限或占用要解决；一个码会让用户大约一半的次数跑错方向。**失败不留半个缓冲区**：读失败时 `out` 清空并保持空——调用者拿到半份文件时无从与「文件本身就短」区分，而更短的那个答案看起来就是数据。写失败必须在 flush 之后检查，否则半盘的文件会被当成完整文件报成功。**模块级测试 `file.a_path_that_is_not_ascii_still_names_the_file` 第一次在 MSVC 上失败，而失败在夹具里**：测试用 `path::string()` 造路径，Windows 上那是 ANSI，于是交给模块的是一个乱码路径。修法不是改模块，而是把「测试也要说 UTF-8」变成共享夹具 `tests/support/temp_dir.hpp`（同时消掉了四处重复的临时目录样板）。这条值得记下来：一个只在非 ASCII 路径上出现的缺陷，在一台 ASCII 目录的机器上永远不会露面，而本平台的主要用户正好不在那种机器上。"
+    },
+    {
+      "path": "core/runtime/instrument",
+      "layer": "L2",
+      "state": "verified",
+      "note": "仪器一等公民（章程 C6）。**先有契约、后有设备**，这不是顺序偏好而是 C6 的原文：「`IInstrument` 与 `ISimModel` 同时立项，不许后补」。理由是平台的差异化卖点就是那条闭环（测量 → 记录 → 不确定度 → 报告），而仪器是闭环的起点；一个把仪器当成「另一种产生数字的模型」的框架无法表达「这个数字是测出来的」这件事，而事后补这个区分要动每一个消费值的地方。`ISimModel` 那一半在本仓库里已经以具体形式存在——`kernels::IBatchAdvancer` 与 `execution::IStateOperator` 就是「推进状态的模型」——所以这里没有再造一个同名接口去满足一个名词，只补真正缺的那一半，并把这层对应关系写在这里。**R1 由类型承载**：`measure(double truth, ...)` 收进一个**裸 double**（模型算出的真值），吐出一个 `UncertainValue`（值 + 标准不确定度 + 量纲）。于是仪器**不可能**返回裸数字：没有不确定度的测量不是测量，而能返回裸数字的仪器可以把别人交给它的真值当成自己测到的发布出去。这条分离不是要求作者自觉遵守的约定，而是编译器接受的唯一形状。**承诺 3 落成一个函数**：`resolution_uncertainty(w) = w / sqrt(12)`——均匀分布下「最小分度」隐含的标准不确定度，也就是大学物理实验教的 B 类评定。插件可以用自己的误差模型覆盖它（校准证书、温度系数），但起点是一个有定义的答案，而不是它自己发明的常数；测试同时断言**方向**（更细的分度给出更小的不确定度），因为「变了」对一个反向的模型也成立。**可重复**：上下文里有种子与样本序号，同一台仪器、同一分度、同一真值、同一种子给出同一条读数。真值按**值**传入也是这条的一部分：能写回实验的仪器会让任何种子都救不回可复现性。**C4 同样适用**：仪器是插件代码，所以宿主取读数走 `measure_guarded`——与求值器、算子同一道故障屏障，抛出的设备被抓、被记账、最终被隔离，而不是把异常带出调用栈。**测试里是三台故意难缠的桩**：可调分度的、分度固定的（像数字钟）、以及会抛异常的。框架欠的是「插件不可能写出破坏这三条性质的实现」，而桩正好能证明这一点。**一处环境教训**：`resolution_uncertainty(1e-4)` 与测试里同式子的常量折叠结果在这台机器上差最后一位——MinGW 目标是 32 位 i686，`FLT_EVAL_METHOD == 2`，x87 80 位中间结果与已舍入的 double 比较时会在末位分歧（1e-2 恰好一致、1e-4 不一致）。修法是四 ulp 的相对容差并写明原因，而不是放宽到「差不多」：四 ulp 比任何换模型的变化都紧得多，换公式照样会失败。这与 golden 内核用例记录同一类分歧的做法一致。"
     }
   ],
   "licence": {

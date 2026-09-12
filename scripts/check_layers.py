@@ -106,6 +106,9 @@ ALLOWED: dict[str, set[str]] = {
     # path, and either hosting the helper would make the other depend on a module
     # whose subject is something else. Its dependencies are the standard library.
     "file": {"units", "diag"},
+    # instrument needs store (a reading *is* an UncertainValue) and plugin (the host calls a device through
+    # the same fault barrier as an evaluator -- charter C4 -- so `measure_guarded` is the only way in).
+    "instrument": {"units", "diag", "store", "plugin"},
     # L3 view services
     "document": {"units", "diag", "ir", "abi"},
     # capability needs plugin, not ports: it negotiates what a plugin may

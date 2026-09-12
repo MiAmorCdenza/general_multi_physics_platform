@@ -227,6 +227,17 @@ L0 是本项目唯一不可插件化的部分，也是接口面必须最小的�
 | 关键决策 | 失败不得留下半个缓冲区：调用者拿到半份文件时无法与「文件本身就短」区分，而后者看起来就是数据 |
 | 依赖 | 无（标准库） |
 
+### 4.6 `core/runtime/instrument/` —— 仪器一等公民（C6）
+
+| 项 | 内容 |
+|---|---|
+| 职责 | 测量设备的契约、注册表，以及「分度 → 标准不确定度」的框架模型 |
+| 关键类型 | `IInstrument`, `InstrumentDesc`, `MeasureContext`, `MeasureRefusal`, `InstrumentRegistry` |
+| 关键决策 | **先有契约、后有设备**：C6 的原文是 `IInstrument` 与 `ISimModel` 同时立项、不许后补。`ISimModel` 那一半在本仓库已以 `kernels::IBatchAdvancer`／`execution::IStateOperator` 的形式存在，所以这里不造同名接口去满足一个名词 |
+| 关键决策 | **R1 由类型承载**：`measure()` 收裸 `double`（真值）、吐 `UncertainValue`（值+不确定度+量纲）——没有不确定度的测量不是测量，而能返回裸数字的仪器可以把别人给它的真值当成自己测到的 |
+| 关键决策 | **承诺 3 是一个函数**：`resolution_uncertainty(w) = w / sqrt(12)`（均匀分布的 B 类评定）。插件可覆盖，但起点是有定义的答案 |
+| 依赖 | `units`, `diag`, `store`, `plugin`（宿主取读数走 C4 的故障屏障） |
+
 ---
 
 ## 5. L3 —— 视图服务（`core/authoring/`）
@@ -383,6 +394,10 @@ runtime → authoring
 ─────────────────────────
 views, plugins        （消费者，core 不得 include）
 ```
+
+> `runtime/` 内部另有两条不越过上图的边：`instrument` 依赖 `store`（一条读数**就是** `UncertainValue`，
+> 另造一个平行类型正是本项目反复避免的「两份表示」），`eval`/`execution`/`instrument` 依赖 `plugin`
+> 以取得 C4 的故障屏障——`plugin` 是 L0，这是向下依赖而非倒置。
 
 ### 五条铁律
 
