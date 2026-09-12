@@ -26,6 +26,10 @@
 
 if(QP_BUILD_PLUGINS)
     add_subdirectory(formats)
+    # The value conversion every text format needs, one layer below the formats themselves: it decides what a
+    # parameter *is*, and a format decides how a file spells it. See its CMakeLists for why it is not inside
+    # `qpjson`.
+    add_subdirectory(formats/value_text)
     add_subdirectory(mechanics)
     # The measuring devices. They are `instruments/` rather than part of `mechanics/` because the plan tree
     # splits content by what a thing **is**: a caliper is not a rigid-body model, and the one interface they

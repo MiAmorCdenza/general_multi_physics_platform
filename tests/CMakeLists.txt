@@ -439,6 +439,12 @@ if(QP_BUILD_PLUGINS)
     qp_add_test(qp_test_plugins_examples
         SOURCES unit/plugins/test_examples.cpp
         LIBS qp::plugins::examples qp::plugins::models qp::graph_execution qp::graph_ir)
+
+    # The value conversion. It links no format: the point of the module is that what a parameter **is** has one
+    # implementation, and how a file spells it belongs to a format.
+    qp_add_test(qp_test_plugins_value_text
+        SOURCES unit/plugins/test_value_text.cpp
+        LIBS qp::plugins::value_text qp::authoring_persist qp::ports qp::units)
 endif()
 
 # The run loop. Qt-free and graph-only: every case drives a stub operator, so it belongs to the loop's
