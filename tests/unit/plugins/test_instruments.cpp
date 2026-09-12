@@ -249,13 +249,164 @@ TEST_CASE("instrument.a_calibration_offset_shows_up_in_the_reading", "[instrumen
     REQUIRE(worn.measure(0.024, rt::MeasureContext{}).value().u == rt::resolution_uncertainty(1.0e-3));
 }
 
+TEST_CASE("instrument.analogue.the_uncertainty_grows_with_the_reading", "[instruments]") {
+    // **The case that makes the rack a set of devices rather than a set of graduations.** A meter specified as
+    // `+/- (1% of reading + 0.5 mA)` has an error whose size depends on what is being measured, and no
+    // graduation can say that: `resolution/sqrt(12)` is the same number at 2 mA and at 20 mA, which is the one
+    // thing an ammeter's specification is not.
+    //
+    // The coefficients here are exact binary fractions so the expectation is arithmetic rather than a rounded
+    // decimal: 2^-7 for 1/128, and plenty of headroom below the smallest normal. The point the assertions make
+    // is the **shape** -- proportional plus floor -- not the third digit.
+    rt::InstrumentDesc desc;
+    desc.id = "builtin.test.ammeter";
+    desc.label = "Test ammeter";
+    desc.quantity = "current";
+    desc.dim = qp::units::dims::current;
+    desc.finest_resolution = 1.0e-6;
+    desc.adjustable = true;
+    AnalogueMeter meter{std::move(desc), 0.0078125, 1.0e-6};
+
+    // The reading is the truth **unchanged**. This device does not quantise, and rounding the value as well as
+    // reporting its specification would count the display's last digit twice -- it is already inside the floor.
+    const double truth = 0.02;
+
+    // At the reading: (p*|v| + c)/sqrt(3), and the expectation is **the device's own second answer** rather
+    // than the same expression written here. That is not laziness: on 32-bit GCC (`FLT_EVAL_METHOD == 2`) the
+    // implementation evaluates the division in an x87 register and rounds once when storing, while the same
+    // expression written in the test is rounded at compile time -- so the two agree to every visible digit and
+    // still compare unequal, which is how this assertion failed the first time. The property that survives
+    // every compiler is the one the device's contract actually promises: the same reading twice.
+    const auto reading = meter.measure(truth, rt::MeasureContext{20260911, 0});
+    const auto again = meter.measure(truth, rt::MeasureContext{20260911, 0});
+    REQUIRE(reading.has_value());
+    REQUIRE(reading.value().value == truth);
+    REQUIRE(reading.value().kind == rt::UncertaintyKind::standard);
+    REQUIRE(reading.value().dim == qp::units::dims::current);
+
+    REQUIRE(reading.value().u == again.value().u);
+    REQUIRE(reading.value().u > 0.0);
+    // And it is the formula's magnitude, not a constant: scaled by the reading's own proportional term.
+    REQUIRE(reading.value().u > (0.0078125 * truth) / std::sqrt(3.0));
+
+    // And the proportional term is real: a tenth of the reading carries about a tenth of the proportional
+    // error, which is the assertion a floor-only model fails.
+    const auto small = meter.measure(0.002, rt::MeasureContext{});
+    REQUIRE(small.has_value());
+    REQUIRE(small.value().u < reading.value().u);
+    REQUIRE(small.value().u > (0.0078125 * 0.002) / std::sqrt(3.0));
+
+    // **The comparison that says why this device is in the rack.** A graduated device with a 1 uA graduation
+    // would report 0.289 uA at this reading and the same 0.289 uA at a tenth of it; the ammeter reports 90 uA.
+    // Two instruments whose displays look equally precise disagree by a factor of three hundred, and only the
+    // specification knows which one to believe. Comparing against the graduated model directly is what makes
+    // this a test of the analogue device rather than of its own arithmetic.
+    const double graduated_u = rt::resolution_uncertainty(1.0e-6);
+    REQUIRE(reading.value().u > 10.0 * graduated_u);
+    REQUIRE(reading.value().u != graduated_u);
+
+    // Unchanged by a range change: the display's increment is a separate fact from the specification, which is
+    // the whole reason this class does not derive from `GraduatedInstrument`.
+    REQUIRE(meter.set_resolution(1.0e-4).has_value());
+    REQUIRE(meter.measure(truth, rt::MeasureContext{}).value().u == reading.value().u);
+}
+
+TEST_CASE("instrument.analogue.a_zero_reading_still_has_an_uncertainty", "[instruments]") {
+    // The floor term, and the reason the specification has two terms rather than one. A percentage alone would
+    // make the uncertainty vanish at zero -- and a vanishing uncertainty on a real meter is a false claim about
+    // the instrument, not a fact about the measurement. It is also the exact shape the closed loop is built to
+    // refuse: `UncertaintyKind::unknown` exists because "nobody quantified this" must not be spelled "zero",
+    // and a device that returned a genuine zero here would be making the opposite mistake.
+    //
+    // The relative coefficient is deliberately awkward (0.0078125 = 1/128), so the two terms are not multiples
+    // of one another and the assertion cannot pass by both being one number.
+    rt::InstrumentDesc desc;
+    desc.id = "builtin.test.zero";
+    desc.label = "Test ammeter at zero";
+    desc.quantity = "current";
+    desc.dim = qp::units::dims::current;
+    desc.finest_resolution = 1.0e-6;
+    desc.adjustable = true;
+    AnalogueMeter meter{std::move(desc), 0.0078125, 5.0e-4};
+
+    const auto zero = meter.measure(0.0, rt::MeasureContext{});
+    REQUIRE(zero.has_value());
+    REQUIRE(zero.value().value == 0.0);
+    REQUIRE(zero.value().u > 0.0);
+    // The floor's **exact** value at a zero reading: `(p*0 + c)/sqrt(3)` is `c/sqrt(3)`. Exact rather than
+    // approximate, and it can be, because `c` is a power of two that `sqrt(3)` scales without ambiguity --
+    // there is no sum here for a compiler with excess precision to associate differently.
+    REQUIRE(zero.value().u == 5.0e-4 / std::sqrt(3.0));
+
+    // Negative truth is a reading like any other: a current can be negative, and the proportional term takes
+    // the magnitude, so the uncertainty does not change sign with the reading.
+    const auto negative = meter.measure(-0.02, rt::MeasureContext{});
+    REQUIRE(negative.has_value());
+    REQUIRE(negative.value().value == -0.02);
+    REQUIRE(negative.value().u > 0.0);
+    REQUIRE(negative.value().u == meter.measure(0.02, rt::MeasureContext{}).value().u);
+
+    // The floor is **not** the resolution, and saying so is the point: at zero the reading is known to 0.29 mA
+    // and the display claims to resolve 1 uA. A device whose floor happened to equal its resolution would make
+    // the two indistinguishable, which is why this one's are 500 ticks apart.
+    REQUIRE(zero.value().u > rt::resolution_uncertainty(meter.resolution()));
+
+    // A truth that is not a number is refused rather than reported with an error bar.
+    REQUIRE_FALSE(meter.measure(std::nan(""), rt::MeasureContext{}).has_value());
+    REQUIRE_FALSE(meter.measure(std::numeric_limits<double>::infinity(), rt::MeasureContext{}).has_value());
+}
+
+TEST_CASE("instrument.analogue.an_analogue_meter_changes_range", "[instruments]") {
+    // A range switch, which is a resolution change with a bound expressed as a **ratio**: a meter's display has
+    // a fixed number of digits, so the increment it can show is a fixed fraction of the range it is on and
+    // spans several decades across the settings. An absolute bound would refuse the coarse end of a real
+    // instrument's switch.
+    rt::InstrumentDesc desc;
+    desc.id = "builtin.test.range";
+    desc.label = "Test ammeter with ranges";
+    desc.quantity = "current";
+    desc.dim = qp::units::dims::current;
+    desc.finest_resolution = 1.0e-6;
+    desc.adjustable = true;
+    AnalogueMeter meter{std::move(desc), 0.0078125, 5.0e-4};
+
+    // It starts on its finest setting, which is what a device switched on does.
+    REQUIRE(meter.resolution() == 1.0e-6);
+
+    REQUIRE(meter.set_resolution(1.0e-3).has_value());
+    REQUIRE(meter.resolution() == 1.0e-3);
+
+    // Out of range at both ends of the span, and values that are not a resolution at all. Each is refused with
+    // the device's own code for "I cannot honour that", which is what a caller compares against.
+    REQUIRE(meter.set_resolution(1.0e-10).error() == qp::diag::ErrorCode::invalid_argument);
+    REQUIRE(meter.set_resolution(1.0e2).error() == qp::diag::ErrorCode::invalid_argument);
+    REQUIRE(meter.set_resolution(0.0).error() == qp::diag::ErrorCode::invalid_argument);
+    REQUIRE(meter.set_resolution(-1.0e-4).error() == qp::diag::ErrorCode::invalid_argument);
+    REQUIRE(meter.set_resolution(std::nan("")).error() == qp::diag::ErrorCode::invalid_argument);
+    // And not one of those refusals moved the setting.
+    REQUIRE(meter.resolution() == 1.0e-3);
+
+    // A device whose description says its precision is fixed refuses the call outright, with a code that reads
+    // differently to a user: this is not "out of range", it is "not a thing this device has".
+    rt::InstrumentDesc fixed;
+    fixed.id = "builtin.test.fixedmeter";
+    fixed.label = "Fixed-range ammeter";
+    fixed.quantity = "current";
+    fixed.dim = qp::units::dims::current;
+    fixed.finest_resolution = 1.0e-6;
+    fixed.adjustable = false;
+    AnalogueMeter locked{std::move(fixed), 0.0078125, 5.0e-4};
+    REQUIRE(locked.set_resolution(1.0e-3).error() == qp::diag::ErrorCode::not_implemented);
+    REQUIRE(locked.resolution() == 1.0e-6);
+}
+
 TEST_CASE("instrument.the_shipped_kit_is_usable", "[instruments]") {
     // Every device this build ships has to be usable as it stands: a non-empty id and label, a dimension that
     // is not the dimensionless one for a length or a time, a positive finest resolution, and a reading that
     // comes back with the uncertainty the resolution implies.
     std::vector<rt::IInstrument*>& kit = builtin_instruments();
     REQUIRE(kit.size() == builtin_count());
-    REQUIRE(builtin_count() >= 4);
+    REQUIRE(builtin_count() >= 5);
 
     std::vector<std::string> ids;
     for (rt::IInstrument* device : kit) {
@@ -276,6 +427,9 @@ TEST_CASE("instrument.the_shipped_kit_is_usable", "[instruments]") {
         const auto reading = device->measure(1.0, rt::MeasureContext{});
         REQUIRE(reading.has_value());
         REQUIRE(reading.value().kind == rt::UncertaintyKind::standard);
+        // A positive uncertainty from **every** device, whatever its error model. This is the one property the
+        // whole rack shares, and it is why the analogue meter's floor term exists: a calibration offset can be
+        // zero and a specification's bound cannot.
         REQUIRE(reading.value().u > 0.0);
         REQUIRE(reading.value().dim == desc.dim);
     }
@@ -284,11 +438,27 @@ TEST_CASE("instrument.the_shipped_kit_is_usable", "[instruments]") {
     // per call would leave every registered device dangling.
     REQUIRE(&builtin_instruments() == &kit);
 
-    // The four device classes the platform's lessons are about are present by id, so a document that names one
+    // The five device classes the platform's lessons are about are present by id, so a document that names one
     // keeps working.
-    for (const char* id : {"builtin.rule", "builtin.caliper", "builtin.stopwatch", "builtin.millivoltmeter"}) {
+    for (const char* id :
+         {"builtin.rule", "builtin.caliper", "builtin.stopwatch", "builtin.millivoltmeter", "builtin.ammeter"}) {
         REQUIRE(std::find(ids.begin(), ids.end(), std::string{id}) != ids.end());
     }
+
+    // Two error **models** are represented, not just five devices: the kit is not five instances of one formula.
+    // A device whose specification is a proportion plus a floor reports an uncertainty that depends on the
+    // reading, and the metre rule reports one that does not -- so the rack exercises both branches of the
+    // interface rather than one of them five times.
+    rt::IInstrument* rule = kit.front();
+    rt::IInstrument* ammeter = nullptr;
+    for (rt::IInstrument* device : kit) {
+        if (device->describe().id == "builtin.ammeter") ammeter = device;
+    }
+    REQUIRE(ammeter != nullptr);
+    REQUIRE(rule->measure(2.0e-3, rt::MeasureContext{}).value().u ==
+            rule->measure(2.0e-5, rt::MeasureContext{}).value().u);
+    REQUIRE(ammeter->measure(2.0e-3, rt::MeasureContext{}).value().u >
+            ammeter->measure(2.0e-5, rt::MeasureContext{}).value().u);
 }
 
 TEST_CASE("instrument.the_shipped_kit_registers_with_the_host", "[instruments]") {

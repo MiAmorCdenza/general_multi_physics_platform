@@ -20,6 +20,7 @@
 
 add_library(qp_plugins_instruments STATIC
     src/ruler.cpp
+    src/analogue_meter.cpp
     src/instruments.cpp)
 
 add_library(qp::plugins::instruments ALIAS qp_plugins_instruments)

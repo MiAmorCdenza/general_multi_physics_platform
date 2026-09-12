@@ -9,6 +9,20 @@
  * not what the framework allows. A course that wants a micrometer ships one the same way, by adding a device
  * here or by loading a plugin that registers its own through `IPluginHost::add_instrument`.
  *
+ * ## Two error models, and why the second one is here
+ *
+ * Four of the five devices answer their uncertainty from a **graduation**: the reading is snapped to the nearest
+ * tick and the uncertainty is `resolution/sqrt(12)`, which is one error model written once in `ruler.hpp`.
+ *
+ * The fifth, the bench ammeter, cannot be expressed that way, and shipping it is what turns "the rack is a
+ * fixed list of graduations" from a description into a claim somebody checked. Its specification reads
+ * `+/- (1% of reading + 0.5 mA)`, so its error **depends on what is being measured** -- which is the one thing a
+ * graduation cannot say. It derives straight from `IInstrument` (`analogue_meter.hpp`) and nothing in the
+ * framework had to change, which is the answer to the reopening condition `ruler.hpp` recorded.
+ *
+ * That is the shape worth keeping in a rack: four devices that share a model and one that proves the model was
+ * a choice rather than the only shape the interface allowed.
+ *
  * ## Why the numbers are what they are
  *
  * Each device's finest increment is the increment a real instrument of that class reads to, and the uncertainty
@@ -22,7 +36,10 @@
  *   - a **stopwatch** reads to 10 ms, so a period timed once carries 2.9 ms. Timing ten periods and dividing by
  *     ten is the standard trick, and it works because the uncertainty divides with the reading -- which the
  *     propagation in `plugins/analysis` will do when it exists;
- *   - a **multimeter** on its millivolt range reads to 0.1 mV.
+ *   - a **multimeter** on its millivolt range reads to 0.1 mV;
+ *   - an **ammeter** does not work that way at all. Its error is a fraction of the reading plus a floor, so
+ *     the standard uncertainty that goes with a 20 mA reading is 0.4 mA rather than a fixed increment -- and
+ *     near zero it stops shrinking with the reading, which is the second half of the same lesson.
  *
  * Every one of those is a number a student can compare against what they wrote down, which is the point.
  *
@@ -45,6 +62,7 @@
 #pragma once
 
 #include <qp/host/host.hpp>
+#include <qp/plugins/instruments/analogue_meter.hpp>
 #include <qp/plugins/instruments/ruler.hpp>
 
 #include <cstddef>
@@ -64,13 +82,15 @@ namespace qp::plugins::instruments {
 /// @nondet      none
 /// @frozen      no
 /// @tests       instrument.the_shipped_kit_is_usable
-[[nodiscard]] constexpr std::size_t builtin_count() noexcept { return 4; }
+[[nodiscard]] constexpr std::size_t builtin_count() noexcept { return 5; }
 
 /**
  * @brief The devices this build ships, in the order a device list should show them.
  *
  * Ordered by the resolution they can reach, finest last, which is the order a lab's kit is usually laid out in
- * and the order that makes "which of these is the right tool" answerable by reading down the list.
+ * and the order that makes "which of these is the right tool" answerable by reading down the list. The ammeter
+ * is last for that reason rather than because it is set apart: it is the finest-reading device here, and the
+ * fact that its error model is a different one is not something the order is asked to say.
  *
  * @ownership   borrows from a function-local set that outlives any host
  * @thread      main
