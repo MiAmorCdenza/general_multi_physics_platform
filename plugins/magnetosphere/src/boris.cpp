@@ -25,20 +25,21 @@
  * configuration lives. The six slots are named `kIndexGridOrigin0` and so on in the header.
  *
  * The alternative considered and not taken is a heap of samples per particle read through `get_component`, which
- * is correct and is what the corner-blend arithmetic below exists to avoid: eight reads per component per
- * sub-step, times twenty thousand particles, times twenty sub-steps.
+ * is correct and is what the shared blend exists to avoid: eight reads per component per sub-step, times twenty
+ * thousand particles, times twenty sub-steps.
  *
- * ## Why the sampler reads both element types
+ * ## Why the blend is not in this file
  *
- * ADR-0005 makes `f32` the default for field data and the particle path uses `f64` (`particle_state.hpp` argues
- * that at length), so a field slot can legitimately be either. A sampler that cast to `double*` and read an `f32`
- * table would read two samples as one number and produce a field that looks like physics; one that refused `f32`
- * would break the moment a field-domain node produced a table in the platform's own default precision. So the
- * blend is written once as a template over the element type and dispatched on the description, which is the only
- * version of this that is not a trap in one direction or the other.
+ * It used to be. It moved to `baked_field.cpp` when the **emitter** needed the same read: an emitter has to know
+ * the local field direction to launch a particle at a given pitch angle, and two copies of a trilinear sampler in
+ * one kit are two answers to "what is the field between two nodes". The disagreement would show up as a particle
+ * curving slightly differently from where it was launched -- and no test of either half would catch it, because
+ * each half would be right about its own arithmetic. What is left here is the geometry the sampler needs, read
+ * from the parameter block, and two one-line calls.
  */
 #include <qp/plugins/magnetosphere/boris.hpp>
 
+#include <qp/plugins/magnetosphere/baked_field.hpp>
 #include <qp/plugins/magnetosphere/geometry.hpp>
 #include <qp/plugins/magnetosphere/units.hpp>
 
@@ -103,140 +104,16 @@ struct GridMetadata final {
            field.desc.count[0] >= 2 && field.desc.count[1] >= 2 && field.desc.count[2] >= 2;
 }
 
-/// @brief The largest index not past the end.
-[[nodiscard]] std::uint32_t last_index(std::uint32_t n) noexcept { return n > 0 ? n - 1 : 0; }
-
-/// @brief The lower cell index along one axis, for a fractional index already inside the grid.
-[[nodiscard]] std::uint32_t lower_index(double fractional, std::uint32_t n) noexcept {
-    const double floor_f = std::floor(fractional);
-    const double max_lower = static_cast<double>(n >= 2 ? n - 2 : 0);
-    const double clamped = floor_f < 0.0 ? 0.0 : (floor_f > max_lower ? max_lower : floor_f);
-    return static_cast<std::uint32_t>(clamped);
-}
-
-/// @brief One axis of a trilinear read: the lower index and the fraction between it and the next node.
-struct Cell final {
-    std::uint32_t lower = 0;
-    double fraction = 0.0;
-};
-
-/// @brief Where `point` falls along one axis, clamped to the grid so a sample outside it reads the boundary node.
-[[nodiscard]] Cell cell_of(double point, double origin, double spacing, std::uint32_t n) noexcept {
-    const double last = static_cast<double>(last_index(n));
-    const double fractional = (point - origin) / spacing;
-    // Clamped, not extrapolated: a linear extrapolation of a `1/r^3` field beyond the grid grows without bound
-    // and would hand a particle an enormous force for a reason nobody could see.
-    //
-    // The two tests are **negated** on purpose. A particle position can reach infinity inside a sub-step, and
-    // `fractional` is then a NaN, which compares false against every bound: written as `f < 0 ? 0 : (f > last ?
-    // last : f)` a NaN falls through both arms and reaches `static_cast<std::uint32_t>`, which is undefined
-    // behaviour rather than a wrong number. Written this way the NaN takes the first arm and the sample reads the
-    // corner it was nearest, which is finite.
-    double clamped = 0.0;
-    if (fractional > last) {
-        clamped = last;
-    } else if (fractional > 0.0) {
-        clamped = fractional;
-    }
-    Cell cell;
-    cell.lower = lower_index(clamped, n);
-    cell.fraction = clamped - static_cast<double>(cell.lower);
-    return cell;
-}
-
-/// @brief The trilinear blend of one vector lattice at `point`, given in **SI**.
-template <typename T>
-[[nodiscard]] Vec3 sample_volume_as(const gfield::FieldValue& field, const GridMetadata& grid,
-                                    const Vec3& point) noexcept {
-    const std::uint32_t nx = field.desc.count[0];
-    const std::uint32_t ny = field.desc.count[1];
-    const std::uint32_t nz = field.desc.count[2];
-    const auto* data = static_cast<const T*>(field.data);
-    if (data == nullptr) return Vec3{};
-
-    const Cell cx = cell_of(point.x, grid.origin.x, grid.spacing.x, nx);
-    const Cell cy = cell_of(point.y, grid.origin.y, grid.spacing.y, ny);
-    const Cell cz = cell_of(point.z, grid.origin.z, grid.spacing.z, nz);
-    const std::uint32_t i = cx.lower;
-    const std::uint32_t j = cy.lower;
-    const std::uint32_t k = cz.lower;
-
-    const auto at = [data, ny, nz](std::uint32_t a, std::uint32_t b, std::uint32_t c) noexcept -> const T* {
-        return data + ((static_cast<std::size_t>(a) * ny + b) * nz + c) * 3;
-    };
-    const T* corner[8] = {at(i, j, k),         at(i + 1, j, k),         at(i, j + 1, k),
-                          at(i + 1, j + 1, k), at(i, j, k + 1),         at(i + 1, j, k + 1),
-                          at(i, j + 1, k + 1), at(i + 1, j + 1, k + 1)};
-    const double tx = cx.fraction;
-    const double ty = cy.fraction;
-    const double tz = cz.fraction;
-    const double sx = 1.0 - tx;
-    const double sy = 1.0 - ty;
-    const double sz = 1.0 - tz;
-    // The eight products are written out rather than looped over a bit pattern: this is the innermost arithmetic
-    // in the kit -- eight reads and eight multiplies per component per sub-step -- and a loop with `(index >> b) &
-    // 1` in it costs more than the code it saves.
-    const double weight[8] = {sx * sy * sz, tx * sy * sz, sx * ty * sz, tx * ty * sz,
-                              sx * sy * tz, tx * sy * tz, sx * ty * tz, tx * ty * tz};
-    const double component[3] = {
-        static_cast<double>(corner[0][0]) * weight[0] + static_cast<double>(corner[1][0]) * weight[1] +
-            static_cast<double>(corner[2][0]) * weight[2] + static_cast<double>(corner[3][0]) * weight[3] +
-            static_cast<double>(corner[4][0]) * weight[4] + static_cast<double>(corner[5][0]) * weight[5] +
-            static_cast<double>(corner[6][0]) * weight[6] + static_cast<double>(corner[7][0]) * weight[7],
-        static_cast<double>(corner[0][1]) * weight[0] + static_cast<double>(corner[1][1]) * weight[1] +
-            static_cast<double>(corner[2][1]) * weight[2] + static_cast<double>(corner[3][1]) * weight[3] +
-            static_cast<double>(corner[4][1]) * weight[4] + static_cast<double>(corner[5][1]) * weight[5] +
-            static_cast<double>(corner[6][1]) * weight[6] + static_cast<double>(corner[7][1]) * weight[7],
-        static_cast<double>(corner[0][2]) * weight[0] + static_cast<double>(corner[1][2]) * weight[1] +
-            static_cast<double>(corner[2][2]) * weight[2] + static_cast<double>(corner[3][2]) * weight[3] +
-            static_cast<double>(corner[4][2]) * weight[4] + static_cast<double>(corner[5][2]) * weight[5] +
-            static_cast<double>(corner[6][2]) * weight[6] + static_cast<double>(corner[7][2]) * weight[7]};
-    return Vec3{component[0], component[1], component[2]};
-}
-
-/// @brief The trilinear blend of one scalar lattice at `point`, given in **SI**.
-template <typename T>
-[[nodiscard]] double sample_scalar_as(const gfield::FieldValue& field, const GridMetadata& grid,
-                                      const Vec3& point) noexcept {
-    const std::uint32_t nx = field.desc.count[0];
-    const std::uint32_t ny = field.desc.count[1];
-    const std::uint32_t nz = field.desc.count[2];
-    const auto* data = static_cast<const T*>(field.data);
-    if (data == nullptr) return 0.0;
-
-    const Cell cx = cell_of(point.x, grid.origin.x, grid.spacing.x, nx);
-    const Cell cy = cell_of(point.y, grid.origin.y, grid.spacing.y, ny);
-    const Cell cz = cell_of(point.z, grid.origin.z, grid.spacing.z, nz);
-    const std::uint32_t i = cx.lower;
-    const std::uint32_t j = cy.lower;
-    const std::uint32_t k = cz.lower;
-    const auto at = [data, ny, nz](std::uint32_t a, std::uint32_t b, std::uint32_t c) noexcept -> double {
-        return static_cast<double>(data[(static_cast<std::size_t>(a) * ny + b) * nz + c]);
-    };
-    const double tx = cx.fraction;
-    const double ty = cy.fraction;
-    const double tz = cz.fraction;
-    const double sx = 1.0 - tx;
-    const double sy = 1.0 - ty;
-    const double sz = 1.0 - tz;
-    return at(i, j, k) * sx * sy * sz + at(i + 1, j, k) * tx * sy * sz + at(i, j + 1, k) * sx * ty * sz +
-           at(i + 1, j + 1, k) * tx * ty * sz + at(i, j, k + 1) * sx * sy * tz +
-           at(i + 1, j, k + 1) * tx * sy * tz + at(i, j + 1, k + 1) * sx * ty * tz +
-           at(i + 1, j + 1, k + 1) * tx * ty * tz;
-}
-
-/// @brief The vector field at `point` (SI), dispatching on the element type the description declares.
+/// @brief The vector field at `point` (SI), read through the sampler this kit shares with its emitter.
 [[nodiscard]] Vec3 sample_volume(const gfield::FieldValue& field, const GridMetadata& grid,
                                  const Vec3& point) noexcept {
-    if (field.desc.element == qp::abi::ElementType::f32) return sample_volume_as<float>(field, grid, point);
-    return sample_volume_as<double>(field, grid, point);
+    return sample_baked(field, grid.origin, grid.spacing, point);
 }
 
-/// @brief The scalar field at `point` (SI), dispatching on the element type the description declares.
+/// @brief The scalar field at `point` (SI), read through the same sampler.
 [[nodiscard]] double sample_scalar(const gfield::FieldValue& field, const GridMetadata& grid,
                                    const Vec3& point) noexcept {
-    if (field.desc.element == qp::abi::ElementType::f32) return sample_scalar_as<float>(field, grid, point);
-    return sample_scalar_as<double>(field, grid, point);
+    return sample_baked_scalar(field, grid.origin, grid.spacing, point);
 }
 
 }  // namespace

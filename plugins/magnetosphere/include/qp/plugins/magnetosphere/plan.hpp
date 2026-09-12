@@ -62,6 +62,8 @@
 #include <qp/graph/structure.hpp>
 #include <qp/host/host.hpp>
 
+#include <qp/plugins/magnetosphere/field_nodes.hpp>
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -103,6 +105,14 @@ public:
     static constexpr qp::graph::PortNumber kPortSpeedLimit = 7;
     /// @brief Whether the drag socket is read at all.
     static constexpr qp::graph::PortNumber kPortUseDrag = 8;
+    /// @brief The **state channel**: the particles this pusher advances, wired in from an emitter or a pusher.
+    ///
+    /// No value crosses it. It exists so the wire can be drawn, type checked and seen by the domain layer's
+    /// reachability walk, and so a run can ask the graph which emitter feeds this pusher instead of looking for
+    /// an emitter node somewhere. `emitter.hpp` documents the same decision from the other end.
+    static constexpr qp::graph::PortNumber kPortStateIn = 9;
+    /// @brief The state this pusher produces, after its step: the state channel's other end.
+    static constexpr qp::graph::PortNumber kPortStateOut = 1;
 
     /// @brief The default retirement radius, in earth radii.
     ///
@@ -294,6 +304,45 @@ public:
     /// nodes" are different answers to "why is nothing moving".
     std::size_t skipped = 0;
 };
+
+/**
+ * @brief The field a socket is wired to, together with the grid its source node declares.
+ *
+ * **One resolver, two callers.** The pusher's magnetic socket and the emitter's both need the same three answers
+ * -- is anything wired here, is its field in the store, and where is its grid -- and a second implementation of
+ * that lookup is a second answer to "which node's field is this", which is the failure this file's header spends
+ * a paragraph on.
+ *
+ * **A socket with no wire is not a refusal.** It answers `ok` with an unreadable value, and whether a socket is
+ * *required* is the caller's question: the pusher's magnetic socket is enforced by the step's own requirement
+ * mask (so the refusal is `slot_unbound`, named), and the emitter's is `required` in its port description (so the
+ * refusal is the graph validator's, at the layer where the user is looking). Collapsing the two into one answer
+ * here would take that choice away from both.
+ *
+ * @param graph    The graph. Borrowed.
+ * @param consumer The node whose socket this is.
+ * @param socket   Which input port.
+ * @param fields   The baked fields.
+ * @param out      Filled with the bound field, or a default-constructed value when nothing is wired.
+ * @param grid     Filled with the source node's grid when the lookup succeeds.
+ *
+ * @ownership   observes `graph` and `fields`, writes through `out` and `grid`
+ * @thread      main
+ * @pre         none
+ * @post        On `ok`, `out` is readable or nothing was wired; `grid` describes the table in `out` when it is
+ * @invariant   The grid always comes from the node the field was published by, never from a default
+ * @errors      Reports a `PlanBuildRefusal`; `field_not_baked` when a wire names a field the store does not
+ *              hold, `grid_unknown` when the source node's type this build cannot ask for a grid
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.plan.a_field_node_binds_to_the_slot_the_pusher_reads,
+ *              magnetosphere.emitter.a_ring_is_launched_at_the_pitch_angle_it_asks_for
+ */
+[[nodiscard]] PlanBuildRefusal resolve_field(const qp::graph::Graph& graph, qp::graph::NodeId consumer,
+                                             qp::graph::PortNumber socket,
+                                             const qp::graph::field::FieldSet& fields,
+                                             qp::graph::field::FieldValue& out, GridSpec& grid) noexcept;
 
 /**
  * @brief Turns the pusher nodes of `order` into prepared-on-demand steps, with their fields bound.

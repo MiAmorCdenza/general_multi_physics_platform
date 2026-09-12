@@ -41,8 +41,10 @@ add_library(qp_plugins_magnetosphere STATIC
     src/baked_field.cpp
     src/boris.cpp
     src/dipole.cpp
+    src/emitter.cpp
     src/field_nodes.cpp
-    src/plan.cpp)
+    src/plan.cpp
+    src/run.cpp)
 
 add_library(qp::plugins::magnetosphere ALIAS qp_plugins_magnetosphere)
 
@@ -59,5 +61,5 @@ target_compile_features(qp_plugins_magnetosphere PUBLIC cxx_std_20)
 # signatures, so anyone using this library needs their headers.
 target_link_libraries(qp_plugins_magnetosphere
     PUBLIC qp::units qp::diag qp::abi qp::field qp::graph_kernels qp::graph_particles
-           qp::graph_eval qp::graph_ir qp::graph_structure qp::host
+           qp::graph_eval qp::graph_ir qp::graph_structure qp::graph_domain qp::host
     PRIVATE qp_warnings qp_sanitize)

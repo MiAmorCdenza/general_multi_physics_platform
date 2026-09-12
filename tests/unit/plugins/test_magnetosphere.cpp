@@ -1200,3 +1200,103 @@ TEST_CASE("magnetosphere.boris.a_bad_batch_is_refused", "[magnetosphere]") {
     REQUIRE_FALSE(gfield::is_readable(batch.slots[pp::slot_index(SlotName::electric)]));
     REQUIRE_FALSE(gfield::is_readable(batch.slots[pp::slot_index(SlotName::drag)]));
 }
+
+
+TEST_CASE("magnetosphere.baked_field.a_kernel_and_an_emitter_read_the_same_table", "[magnetosphere]") {
+    // **One sampler, two callers.** The pusher's inner loop and the emitter's launch both need to read a baked
+    // table, and they reach it differently: the kernel holds a `field::FieldValue` out of the batch, the emitter
+    // holds one out of the store, and a `BakedField` holds its own samples. The blend used to live in the
+    // kernel's file, and when the emitter arrived it would have been copied -- two answers to "what is the field
+    // between two nodes", disagreeing by whatever the second author changed. This case is what pins that there
+    // is one implementation: `BakedField::sample` is a wrapper over the same free function, so the two agree
+    // **bit for bit**, and a future edit that inlined a second copy would break here rather than in a trajectory
+    // whose curvature is subtly wrong.
+    BakedField table{Vec3{-3.0 * kEarthRadiusM, -2.0 * kEarthRadiusM, -1.0 * kEarthRadiusM},
+                     Vec3{0.5 * kEarthRadiusM, 0.75 * kEarthRadiusM, 1.25 * kEarthRadiusM}, 13, 9, 7};
+    const DipoleField dipole{kMagneticTiltDegrees};
+    for (std::uint32_t i = 0; i < 13; ++i) {
+        for (std::uint32_t j = 0; j < 9; ++j) {
+            for (std::uint32_t k = 0; k < 7; ++k) {
+                table.set_node(i, j, k, dipole.at(table.node_position(i, j, k)));
+            }
+        }
+    }
+    const gfield::FieldValue view = table.view();
+    REQUIRE(gfield::is_readable(view));
+
+    // At the nodes, at the midpoints, and well outside the box -- where the clamp has to agree as much as the
+    // blend does.
+    const Vec3 probes[] = {table.node_position(0, 0, 0),
+                           table.node_position(6, 4, 3),
+                           table.node_position(12, 8, 6),
+                           table.node_position(3, 2, 1) + Vec3{0.25 * kEarthRadiusM, 0.375 * kEarthRadiusM,
+                                                               0.625 * kEarthRadiusM},
+                           Vec3{-40.0 * kEarthRadiusM, 0.0, 0.0},
+                           Vec3{40.0 * kEarthRadiusM, 40.0 * kEarthRadiusM, 40.0 * kEarthRadiusM}};
+    for (const Vec3& point : probes) {
+        const Vec3 via_table = table.sample(point);
+        const Vec3 via_field = sample_baked(view, table.origin(), table.spacing(), point);
+        REQUIRE(via_field.x == via_table.x);
+        REQUIRE(via_field.y == via_table.y);
+        REQUIRE(via_field.z == via_table.z);
+    }
+
+    // The **f32** path, which a `BakedField` cannot produce and a field-domain node can: ADR-0005 makes f32 the
+    // default for field data, so the dispatch on the descriptor is a real branch rather than a formality. The
+    // same values in half the precision must read the same to f32's own rounding.
+    std::vector<float> single(view.point_count() * 3);
+    const auto* source = static_cast<const double*>(view.data);
+    for (std::size_t i = 0; i < single.size(); ++i) single[i] = static_cast<float>(source[i]);
+    gfield::FieldValue narrow = view;
+    narrow.desc.element = qp::abi::ElementType::f32;
+    narrow.desc.spacing_bytes = qp::abi::expected_spacing(narrow.desc);
+    narrow.data = single.data();
+    narrow.bytes = static_cast<std::uint64_t>(single.size()) * sizeof(float);
+    REQUIRE(gfield::is_readable(narrow));
+    for (const Vec3& point : probes) {
+        const Vec3 wide = sample_baked(view, table.origin(), table.spacing(), point);
+        const Vec3 tight = sample_baked(narrow, table.origin(), table.spacing(), point);
+        // The field is 1e-8 T at this box's edge and 3e-5 T near the surface, so the tolerance has to be
+        // relative to the value being read; f32 carries about seven digits and the blend adds its own rounding.
+        REQUIRE(relative(tight.x, wide.x) < 1.0e-6);
+        REQUIRE(relative(tight.y, wide.y) < 1.0e-6);
+        REQUIRE(relative(tight.z, wide.z) < 1.0e-6);
+    }
+
+    // A scalar table -- the drag coefficient's shape -- reads through the other entry point.
+    std::vector<double> drag(13 * 9 * 7);
+    for (std::size_t i = 0; i < drag.size(); ++i) drag[i] = static_cast<double>(i);
+    qp::abi::FieldDim per_second;
+    per_second.T = -1;
+    gfield::FieldValue scalar;
+    scalar.desc = qp::abi::make_lattice(qp::abi::LatticeKind::volume, qp::abi::ComponentKind::scalar,
+                                        qp::abi::ElementType::f64, per_second, 13, 9, 7);
+    scalar.data = drag.data();
+    scalar.bytes = qp::abi::data_bytes(scalar.desc);
+    const Vec3 corner = table.node_position(0, 0, 0);
+    REQUIRE(sample_baked_scalar(scalar, table.origin(), table.spacing(), corner) == 0.0);
+    const Vec3 next = table.node_position(1, 0, 0);
+    // Node `(1, 0, 0)` is point `(1 * ny + 0) * nz + 0` = 63 in the ABI's own layout, whose value is its index:
+    // a scalar read that used the wrong stride would land on 9 or 7 instead, which is what this pins.
+    REQUIRE(sample_baked_scalar(scalar, table.origin(), table.spacing(), next) == 63.0);
+    // Halfway along the first cell the blend is the mean of the two nodes' values.
+    const Vec3 middle{(corner.x + next.x) * 0.5, corner.y, corner.z};
+    REQUIRE(relative(sample_baked_scalar(scalar, table.origin(), table.spacing(), middle), 31.5) < 1.0e-15);
+
+    // And every shape that is **not** a volume of the right component count reads as zero rather than as
+    // whatever memory follows it: a `line` lattice has no rows, and a vector table read as a scalar would take
+    // the first number of every vector and call it a coefficient.
+    const double line_values[6] = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0};
+    gfield::FieldValue line;
+    line.desc = qp::abi::make_lattice(qp::abi::LatticeKind::line, qp::abi::ComponentKind::vector,
+                                      qp::abi::ElementType::f64, qp::abi::FieldDim{}, 2);
+    line.data = line_values;
+    line.bytes = qp::abi::data_bytes(line.desc);
+    REQUIRE(gfield::is_readable(line));
+    const Vec3 zero = sample_baked(line, table.origin(), table.spacing(), corner);
+    REQUIRE(zero.x == 0.0);
+    REQUIRE(zero.y == 0.0);
+    REQUIRE(zero.z == 0.0);
+    REQUIRE(sample_baked_scalar(line, table.origin(), table.spacing(), corner) == 0.0);
+    REQUIRE(sample_baked_scalar(view, table.origin(), table.spacing(), corner) == 0.0);
+}

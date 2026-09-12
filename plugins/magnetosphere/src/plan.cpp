@@ -115,7 +115,11 @@ std::vector<graph::NodeDesc> PusherNodes::node_types() {
     // binds to is the thing that keeps that promise, and `BorisAdvancer::capabilities` is where it says so.
     boris.allow_in_field_domain = false;
     boris.allow_in_particle_domain = true;
-    boris.has_compute = false;
+    // Computed, in the sense `build_plan` means: this node has an implementation, and the implementation is the
+    // kernel the composition root builds for it. The bake produces no port value for it -- the state channel
+    // carries topology rather than data -- and `has_compute` false would keep it out of the particle plan
+    // altogether, which is the one thing that would make a correct graph report `empty_plan`.
+    boris.has_compute = true;
 
     const auto socket = [](graph::PortNumber number, const char* name, const char* label,
                            qp::ports::PortTypeId type, const char* unit) {
@@ -178,7 +182,51 @@ std::vector<graph::NodeDesc> PusherNodes::node_types() {
     boris.inputs.push_back(limit);
     boris.inputs.push_back(drag_switch);
 
+    graph::PortDesc state_in;
+    state_in.number = kPortStateIn;
+    state_in.name = "state";
+    state_in.label = "Particle state";
+    state_in.description = "The particles to advance, wired from an emitter or from an earlier pusher. No value "
+                           "crosses this wire; it is how the run knows which emitter feeds this step.";
+    state_in.type = qp::ports::kParticleBuffer;
+    state_in.connectable = true;
+    // Required, and this is a **different case** from the magnetic socket's, which is deliberately not. A pusher
+    // with no state has nothing to integrate: the run cannot start at all, and the graph validator saying "this
+    // socket must be wired" is the finding, at the layer where the user is looking. A pusher with no magnetic
+    // field is the silent failure -- the run starts, finishes, and every particle travels in a straight line --
+    // and that one is refused by the step's own requirement mask instead.
+    state_in.required = true;
+    boris.inputs.push_back(state_in);
+
+    graph::PortDesc state_out;
+    state_out.number = kPortStateOut;
+    state_out.name = "state";
+    state_out.label = "Particle state";
+    state_out.description = "The particles after this step, so a second pusher can be chained onto it and so a "
+                            "run has something to declare as what it wants.";
+    state_out.type = qp::ports::kParticleBuffer;
+    state_out.connectable = true;
+    state_out.required = false;
+    boris.outputs.push_back(state_out);
+
     return {std::move(boris)};
+}
+
+PlanBuildRefusal resolve_field(const graph::Graph& graph, const graph::NodeId consumer,
+                                const graph::PortNumber socket, const gfield::FieldSet& fields,
+                                gfield::FieldValue& out, GridSpec& grid) noexcept {
+    out = gfield::FieldValue{};
+    grid = GridSpec{};
+    const graph::Edge* edge = graph.incoming(graph::PortRef{consumer, socket, graph::PortDirection::input});
+    if (edge == nullptr) return PlanBuildRefusal::ok;   // nothing wired: the caller decides if that is a refusal
+    out = fields.view(gfield::FieldKey{edge->from.node.index, edge->from.port});
+    if (!gfield::is_readable(out)) return PlanBuildRefusal::field_not_baked;
+    const graph::Node* source = graph.find_node(edge->from.node);
+    if (source == nullptr || source->type_name != FieldNodes::kDipoleType) {
+        return PlanBuildRefusal::grid_unknown;
+    }
+    grid = FieldNodes::read_from(*source);
+    return PlanBuildRefusal::ok;
 }
 
 PlanBuildRefusal build_particle_plan(const graph::Graph& graph, const std::vector<graph::NodeId>& order,
@@ -200,29 +248,21 @@ PlanBuildRefusal build_particle_plan(const graph::Graph& graph, const std::vecto
         pp::StepPlan step;
 
         for (const SocketBinding& binding : kSockets) {
-            const graph::Edge* edge = graph.incoming(graph::PortRef{id, binding.port, graph::PortDirection::input});
-            if (edge == nullptr) continue;
-
             // **By publisher, not by shape.** See this file's header: a descriptor-keyed lookup would hand the
             // pusher whichever of two identically-shaped fields was published last.
-            const gfield::FieldKey key{edge->from.node.index, edge->from.port};
-            const gfield::FieldValue bound = fields.view(key);
-            if (!gfield::is_readable(bound)) {
+            gfield::FieldValue bound;
+            GridSpec grid;
+            const PlanBuildRefusal refusal = resolve_field(graph, id, binding.port, fields, bound, grid);
+            if (refusal != PlanBuildRefusal::ok) {
                 out.clear();
-                return PlanBuildRefusal::field_not_baked;
+                return refusal;
             }
+            // Nothing wired: the slot stays absent, and whether that is a refusal is the **step's** declaration
+            // -- `required_slots` below, which makes the executor answer `slot_unbound` by name.
+            if (!gfield::is_readable(bound)) continue;
             step.fields[static_cast<std::size_t>(binding.slot)] = bound;
 
             if (binding.slot != pp::SlotName::magnetic) continue;
-            // The grid comes from the node the magnetic socket is wired to, and only from a type this build
-            // knows how to ask. `FieldNodes::read_from` is the baker's own reader, so the box the kernel samples
-            // is the box the samples were evaluated in.
-            const graph::Node* source = graph.find_node(edge->from.node);
-            if (source == nullptr || source->type_name != FieldNodes::kDipoleType) {
-                out.clear();
-                return PlanBuildRefusal::grid_unknown;
-            }
-            const GridSpec grid = FieldNodes::read_from(*source);
             params.set_real(BorisAdvancer::kIndexGridOrigin0, grid.origin_m.x);
             params.set_real(BorisAdvancer::kIndexGridOrigin1, grid.origin_m.y);
             params.set_real(BorisAdvancer::kIndexGridOrigin2, grid.origin_m.z);

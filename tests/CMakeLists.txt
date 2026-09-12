@@ -466,8 +466,9 @@ if(QP_BUILD_PLUGINS)
     qp_add_test(qp_test_plugins_magnetosphere
         SOURCES unit/plugins/test_magnetosphere.cpp
                 unit/plugins/test_magnetosphere_nodes.cpp
+                unit/plugins/test_magnetosphere_run.cpp
         LIBS qp::plugins::magnetosphere qp::units qp::graph_particles qp::graph_kernels
-             qp::graph_eval qp::graph_ir qp::graph_structure qp::ports qp::host)
+             qp::graph_eval qp::graph_ir qp::graph_structure qp::graph_domain qp::ports qp::host)
 endif()
 
 # The run loop. Qt-free and graph-only: every case drives a stub operator, so it belongs to the loop's

@@ -354,14 +354,20 @@ TEST_CASE("magnetosphere.field_nodes.a_node_of_another_domain_produces_nothing",
     REQUIRE(stats.value().nodes_visited == 2);
     REQUIRE(stats.value().nodes_computed == 2);
     REQUIRE(scene.fields.size() == 1);
-    // The pusher declares no outputs, and the bake produced none for it. Not an error: an empty answer.
+    // The bake produced **no value** for the pusher, which is the point: an empty answer rather than a failure.
     REQUIRE(scene.result.get(pusher, 1).kind() == qp::ports::ValueKind::invalid);
     const graph::NodeDesc* desc = scene.host.node_types().find(PusherNodes::kBorisType);
     REQUIRE(desc != nullptr);
-    REQUIRE(desc->outputs.empty());
     REQUIRE(desc->allow_in_particle_domain);
     REQUIRE_FALSE(desc->allow_in_field_domain);
-    REQUIRE_FALSE(desc->has_compute);
+    // The output it declares is the **state channel**: a wire that carries topology rather than data, and the
+    // reason `has_compute` is true. `graph/domain`'s `build_plan` puts a node in a domain's plan only when that
+    // flag is set, so it means "this node has an implementation" -- the pusher's is the kernel -- and not "the
+    // bake produces a port value for it".
+    REQUIRE(desc->outputs.size() == 1);
+    REQUIRE(desc->outputs.front().number == PusherNodes::kPortStateOut);
+    REQUIRE(desc->outputs.front().type == qp::ports::kParticleBuffer);
+    REQUIRE(desc->has_compute);
 }
 
 TEST_CASE("magnetosphere.pusher_nodes.the_type_declares_the_ports_the_builder_reads", "[magnetosphere]") {

@@ -1,11 +1,22 @@
 /**
  * @file baked_field.cpp
- * @brief The index arithmetic, the trilinear blend, and the clamp.
+ * @brief The index arithmetic, the trilinear blend, and the clamp -- once, for both kinds of caller.
  *
  * The layout is the one `abi::LatticeDesc` describes, written here once: point `(i, j, k)` is
  * `(i * ny + j) * nz + k`, and a vector's three components follow consecutively. `field::get_component` computes
  * the same offset from the same description, so a kernel that reads through the field vocabulary and this file's
  * own `sample` are reading the same memory -- which is the property that makes the table usable by both.
+ *
+ * The blend is written as a **template over the element type** and then wrapped by two free functions, because
+ * two different things hold a baked table: a baker holds a `BakedField`, and everything downstream of the plugin
+ * boundary holds a `field::FieldValue`. They must not each have their own trilinear sampler: two copies of this
+ * arithmetic are two answers to "what is the field between two nodes", and the disagreement would show up as a
+ * particle curving slightly differently from where an emitter launched it -- which no test of either half would
+ * catch.
+ *
+ * ADR-0005 makes `f32` the default for field data and the particle path uses `f64`, so the samples can be either
+ * and the read dispatches on the descriptor. A sampler that cast to `double*` and read an `f32` table would read
+ * two samples as one number.
  */
 #include <qp/plugins/magnetosphere/baked_field.hpp>
 
@@ -17,11 +28,160 @@ namespace qp::plugins::magnetosphere {
 namespace {
 
 namespace abi = qp::abi;
+namespace gfield = qp::graph::field;
 
 /// @brief Largest index not past the end, for a table of `n` nodes. `n` is at least 2 for a built table.
 [[nodiscard]] std::uint32_t last_index(std::uint32_t n) noexcept { return n > 0 ? n - 1 : 0; }
 
+/// @brief The lower cell index along one axis, for a fractional index already inside the grid.
+[[nodiscard]] std::uint32_t lower_index(double fractional, std::uint32_t n) noexcept {
+    const double floor_f = std::floor(fractional);
+    const double max_lower = static_cast<double>(n >= 2 ? n - 2 : 0);
+    const double clamped = floor_f < 0.0 ? 0.0 : (floor_f > max_lower ? max_lower : floor_f);
+    return static_cast<std::uint32_t>(clamped);
+}
+
+/// @brief One axis of a trilinear read: the lower index and the fraction between it and the next node.
+struct Cell final {
+    std::uint32_t lower = 0;
+    double fraction = 0.0;
+};
+
+/// @brief Where `point` falls along one axis, clamped so a sample outside the grid reads the boundary node.
+[[nodiscard]] Cell cell_of(double point, double origin, double spacing, std::uint32_t n) noexcept {
+    const double last = static_cast<double>(last_index(n));
+    const double fractional = (point - origin) / spacing;
+    // Clamped, not extrapolated, and the two tests are **negated** on purpose: a particle position can reach
+    // infinity, and `fractional` is then a NaN, which compares false against every bound. Written as
+    // `f < 0 ? 0 : (f > last ? last : f)` a NaN falls through both arms and reaches
+    // `static_cast<std::uint32_t>`, which is undefined behaviour rather than a wrong number.
+    double clamped = 0.0;
+    if (fractional > last) {
+        clamped = last;
+    } else if (fractional > 0.0) {
+        clamped = fractional;
+    }
+    Cell cell;
+    cell.lower = lower_index(clamped, n);
+    cell.fraction = clamped - static_cast<double>(cell.lower);
+    return cell;
+}
+
+/// @brief Whether a description is a volume of at least two nodes an axis, which is what a blend needs.
+[[nodiscard]] bool is_volume(const gfield::FieldValue& table, bool want_vector) noexcept {
+    if (!gfield::is_readable(table)) return false;
+    if (table.kind() != gfield::Kind::Volume) return false;
+    if (table.is_vector() != want_vector) return false;
+    return table.desc.count[0] >= 2 && table.desc.count[1] >= 2 && table.desc.count[2] >= 2;
+}
+
+/// @brief The trilinear weight of one corner of a cell, from its bit pattern: bit 0 is `x`, bit 1 is `y`, bit 2
+///        is `z`.
+///
+/// The corner order this defines is the order the two reads below list their eight pointers in, and it is the
+/// only place the two have to agree: a weight applied to the wrong corner is a field that is right at every node
+/// and wrong everywhere between them.
+[[nodiscard]] constexpr double weight_of(int corner, double tx, double ty, double tz) noexcept {
+    const double wx = (corner & 1) != 0 ? tx : 1.0 - tx;
+    const double wy = (corner & 2) != 0 ? ty : 1.0 - ty;
+    const double wz = (corner & 4) != 0 ? tz : 1.0 - tz;
+    return wx * wy * wz;
+}
+
+/// @brief The trilinear blend of one vector volume at `point` (SI), for the element type `T`.
+template <typename T>
+[[nodiscard]] Vec3 read_vector(const gfield::FieldValue& table, const Vec3& origin, const Vec3& spacing,
+                               const Vec3& point) noexcept {
+    const std::uint32_t nx = table.desc.count[0];
+    const std::uint32_t ny = table.desc.count[1];
+    const std::uint32_t nz = table.desc.count[2];
+    const auto* data = static_cast<const T*>(table.data);
+    if (data == nullptr) return Vec3{};
+
+    const Cell cx = cell_of(point.x, origin.x, spacing.x, nx);
+    const Cell cy = cell_of(point.y, origin.y, spacing.y, ny);
+    const Cell cz = cell_of(point.z, origin.z, spacing.z, nz);
+    const std::uint32_t i = cx.lower;
+    const std::uint32_t j = cy.lower;
+    const std::uint32_t k = cz.lower;
+
+    const auto at = [data, ny, nz](std::uint32_t a, std::uint32_t b, std::uint32_t c) noexcept -> const T* {
+        return data + ((static_cast<std::size_t>(a) * ny + b) * nz + c) * 3;
+    };
+    const T* corner[8] = {at(i, j, k),         at(i + 1, j, k),         at(i, j + 1, k),
+                          at(i + 1, j + 1, k), at(i, j, k + 1),         at(i + 1, j, k + 1),
+                          at(i, j + 1, k + 1), at(i + 1, j + 1, k + 1)};
+    const double tx = cx.fraction;
+    const double ty = cy.fraction;
+    const double tz = cz.fraction;
+    // The eight weights are written out rather than looped over a bit pattern: this is the innermost arithmetic
+    // in the kit -- eight reads and eight multiplies per component per sub-step -- and a loop with
+    // `(index >> bit) & 1` in it costs more than the lines it saves.
+    const double weight[8] = {weight_of(0, tx, ty, tz), weight_of(1, tx, ty, tz), weight_of(2, tx, ty, tz),
+                              weight_of(3, tx, ty, tz), weight_of(4, tx, ty, tz), weight_of(5, tx, ty, tz),
+                              weight_of(6, tx, ty, tz), weight_of(7, tx, ty, tz)};
+    Vec3 out{};
+    double* component[3] = {&out.x, &out.y, &out.z};
+    for (int axis = 0; axis < 3; ++axis) {
+        double sum = 0.0;
+        for (int corner_index = 0; corner_index < 8; ++corner_index) {
+            sum += static_cast<double>(corner[corner_index][axis]) * weight[corner_index];
+        }
+        *component[axis] = sum;
+    }
+    return out;
+}
+
+/// @brief The trilinear blend of one scalar volume at `point` (SI), for the element type `T`.
+template <typename T>
+[[nodiscard]] double read_scalar(const gfield::FieldValue& table, const Vec3& origin, const Vec3& spacing,
+                                 const Vec3& point) noexcept {
+    const std::uint32_t nx = table.desc.count[0];
+    const std::uint32_t ny = table.desc.count[1];
+    const std::uint32_t nz = table.desc.count[2];
+    const auto* data = static_cast<const T*>(table.data);
+    if (data == nullptr) return 0.0;
+
+    const Cell cx = cell_of(point.x, origin.x, spacing.x, nx);
+    const Cell cy = cell_of(point.y, origin.y, spacing.y, ny);
+    const Cell cz = cell_of(point.z, origin.z, spacing.z, nz);
+    const std::uint32_t i = cx.lower;
+    const std::uint32_t j = cy.lower;
+    const std::uint32_t k = cz.lower;
+    const auto at = [data, ny, nz](std::uint32_t a, std::uint32_t b, std::uint32_t c) noexcept -> double {
+        return static_cast<double>(data[(static_cast<std::size_t>(a) * ny + b) * nz + c]);
+    };
+    const double tx = cx.fraction;
+    const double ty = cy.fraction;
+    const double tz = cz.fraction;
+    const double weight[8] = {weight_of(0, tx, ty, tz), weight_of(1, tx, ty, tz), weight_of(2, tx, ty, tz),
+                              weight_of(3, tx, ty, tz), weight_of(4, tx, ty, tz), weight_of(5, tx, ty, tz),
+                              weight_of(6, tx, ty, tz), weight_of(7, tx, ty, tz)};
+    const double corner[8] = {at(i, j, k),         at(i + 1, j, k),         at(i, j + 1, k),
+                              at(i + 1, j + 1, k), at(i, j, k + 1),         at(i + 1, j, k + 1),
+                              at(i, j + 1, k + 1), at(i + 1, j + 1, k + 1)};
+    double sum = 0.0;
+    for (int corner_index = 0; corner_index < 8; ++corner_index) sum += corner[corner_index] * weight[corner_index];
+    return sum;
+}
+
 }  // namespace
+
+Vec3 sample_baked(const gfield::FieldValue& table, const Vec3& origin_m, const Vec3& spacing_m,
+                  const Vec3& point_m) noexcept {
+    if (!is_volume(table, /*want_vector=*/true)) return Vec3{};
+    if (table.desc.element == abi::ElementType::f32) return read_vector<float>(table, origin_m, spacing_m, point_m);
+    return read_vector<double>(table, origin_m, spacing_m, point_m);
+}
+
+double sample_baked_scalar(const gfield::FieldValue& table, const Vec3& origin_m, const Vec3& spacing_m,
+                           const Vec3& point_m) noexcept {
+    if (!is_volume(table, /*want_vector=*/false)) return 0.0;
+    if (table.desc.element == abi::ElementType::f32) {
+        return read_scalar<float>(table, origin_m, spacing_m, point_m);
+    }
+    return read_scalar<double>(table, origin_m, spacing_m, point_m);
+}
 
 BakedField::BakedField(Vec3 origin, Vec3 spacing, std::uint32_t nx, std::uint32_t ny, std::uint32_t nz)
     : origin_(origin), spacing_(spacing), nx_(nx), ny_(ny), nz_(nz) {
@@ -49,8 +209,8 @@ void BakedField::set_node(std::uint32_t i, std::uint32_t j, std::uint32_t k, con
     data_[offset + 2] = value.z;
 }
 
-qp::graph::field::FieldValue BakedField::view() const noexcept {
-    qp::graph::field::FieldValue out;
+gfield::FieldValue BakedField::view() const noexcept {
+    gfield::FieldValue out;
     if (empty() || nx_ < 2 || ny_ < 2 || nz_ < 2) {
         // An empty or degenerate table has no valid description: `abi::is_consistent` refuses a volume with a
         // zero count, and a one-node axis has no interval to interpolate over. Refusing the description is what
@@ -80,67 +240,17 @@ Vec3 BakedField::sample(const Vec3& point) const noexcept {
         return Vec3{};
     }
 
-    // Factional index along each axis, clamped into `[0, n - 1]`. Clamping here rather than at the value is what
-    // makes an out-of-range point read the **boundary** rather than an extrapolation: the fractional part pins to
-    // 0 or `n - 2`, so the blend is between the two outermost nodes.
+    // The clamp **accounting** is this class's and the blend is the free function's: one implementation of each,
+    // and the count stays a property of the table rather than of whoever sampled it.
     const double fx = (point.x - origin_.x) / spacing_.x;
     const double fy = (point.y - origin_.y) / spacing_.y;
     const double fz = (point.z - origin_.z) / spacing_.z;
     const double last_x = static_cast<double>(last_index(nx_));
     const double last_y = static_cast<double>(last_index(ny_));
     const double last_z = static_cast<double>(last_index(nz_));
+    if (fx < 0.0 || fy < 0.0 || fz < 0.0 || fx > last_x || fy > last_y || fz > last_z) ++clamped_;
 
-    const bool outside = fx < 0.0 || fy < 0.0 || fz < 0.0 || fx > last_x || fy > last_y || fz > last_z;
-    if (outside) ++clamped_;
-
-    const double cx = fx < 0.0 ? 0.0 : (fx > last_x ? last_x : fx);
-    const double cy = fy < 0.0 ? 0.0 : (fy > last_y ? last_y : fy);
-    const double cz = fz < 0.0 ? 0.0 : (fz > last_z ? last_z : fz);
-
-    // The cell's lower corner and the blend weights. `floor` of a value already inside `[0, n-1]` is at most
-    // `n-2` after the guard, so `i + 1 <= n - 1` and the eight reads are always in range.
-    const auto lower = [](double f, std::uint32_t n) -> std::uint32_t {
-        const double floor_f = std::floor(f);
-        const double max_lower = static_cast<double>(n >= 2 ? n - 2 : 0);
-        const double clamped = floor_f < 0.0 ? 0.0 : (floor_f > max_lower ? max_lower : floor_f);
-        return static_cast<std::uint32_t>(clamped);
-    };
-    const std::uint32_t i = lower(cx, nx_);
-    const std::uint32_t j = lower(cy, ny_);
-    const std::uint32_t k = lower(cz, nz_);
-    const double tx = cx - static_cast<double>(i);
-    const double ty = cy - static_cast<double>(j);
-    const double tz = cz - static_cast<double>(k);
-    const double s = 1.0 - tx;
-    const double t = 1.0 - ty;
-    const double u = 1.0 - tz;
-
-    const auto at = [this](std::uint32_t a, std::uint32_t b, std::uint32_t c) noexcept -> const double* {
-        return data_.data() + ((static_cast<std::size_t>(a) * ny_ + b) * nz_ + c) * 3;
-    };
-    const double* v000 = at(i, j, k);
-    const double* v100 = at(i + 1, j, k);
-    const double* v010 = at(i, j + 1, k);
-    const double* v110 = at(i + 1, j + 1, k);
-    const double* v001 = at(i, j, k + 1);
-    const double* v101 = at(i + 1, j, k + 1);
-    const double* v011 = at(i, j + 1, k + 1);
-    const double* v111 = at(i + 1, j + 1, k + 1);
-
-    Vec3 out{};
-    double* out_components[3] = {&out.x, &out.y, &out.z};
-    for (int component = 0; component < 3; ++component) {
-        const double w000 = v000[component] * s * t * u;
-        const double w100 = v100[component] * tx * t * u;
-        const double w010 = v010[component] * s * ty * u;
-        const double w110 = v110[component] * tx * ty * u;
-        const double w001 = v001[component] * s * t * tz;
-        const double w101 = v101[component] * tx * t * tz;
-        const double w011 = v011[component] * s * ty * tz;
-        const double w111 = v111[component] * tx * ty * tz;
-        *out_components[component] = w000 + w100 + w010 + w110 + w001 + w101 + w011 + w111;
-    }
-    return out;
+    return sample_baked(view(), origin_, spacing_, point);
 }
 
 }  // namespace qp::plugins::magnetosphere

@@ -266,4 +266,70 @@ private:
     mutable std::uint64_t clamped_ = 0;
 };
 
+/**
+ * @brief The trilinear read of a table somebody else owns, in **SI**.
+ *
+ * ## Why this is free rather than a member
+ *
+ * A `BakedField` is what a **baker** holds; a kernel and an emitter hold a `field::FieldValue` -- a descriptor and
+ * a borrowed pointer -- because that is what crosses the plugin boundary and what the field domain publishes into
+ * a `FieldSet`. Those two callers need the same arithmetic and must not each have their own copy of it: two
+ * trilinear samplers in one kit is two answers to "what is the field between two nodes", and the disagreement
+ * would show up as a particle that curves slightly differently from where an emitter launched it.
+ *
+ * The geometry travels beside the value because `abi::LatticeDesc` carries **counts** and not positions -- the
+ * same reason `BorisAdvancer` documents six parameter slots for it. The two must describe the same table: a
+ * mismatched origin is a box that is not where the samples are, and the result is a plausible field from the
+ * wrong place.
+ *
+ * Out of range and non-finite points are **clamped to the boundary node**, matching `BakedField::sample`: a
+ * linear extrapolation of a `1/r^3` field beyond the grid grows without bound and would hand a particle an
+ * enormous force for a reason nobody could see.
+ *
+ * @param table     The samples. Must be a volume of vectors, `f64` or `f32`; anything else reads as zero.
+ * @param origin_m  Where node `(0, 0, 0)` is, in metres.
+ * @param spacing_m The distance between neighbouring nodes, in metres. Each must be positive.
+ * @param point_m   Where to evaluate, in metres.
+ *
+ * @ownership   pure
+ * @thread      eval
+ * @pre         `table` is readable and describes a volume of at least 2 nodes an axis
+ * @post        On a node, exactly that node's value; between nodes, the trilinear blend; outside, the nearest
+ *              boundary node's value
+ * @invariant   Never reads outside the described lattice, for any input including a non-finite point
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.baked_field.a_kernel_and_an_emitter_read_the_same_table
+ */
+[[nodiscard]] Vec3 sample_baked(const qp::graph::field::FieldValue& table, const Vec3& origin_m,
+                                const Vec3& spacing_m, const Vec3& point_m) noexcept;
+
+/**
+ * @brief The same read for a scalar table -- the drag coefficient's shape.
+ *
+ * Separate rather than shared through a template in the header, because the two differ in what a point holds
+ * (three numbers or one) and a caller that had to instantiate a template to read a scalar would be paying for
+ * the other case's code.
+ *
+ * @param table     The samples. Must be a volume of scalars; anything else reads as zero.
+ * @param origin_m  Where node `(0, 0, 0)` is, in metres.
+ * @param spacing_m The distance between neighbouring nodes, in metres.
+ * @param point_m   Where to evaluate, in metres.
+ *
+ * @ownership   pure
+ * @thread      eval
+ * @pre         `table` is readable and describes a volume of at least 2 nodes an axis
+ * @post        The trilinear blend, clamped to the boundary as `sample_baked` is
+ * @invariant   Never reads outside the described lattice
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.baked_field.a_kernel_and_an_emitter_read_the_same_table
+ */
+[[nodiscard]] double sample_baked_scalar(const qp::graph::field::FieldValue& table, const Vec3& origin_m,
+                                         const Vec3& spacing_m, const Vec3& point_m) noexcept;
+
 }  // namespace qp::plugins::magnetosphere
