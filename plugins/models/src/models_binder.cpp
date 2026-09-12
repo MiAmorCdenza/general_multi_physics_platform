@@ -96,7 +96,6 @@ void add_common_ports(NodeDesc& desc, const char* initial_label, const char* rat
 
 std::vector<NodeDesc> ModelsBinder::node_types() {
     std::vector<NodeDesc> types;
-
     // ---- The damped harmonic oscillator ------------------------------------
     {
         NodeDesc d;
@@ -166,6 +165,38 @@ std::vector<NodeDesc> ModelsBinder::node_types() {
         types.push_back(std::move(d));
     }
 
+    // ---- The driven oscillator ---------------------------------------------
+    {
+        NodeDesc d;
+        d.type_name = kDrivenType;
+        d.label = "Driven oscillator";
+        d.description =
+            "x'' = -w0^2 x - gamma x' + F cos(wd t). Sweep wd to trace the resonance curve; the peak height "
+            "and width are set by the damping.";
+        d.category = "models";
+        d.version = 1;
+        d.allow_in_field_domain = true;
+        d.allow_in_particle_domain = false;
+        add_common_ports(d, "Initial displacement", "Initial velocity", "Displacement");
+        PortDesc omega0 = parameter(3, "omega0", "Natural frequency", "rad/s");
+        bound(omega0, 0.01, 1000.0, 0.1);
+        d.inputs.push_back(std::move(omega0));
+        PortDesc gamma = parameter(kFirstPhysicalPort, "gamma", "Damping", "1/s");
+        bound(gamma, 0.0, 100.0, 0.01);
+        d.inputs.push_back(std::move(gamma));
+        // Ports 5 and 6 are the **drive**, which is what makes this node different from the damped oscillator's
+        // port 4: that one has a decay rate and stops there, and this one has an amplitude and a frequency. Two
+        // ports rather than one because a resonance experiment varies them separately -- the frequency sweep is
+        // the measurement and the amplitude is the scale.
+        PortDesc force = parameter(5, "force", "Drive amplitude", "m/s^2");
+        bound(force, 0.0, 1000.0, 0.01);
+        d.inputs.push_back(std::move(force));
+        PortDesc drive = parameter(6, "omega_d", "Drive frequency", "rad/s");
+        bound(drive, 0.0, 1000.0, 0.1);
+        d.inputs.push_back(std::move(drive));
+        types.push_back(std::move(d));
+    }
+
     return types;
 }
 
@@ -181,6 +212,12 @@ bool ModelsBinder::can_bind(std::string_view type_name, const ex::StateView& lay
     }
     if (type_name == kProjectileType) {
         return layout.components_per_particle == kProjectileComponents;
+    }
+    if (type_name == kDrivenType) {
+        // Three, like the undamped oscillator and for a different reason: this model's third component is the
+        // **clock**, not a frequency. Two models sharing a component count is not a coincidence to rely on --
+        // `can_bind` asks each type separately, which is what the count being a per-type fact means.
+        return layout.components_per_particle == kDrivenComponents;
     }
     return false;
 }
@@ -206,6 +243,18 @@ std::unique_ptr<ex::IStateOperator> ModelsBinder::bind(std::string_view type_nam
         const double length = number(node, kFirstPhysicalPort, 1.0);
         if (!(g > 0.0) || !(length > 0.0)) return nullptr;
         return make_pendulum(g, length);
+    }
+    if (type_name == kDrivenType) {
+        // The natural frequency at port 3 like every other model, then the damping at 4 and the drive at 5 and
+        // 6. A default drive frequency **equal to the natural frequency** is deliberate: a node dropped on the
+        // canvas and run should show the interesting case, which for a driven oscillator is resonance. A default
+        // of zero would show a static deflection, which is a legitimate experiment and not the first one.
+        const double omega0 = number(node, 3, 12.0);
+        const double gamma = number(node, kFirstPhysicalPort, 0.5);
+        const double force = number(node, 5, 1.0);
+        const double drive = number(node, 6, omega0);
+        if (!(omega0 > 0.0) || gamma < 0.0 || drive < 0.0) return nullptr;
+        return make_driven_oscillator(omega0, gamma, force, drive);
     }
     // The projectile, which is the only remaining type `can_bind` accepts.
     const double g = number(node, 3, kStandardGravity);

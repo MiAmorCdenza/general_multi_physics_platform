@@ -86,6 +86,8 @@ public:
     static constexpr const char* kPendulumType = "model.pendulum";
     /// @brief The projectile: gravity with linear drag, stopped at the ground.
     static constexpr const char* kProjectileType = "model.projectile";
+    /// @brief The driven oscillator: `x'' = -w0^2 x - gamma x' + F cos(wd t)`.
+    static constexpr const char* kDrivenType = "model.driven_oscillator";
 
     /// @brief Gravity used where a model's port 3 is `g`, in m/s^2.
     ///

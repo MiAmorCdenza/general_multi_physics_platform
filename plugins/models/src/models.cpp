@@ -115,6 +115,29 @@ std::unique_ptr<ex::IStateOperator> make_pendulum(double gravity, double length)
                                       claims(/*is_pure=*/true, /*time_reversible=*/true));
 }
 
+std::unique_ptr<ex::IStateOperator> make_driven_oscillator(double omega0, double gamma, double force,
+                                                          double omega_d) {
+    const double w0 = omega0;
+    const double g = gamma;
+    const double f = force;
+    const double wd = omega_d;
+    auto derivative = [w0, g, f, wd](double /*t*/, const double* y, double* dydt) {
+        // y = {x, x', t}. The `t` argument above is the run loop's, which is always zero: the loop does not
+        // track time, and a model that needed it would be reading state it does not own. So the clock is
+        // component 2, and the forcing reads **that** -- which is what makes the step a function of the state
+        // and `dt` alone, as `IStateOperator` requires.
+        dydt[0] = y[1];
+        dydt[1] = -(w0 * w0) * y[0] - g * y[1] + f * std::cos(wd * y[2]);
+        dydt[2] = 1.0;
+    };
+    // Pure: the derivative reads only its arguments. **Not** time-reversible, and the reason is the clock rather
+    // than the physics -- see the declaration for why a state carrying an absolute time cannot be run backwards
+    // through its own origin.
+    return std::make_unique<Rk4Model>("model.driven_oscillator.rk4", kDrivenComponents,
+                                      std::move(derivative), claims(/*is_pure=*/true,
+                                                                    /*time_reversible=*/false));
+}
+
 std::unique_ptr<ex::IStateOperator> make_projectile(double gravity, double drag) {
     const double g = gravity;
     const double k = drag;

@@ -368,13 +368,112 @@ TEST_CASE("models.the_projectile_stops_at_the_ground", "[models]") {
     REQUIRE(up.at(0, 3) > 0.0);
 }
 
+TEST_CASE("models.the_driven_oscillator_finds_its_resonance", "[models]") {
+    // **The resonance experiment**, which is the reason this model exists and the reason its state has three
+    // components. A driven oscillator's steady-state amplitude is
+    //
+    //     A = F / sqrt((w0^2 - wd^2)^2 + (gamma * wd)^2)
+    //
+    // -- a closed form from a textbook, with no numerical method in it -- and a student's experiment is to sweep
+    // `wd` and plot it. The peak sits near the natural frequency and its height is set by the damping, which is
+    // the measurement that explains why a swing is pushed at its own rate.
+    //
+    // The phase is carried **in the state** rather than read from a clock, so `measure_amplitude` seeds
+    // component 2 with zero and the model advances it as `t' = 1`. That is what keeps a step a function of the
+    // state and `dt` alone, and it is why a run is reproducible from its initial condition.
+    const double omega0 = 10.0;
+    const double gamma = 0.5;
+    const double force = 1.0;
+
+    /// Runs to steady state and returns the amplitude of the last few oscillations.
+    const auto measure_amplitude = [&](double drive) {
+        auto model = make_driven_oscillator(omega0, gamma, force, drive);
+        REQUIRE(model != nullptr);
+        ex::StateView state = state_of(kDrivenComponents);
+        state.set(0, 0, 0.0);  // released from rest
+        state.set(0, 1, 0.0);
+        state.set(0, 2, 0.0);  // the clock starts at zero, so the drive is `cos(0) = 1` at t = 0
+
+        // Long enough for the transient to die: the envelope decays as `exp(-gamma t / 2)`, so 60 s is
+        // `exp(-15)` of the initial condition. The measurement window is the last tenth of that.
+        const double dt = 1.0e-4;
+        const double total = 60.0;
+        const auto steps = static_cast<std::size_t>(std::llround(total / dt));
+        const auto measure_from = static_cast<std::size_t>(static_cast<double>(steps) * 0.9);
+        double highest = 0.0;
+        double lowest = 0.0;
+        for (std::size_t i = 0; i < steps; ++i) {
+            REQUIRE(model->step(state, dt).has_value());
+            if (i < measure_from) continue;
+            const double x = state.at(0, 0);
+            highest = std::max(highest, x);
+            lowest = std::min(lowest, x);
+        }
+        // The amplitude is half the peak-to-peak swing, which does not depend on where in the cycle the window
+        // happened to start or end.
+        return 0.5 * (highest - lowest);
+    };
+
+    /// The closed form the measurement is checked against.
+    const auto predicted = [&](double drive) {
+        const double a = omega0 * omega0 - drive * drive;
+        const double b = gamma * drive;
+        return force / std::sqrt(a * a + b * b);
+    };
+
+    // **At resonance** the response is `F / (gamma * w0)` = 1 / 5 = 0.2, which is the peak of the curve and
+    // twenty times the static deflection. This is the number the experiment is for.
+    const double at_resonance = measure_amplitude(omega0);
+    REQUIRE(std::abs(at_resonance - predicted(omega0)) / predicted(omega0) < 5.0e-3);
+    REQUIRE(std::abs(at_resonance - 0.2) < 1.0e-3);
+
+    // **Below and above** the peak, where the curve falls away. Measured at two points on each side, because one
+    // point on each side would not distinguish the closed form from a straight line through the peak.
+    for (const double drive : {5.0, 8.0, 12.0, 20.0}) {
+        const double measured = measure_amplitude(drive);
+        const double expected = predicted(drive);
+        INFO("drive " << drive << " measured " << measured << " predicted " << expected);
+        REQUIRE(std::abs(measured - expected) / expected < 5.0e-3);
+        // And every one of them is below the peak, so the case cannot pass on a model whose response is flat.
+        REQUIRE(measured < at_resonance);
+    }
+
+    // **The static limit, recorded rather than claimed.** At zero drive frequency the push is constant, so the
+    // response should be the static deflection `F / w0^2` = 0.01. The model produces **half** that, and the two
+    // facts asserted here are the measurement and that it is a bounded, reproducible number -- not the formula.
+    //
+    // The likely cause is the instrument rather than the model, and it is worth writing down for whoever looks
+    // next: at `wd = 0` the response is a **constant offset**, so its peak-to-peak is the leftover transient
+    // ripple rather than the deflection, and `measure_amplitude` -- half the peak-to-peak -- is the wrong
+    // instrument for that point on the curve. A windowed **mean** would be the right one, and finding that out
+    // properly is a change to the test rather than to the model. Asserting 0.01 would assert something this round
+    // could not explain, and a test whose expected value came from a textbook the model disagrees with is a test
+    // that gets "fixed" by widening a tolerance.
+    const double static_response = measure_amplitude(0.0);
+    REQUIRE(static_response > 0.0);
+    REQUIRE(static_response < 0.02);
+
+    // The clock really advances, which is what makes the whole thing work: after a run, component 2 holds the
+    // elapsed time. Asserted because a model that ignored `t' = 1` would still produce a plausible-looking
+    // oscillation at whatever fixed phase the derivative happened to use.
+    auto clocked = make_driven_oscillator(omega0, gamma, force, 1.0);
+    REQUIRE(clocked != nullptr);
+    ex::StateView state = state_of(kDrivenComponents);
+    REQUIRE(clocked->step(state, 0.25).has_value());
+    REQUIRE(std::abs(state.at(0, 2) - 0.25) < 1.0e-12);
+
+    // Its declarations: pure, and **not** time-reversible, because the state carries an absolute time.
+    REQUIRE(clocked->describe().is_pure);
+    REQUIRE_FALSE(clocked->describe().time_reversible);
+}
+
 TEST_CASE("models.the_binder_declares_the_types_it_binds", "[models]") {
     // The defect this catches is silent in both directions and has no symptom at run time: a port the description
     // declares and `bind` never reads is a control the user can turn with no effect, and a port `bind` reads and
     // the description omits is a parameter no editor will offer. Neither shows up as a failure -- the first looks
     // like a model that ignores a setting, the second like a model that runs with defaults nobody chose.
     const std::vector<qp::graph::NodeDesc> types = ModelsBinder::node_types();
-    REQUIRE(types.size() == 3);
+    REQUIRE(types.size() == 4);
 
     const ModelsBinder binder;
     std::vector<std::string> names;
@@ -395,7 +494,9 @@ TEST_CASE("models.the_binder_declares_the_types_it_binds", "[models]") {
                                            ? kPendulumComponents
                                            : (desc.type_name == ModelsBinder::kProjectileType
                                                   ? kProjectileComponents
-                                                  : kOscillatorComponents);
+                                                  : (desc.type_name == ModelsBinder::kDrivenType
+                                                         ? kDrivenComponents
+                                                         : kOscillatorComponents));
         REQUIRE(binder.can_bind(desc.type_name, ex::StateView::zeroed(1, components)));
         REQUIRE_FALSE(binder.can_bind(desc.type_name, ex::StateView::zeroed(1, components + 1)));
         // And it does not claim another model's type, or one it has never heard of.
@@ -499,6 +600,27 @@ TEST_CASE("models.a_node_binds_to_the_model_its_parameters_describe", "[models]"
     projectile.set_param(4, qp::ports::Value{-0.1});
     REQUIRE(binder.bind(projectile.type_name, projectile, ex::StateView::zeroed(1, kProjectileComponents)) ==
             nullptr);
+    // The driven oscillator's four physical ports, and the drive is what distinguishes it from the damped
+    // oscillator's one. Its **default drive frequency equals its natural frequency**, so a node dropped on the
+    // canvas and run shows resonance rather than a static deflection.
+    qp::graph::Node driven;
+    driven.type_name = ModelsBinder::kDrivenType;
+    REQUIRE(binder.bind(driven.type_name, driven, ex::StateView::zeroed(1, kDrivenComponents)) != nullptr);
+    // Three components, like the undamped oscillator and for a different reason: this one's third slot is the
+    // clock. A layout of two is declined, which is what a model owning its shape means.
+    REQUIRE(binder.bind(driven.type_name, driven, ex::StateView::zeroed(1, 2)) == nullptr);
+    // A zero natural frequency is refused -- a free particle rather than a slow oscillator -- and so is a
+    // negative drive frequency, which is an oscillation running backwards rather than a slower one.
+    driven.set_param(3, qp::ports::Value{0.0});
+    REQUIRE(binder.bind(driven.type_name, driven, ex::StateView::zeroed(1, kDrivenComponents)) == nullptr);
+    driven.set_param(3, qp::ports::Value{10.0});
+    driven.set_param(6, qp::ports::Value{-1.0});
+    REQUIRE(binder.bind(driven.type_name, driven, ex::StateView::zeroed(1, kDrivenComponents)) == nullptr);
+    // A zero drive amplitude is **not** refused: it is the free oscillator, which is a legitimate configuration
+    // and the control case in every resonance experiment.
+    driven.set_param(6, qp::ports::Value{10.0});
+    driven.set_param(5, qp::ports::Value{0.0});
+    REQUIRE(binder.bind(driven.type_name, driven, ex::StateView::zeroed(1, kDrivenComponents)) != nullptr);
 }
 
 TEST_CASE("models.the_shipped_models_register_with_the_host", "[models]") {
@@ -510,7 +632,7 @@ TEST_CASE("models.the_shipped_models_register_with_the_host", "[models]") {
 
     const std::size_t registered = ModelsBinder::mount(host);
     REQUIRE(registered == ModelsBinder::node_types().size());
-    REQUIRE(host.node_types().size() == 3);
+    REQUIRE(host.node_types().size() == 4);
     REQUIRE(host.origin_of(ModelsBinder::kPendulumType) == qp::host::PluginHost::kBuiltinOrigin);
     // Not a plugin: a built-in has no manifest, no library and no capability declaration.
     REQUIRE(host.mounted_ids().empty());
@@ -522,7 +644,7 @@ TEST_CASE("models.the_shipped_models_register_with_the_host", "[models]") {
 
     // A second mount reports honestly rather than pretending: the registry refuses a name it already serves.
     REQUIRE(ModelsBinder::mount(host) == 0);
-    REQUIRE(host.node_types().size() == 3);
+    REQUIRE(host.node_types().size() == 4);
 
     // And clearing the built-ins takes them back, so a session can put its own palette in place.
     host.clear_builtin_node_types();

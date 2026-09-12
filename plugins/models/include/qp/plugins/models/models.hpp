@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file models.hpp
  * @brief The concrete physics this build ships: three models, and one RK4 that integrates all of them.
  *
@@ -83,6 +83,8 @@ namespace qp::plugins::models {
 inline constexpr std::size_t kOscillatorComponents = 3;  // x, x', w
 inline constexpr std::size_t kPendulumComponents = 2;    // th, th'
 inline constexpr std::size_t kProjectileComponents = 4;  // x, y, vx, vy
+/// Position, velocity and **time** -- the driven oscillator carries its own clock; see its declaration.
+inline constexpr std::size_t kDrivenComponents = 3;
 
 /**
  * @brief The largest state dimension `Rk4Model` accepts, and why there is a limit at all.
@@ -239,6 +241,57 @@ private:
  */
 [[nodiscard]] std::unique_ptr<qp::graph::execution::IStateOperator> make_pendulum(double gravity,
                                                                                  double length);
+
+/**
+ * @brief A **driven** oscillator: `x'' = -w0^2 x - gamma x' + F cos(wd t)`.
+ *
+ * The resonance experiment, and the one model here whose equation depends explicitly on time. A student sweeps
+ * the driving frequency and plots the response amplitude, which peaks near `w0` and whose width is set by the
+ * damping -- the measurement that explains why a swing is pushed at its natural rate and why a bridge can be
+ * destroyed by marching soldiers.
+ *
+ * ## Why the time is a state component
+ *
+ * `x'' = -w0^2 x - gamma x' + F cos(wd t)` is **not autonomous**: its right-hand side depends on `t` as well as
+ * on the state. The obvious implementation is to read a clock, and it is wrong for two reasons that both matter:
+ * a model that read the wall clock would not be reproducible from its seed, and a model that read the run loop's
+ * own step counter would be reaching for state it does not own -- which is exactly what `IStateOperator`'s
+ * contract forbids, because a step must depend on nothing but the state and `dt`.
+ *
+ * So the phase is carried **in the state** as its third component, with `t' = 1`. That makes the equation
+ * autonomous again: the derivative reads `t` from the state it was handed, and a step depends on nothing else.
+ * It is the standard trick for turning a non-autonomous system into an autonomous one, and it is worth the
+ * component because it keeps the model honest under time reversal as well -- stepping backwards with `dt < 0`
+ * runs `t` backwards, so the forcing runs backwards too.
+ *
+ * The component count is therefore **three**, not two. That is a different shape from the undamped and damped
+ * oscillators, and it is why `ModelsBinder` asks each of them for its own layout rather than assuming one.
+ *
+ * ## What it declares
+ *
+ * Pure, and **not** time-reversible, and the second is worth reading. The equation is as linear as the damped
+ * oscillator's, and `cos` has no preferred direction in time -- so the differential equation is reversible. What
+ * is not reversible is the **phase**: `t` is a monotonically increasing quantity with an origin, and stepping
+ * backwards past `t = 0` would run the drive through its own start. A model whose state carries an absolute time
+ * cannot be run backwards through that origin, so it says so rather than letting a round-trip test discover it.
+ *
+ * @param omega0  The natural angular frequency in rad/s. Must be finite and positive.
+ * @param gamma   The damping coefficient in 1/s. Must be finite and non-negative.
+ * @param force   The driving amplitude per unit mass, in m/s^2. Must be finite; zero is the free case.
+ * @param omega_d The driving angular frequency in rad/s. Must be finite and non-negative; zero gives a constant
+ *                push rather than an oscillation, which is a legitimate way to measure the static response.
+ *
+ * @ownership   owns
+ * @thread      main
+ * @pre         none
+ * @post        none
+ * @invariant   The third state component advances as `t' = 1`, whatever the other two do
+ * @errors      See `Rk4Model::step`
+ * @frozen      no
+ * @tests       models.the_driven_oscillator_finds_its_resonance
+ */
+[[nodiscard]] std::unique_ptr<qp::graph::execution::IStateOperator> make_driven_oscillator(
+    double omega0, double gamma, double force, double omega_d);
 
 /**
  * @brief A projectile under gravity with **linear** drag, stopped at the ground.
