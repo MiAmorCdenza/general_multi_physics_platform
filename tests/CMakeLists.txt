@@ -454,7 +454,8 @@ if(QP_BUILD_PLUGINS)
     qp_add_test(qp_test_plugins_experiments
         SOURCES unit/plugins/test_experiments.cpp
         LIBS qp::plugins::experiments qp::plugins::qpjson qp::plugins::models qp::authoring_persist
-             qp::graph_ir qp::graph_structure qp::graph_execution qp::units)
+             qp::authoring_document qp::authoring_commands qp::graph_ir qp::graph_structure
+             qp::graph_execution qp::units qp::views_model qp::runtime_file)
 endif()
 
 # The run loop. Qt-free and graph-only: every case drives a stub operator, so it belongs to the loop's

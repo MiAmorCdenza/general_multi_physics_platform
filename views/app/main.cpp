@@ -57,6 +57,10 @@
 #include <qp/plugins/instruments/instruments.hpp>
 #endif
 
+#if defined(QP_HAS_EXPERIMENT_PLUGIN)
+#include <qp/plugins/experiments/experiments.hpp>
+#endif
+
 #include <QApplication>
 #include <QDebug>
 #include <QtGlobal>
@@ -108,6 +112,32 @@ namespace {
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
 
+    // The composition root, built **first**, and the order is load-bearing rather than incidental.
+    //
+    // It used to be constructed after the formats, which was harmless while every format was self-contained --
+    // and stopped being harmless the moment one of them needed a node catalog. A teacher's experiment package
+    // describes each input it offers by asking the catalog what that input *is*: its label, its unit, its
+    // bounds. So the catalog has to exist before the format does, and the plugins loaded from the directory
+    // below are the ones that fill it. A format built against an empty catalog would not fail; it would
+    // silently describe every parameter as a bare number.
+    //
+    // The grant is written out rather than taken from `kKnownCapabilities`, and that is a decision rather than
+    // verbosity. A host that grants everything it knows cannot refuse anything, so the manifest check would
+    // pass for every plugin that parses -- and "what is this session allowed to do" would be answered by
+    // whichever plugins happened to be present. `field_domain` and `render_domain` are absent because no
+    // content in this build contributes to them; adding a plugin that does is how they get added here.
+    qp::host::PluginHost content_host{qp::plugin::Capability::node_types |
+                                      qp::plugin::Capability::kernels |
+                                      qp::plugin::Capability::file_io};
+    const std::string content_dir = plugin_directory(argc > 0 ? argv[0] : nullptr);
+    const qp::host::LoadReport loaded = content_host.load_directory(content_dir, "dll");
+    if (loaded.attempts() > 0) {
+        // To stderr, one line per attempt, because a plugin that did not mount is the single most common
+        // reason a user's palette is missing an entry -- and a window that opened without saying so would
+        // leave them reading the wrong file.
+        qWarning().noquote() << QString::fromStdString(loaded.to_text()).trimmed();
+    }
+
     // The one place that knows which plugins exist **in this build**. Mounting happens before the window is
     // built, because the window's controllers capture their lists during construction.
     //
@@ -132,24 +162,21 @@ int main(int argc, char** argv) {
     (void)qp::views::model::mount_export_format(&trace_exporter);
 #endif
 
-    // The other source of content: libraries this build did not link, loaded through the plugin host.
+#if defined(QP_HAS_EXPERIMENT_PLUGIN) && defined(QP_HAS_FORMAT_PLUGINS)
+    // The teaching-experiment bundle, mounted **over** the document format rather than beside it: it carries a
+    // whole `.qpd` as a nested member, so the two share one graph parser and a teacher's file loads through the
+    // same reader a `.qpd` does. Mounted second so the plain document is the default in a "save as" list -- a
+    // teacher who wants an experiment picks it deliberately, and a user who never heard of one gets the
+    // document.
     //
-    // The grant is written out rather than taken from `kKnownCapabilities`, and that is a decision rather than
-    // verbosity. A host that grants everything it knows cannot refuse anything, so the manifest check would
-    // pass for every plugin that parses -- and "what is this session allowed to do" would be answered by
-    // whichever plugins happened to be present. `field_domain` and `render_domain` are absent because no
-    // content in this build contributes to them; adding a plugin that does is how they get added here.
-    qp::host::PluginHost content_host{qp::plugin::Capability::node_types |
-                                      qp::plugin::Capability::kernels |
-                                      qp::plugin::Capability::file_io};
-    const std::string content_dir = plugin_directory(argc > 0 ? argv[0] : nullptr);
-    const qp::host::LoadReport loaded = content_host.load_directory(content_dir, "dll");
-    if (loaded.attempts() > 0) {
-        // To stderr, one line per attempt, because a plugin that did not mount is the single most common
-        // reason a user's palette is missing an entry -- and a window that opened without saying so would
-        // leave them reading the wrong file.
-        qWarning().noquote() << QString::fromStdString(loaded.to_text()).trimmed();
-    }
+    // This is also the only place the composition happens, and it has to be here: `plugins/experiments` takes an
+    // `IDocumentFormat&` rather than naming `qpjson`, so nothing but the application decides which format an
+    // experiment is written against. A second document format -- a binary one, say -- becomes a second
+    // experiment format by changing one line in this function and nothing in either plugin.
+    qp::plugins::experiments::ExperimentFormat experiment_format{document_format,
+                                                               content_host.node_types()};
+    qp::views::model::mount_document_format(&experiment_format);
+#endif
 
     // The measuring devices. They go through `add_builtin_instrument` for the same reason the editor's
     // demonstrator node types go through `add_builtin_node_type`: a contribution that bypassed the ledger would

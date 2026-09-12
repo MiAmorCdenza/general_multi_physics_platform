@@ -63,7 +63,8 @@
  *              experiments.a_refusal_is_the_documents_own,
  *              experiments.the_bundle_round_trips,
  *              experiments.a_loaded_experiment_runs,
- *              experiments.a_second_reading_uses_the_first_files_graph
+ *              experiments.a_second_reading_uses_the_first_files_graph,
+ *              experiments.the_bundle_is_what_the_file_menu_offers
  */
 #pragma once
 
@@ -199,6 +200,12 @@ public:
      * **not** checked here. They are checked by the delegated writer, which must refuse them anyway, and checking
      * them twice would be a second place for the rule to live. So a document this format cannot carry comes back
      * with the document format's own code, which is also the more useful message.
+     *
+     * The envelope's `name` is the document's **title**, and its `description` is not written, because
+     * `DocumentSource` is a graph and a title and nothing else. That is the interface's shape rather than this
+     * format's choice: an assignment is not part of a document, so it cannot come back out of one. A caller that
+     * owns one composes its own envelope -- which is what this format does to the document format, one level
+     * down.
      *
      * @param source The document to write, borrowed.
      * @param out    Receives the bytes. Cleared at entry.

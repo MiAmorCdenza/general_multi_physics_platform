@@ -163,4 +163,11 @@ if(QP_BUILD_PLUGINS)
     # difference between "the platform can measure" and "the platform can measure once somebody ships a plugin".
     target_compile_definitions(qp_shell PRIVATE QP_HAS_INSTRUMENTS_PLUGIN)
     target_link_libraries(qp_shell PRIVATE qp::plugins::instruments)
+
+    # The teaching-experiment bundle. Linked here for the same reason as the instruments: a teacher's file must
+    # open whether or not a plugin directory exists beside the executable. It composes with `qpjson` rather than
+    # replacing it -- see `main.cpp` for why the format is constructed over the document format instead of
+    # beside it -- so this definition and `QP_HAS_FORMAT_PLUGINS` are both required at the call site.
+    target_compile_definitions(qp_shell PRIVATE QP_HAS_EXPERIMENT_PLUGIN)
+    target_link_libraries(qp_shell PRIVATE qp::plugins::experiments)
 endif()

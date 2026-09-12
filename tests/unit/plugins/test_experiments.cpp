@@ -44,7 +44,11 @@
 #include <qp/plugins/models/models.hpp>
 #include <qp/plugins/models/models_binder.hpp>
 #include <qp/plugins/qpjson/qpjson_format.hpp>
+#include <qp/runtime/file/file.hpp>
 #include <qp/units/dimensions.hpp>
+#include <qp/views/model/document_controller.hpp>
+
+#include <support/temp_dir.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -334,11 +338,18 @@ TEST_CASE("experiments.the_bundle_round_trips", "[experiments]") {
     REQUIRE(parameter_of(again, "bob", "length")->value ==
             parameter_of(loaded, "bob", "length")->value);
 
-    // The name and the description are **not** in the bytes, and that is deliberate rather than a gap: `to_bytes`
-    // takes a `DocumentSource`, which is a graph and a title, because that is what the interface is about. An
-    // experiment's assignment lives in `Experiment`, and a caller that wants it in a file writes it as a member
-    // of the envelope it composes -- which is what the hand-written teacher file above already is.
-    REQUIRE(bytes.find("simple-pendulum") == std::string::npos);
+    // The name is the document's **title**, and the description is deliberately absent: `DocumentSource` is a
+    // graph and a title, because that is what a document is, so an assignment -- which is not part of one --
+    // cannot come back out of one. Round-tripping the identity is what this envelope can honestly do; a caller
+    // that owns an assignment composes its own envelope, which is what this format does one level down.
+    REQUIRE(bytes.find("\"simple-pendulum\"") == std::string::npos);
+    REQUIRE(bytes.find("\"name\": \"The simple pendulum\"") != std::string::npos);
+    REQUIRE(bytes.find("\"description\"") == std::string::npos);
+    // And reading the bundle back recovers the title as the title, and the name as the title too: the two are
+    // one fact written twice, which is why the assertion above is about the *assignment* rather than the name.
+    REQUIRE(again.name == "The simple pendulum");
+    REQUIRE(again.document.title == "The simple pendulum");
+    REQUIRE(again.description.empty());
 
     // Writing the same source twice produces the same bytes, so a save is idempotent and a bundle can be
     // compared rather than parsed.
@@ -415,6 +426,55 @@ TEST_CASE("experiments.a_loaded_experiment_runs", "[experiments]") {
     REQUIRE(measured > small_angle);
     const double predicted = small_angle * (1.0 + (0.2 * 0.2) / 16.0);
     REQUIRE(std::abs(measured - predicted) < 1.0e-3 * predicted);
+}
+
+TEST_CASE("experiments.the_bundle_is_what_the_file_menu_offers", "[experiments]") {
+    // **The case that stops this plugin from being the defect it was written to demonstrate.** Declared,
+    // documented, tested, and connected to nothing is the shape `plugins/instruments` had for a year, and a
+    // second document format that no menu ever offers is the same defect with a shorter name.
+    //
+    // `views/app/main.cpp` is where the composition happens -- the format is constructed over the document
+    // format and the host's catalog, and mounted -- so this case asserts the two facts that composition
+    // depends on: the description a registry keys on is distinct, and a bundle opens through the **document
+    // controller**, which is the path the File menu takes.
+    const qp::plugins::qpjson::QpJsonFormat documents;
+    qp::graph::NodeTypeRegistry catalog;
+    fill_catalog_with_the_models(catalog);
+    ExperimentFormat format{documents, catalog};
+
+    REQUIRE(format.format().name != documents.format().name);
+    REQUIRE(format.format().extensions.front() == "qpx");
+
+    qp::test::TempDir dir;
+    const std::string path = dir.path("pendulum.qpx");
+    REQUIRE(qp::runtime::write_whole_file(path, teacher_file()) == qp::runtime::FileOutcome::ok);
+
+    qp::authoring::Session session;
+    // The controller is handed a format list, which is what the application mounts. One entry is enough here:
+    // the question this case asks is whether an experiment opens through the **File menu's** path, not which
+    // format is default. The list is built explicitly rather than braced because `IDocumentFormat*` is
+    // non-const -- the controller may write through it -- and this case's format is a local `const`.
+    std::vector<qp::authoring::IDocumentFormat*> mounted{&format};
+    qp::views::model::DocumentController controller{session, std::move(mounted)};
+    const qp::views::model::DocumentReport opened = controller.open(format, path);
+    REQUIRE(opened.ok);
+    // The graph the file holds is on the session's canvas, which is the whole claim: a teacher's file opens as a
+    // document, not as a message about an unknown format.
+    REQUIRE(session.graph().node_count() == 1);
+    REQUIRE(session.graph().find_node(qp::graph::NodeId{1, 1}) != nullptr);
+
+    // And a file that is merely a document does not open as an experiment: the marker is required first, which
+    // is what makes "this is a different kind of file" a distinct answer rather than a parse error.
+    const std::string document_path = dir.path("plain.qpd");
+    REQUIRE(qp::runtime::write_whole_file(
+                document_path,
+                R"({"qp_document": 1, "title": "t", "graph": {"nodes": [], "edges": []}, "layouts": []})") ==
+            qp::runtime::FileOutcome::ok);
+    const qp::views::model::DocumentReport refused =
+        controller.open(const_cast<ExperimentFormat&>(format), document_path);
+    REQUIRE_FALSE(refused.ok);
+    // And the failed open left the loaded document alone, which is the controller's own promise.
+    REQUIRE(session.graph().node_count() == 1);
 }
 
 TEST_CASE("experiments.a_second_reading_uses_the_first_files_graph", "[experiments]") {

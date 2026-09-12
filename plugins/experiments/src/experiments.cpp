@@ -10,6 +10,7 @@
  */
 #include <qp/plugins/experiments/experiments.hpp>
 
+#include <qp/diag/logging.hpp>
 #include <qp/graph/ir/descriptor.hpp>
 #include <qp/graph/structure/graph.hpp>
 
@@ -282,12 +283,26 @@ qp::authoring::DocumentRefusal ExperimentFormat::to_bytes(const qp::authoring::D
     if (written != DocumentRefusal::ok) return written;
 
     std::string built;
-    built.reserve(document.size() + 64);
+    built.reserve(document.size() + 128);
     built += "{\"";
     built += kMarkerKey;
     built += "\": ";
     built += std::to_string(kVersion);
-    built += ",\n  \"document\": ";
+    // The name is the document's **title**, and the description is not written at all.
+    //
+    // That is a decision about a one-way member rather than an omission, and it is forced by the interface rather
+    // than chosen: `to_bytes` is handed a `DocumentSource`, which is a graph and a title, because that is what a
+    // *document* is. An experiment's assignment -- the description -- is not in a document and therefore cannot
+    // come back out of one. Writing the title as the name at least keeps the identity a round trip can preserve,
+    // and a caller that owns an assignment writes it by composing its own envelope around this one, which is
+    // exactly what the format does to the document format.
+    built += ",\n  \"name\": \"";
+    // Escaped by `diag`'s escaper rather than by a second one written here, for the reason `qpjson` gives about
+    // its own: a document and a log line quote the same way, and two implementations of one rule drift. The
+    // **title** is the name, and it is validated by the delegated writer before this runs -- which is what makes
+    // "every string in the envelope is already known to be UTF-8" a fact rather than a hope.
+    built += qp::diag::json_escape(std::string{source.title});
+    built += "\",\n  \"document\": ";
     built += document;
     built += "}\n";
     out = std::move(built);
