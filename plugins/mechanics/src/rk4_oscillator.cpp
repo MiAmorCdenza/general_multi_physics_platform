@@ -149,20 +149,19 @@ diag::Result<void> Rk4Oscillator::advance(const kernels::BatchView& batch,
         out[base + kPosition] = x + sixth * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
         out[base + kVelocity] = v + sixth * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
 
-        // The third component is reserved rather than free. Particle state travels as
-        // a lattice vector because the ABI fixes a description's stride at
-        // `component_count x element_size`, so a two-double state has no legal
-        // description of its own -- it is a vector whose third slot nothing reads.
+        // The third component is written as zero, not left alone.
         //
-        // Writing it is not tidiness. The host is free to hand over a buffer whose
-        // reserved slot holds a previous run's values, and leaving it alone would make
-        // the contents of a state buffer depend on its history: two runs of the same
-        // graph would produce buffers that differ in a component nobody integrates,
-        // and a byte-comparison regression test would fail for a reason that has
-        // nothing to do with the physics.
-        if (stride > kVelocity + 1) {
-            out[base + kVelocity + 1] = 0.0;
-        }
+        // Particle state travels as a lattice vector because the ABI fixes a description's
+        // stride at `component_count x element_size` and admits only 1 and 3 for f64 data --
+        // a two-double state has no legal description of its own, so it is a vector whose
+        // third slot this operator does not integrate.
+        //
+        // Zeroing it is not tidiness. The host may hand over a buffer whose third slot holds
+        // a previous run's values, and leaving it alone would make a state buffer's contents
+        // depend on its history: two runs of the same graph would produce buffers that
+        // differ in a component nobody integrates, and a byte-comparison regression test
+        // would fail for a reason that has nothing to do with the physics.
+        out[base + kVelocity + 1] = 0.0;
     }
 
     // The host advances the step counter, not the operator: two operators in one

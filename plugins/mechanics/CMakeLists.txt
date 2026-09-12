@@ -14,7 +14,9 @@
 # Dependency rule: plugins may depend on core, core may never depend on plugins.
 
 add_library(qp_plugins_mechanics STATIC
-    src/rk4_oscillator.cpp)
+    src/rk4_oscillator.cpp
+    src/incline.cpp
+    src/collision.cpp)
 
 add_library(qp::plugins::mechanics ALIAS qp_plugins_mechanics)
 

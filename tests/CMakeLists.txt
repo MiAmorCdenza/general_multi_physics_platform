@@ -449,6 +449,7 @@ set_tests_properties("qp_test_plugin_loader.all" PROPERTIES LABELS "unit;loader;
 if(QP_BUILD_PLUGINS)
     qp_add_test(qp_test_plugins_mechanics
         SOURCES unit/plugins/test_rk4_oscillator.cpp
+                unit/plugins/test_incline_collision.cpp
         LIBS qp::plugins::mechanics)
 endif()
 
