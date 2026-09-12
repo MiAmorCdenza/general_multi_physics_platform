@@ -477,6 +477,15 @@ if(QP_BUILD_PLUGINS)
         SOURCES unit/plugins/test_rk4_oscillator.cpp
                 unit/plugins/test_incline_collision.cpp
         LIBS qp::plugins::mechanics)
+
+    # Charter C7: fixed inputs, bit-for-bit comparison. Separate from the cases above because it
+    # answers a different question -- those assert the physics against closed forms, this asserts
+    # that the arithmetic has not moved by one bit. Labelled `golden` so it can be selected as a
+    # group, as the units golden test is.
+    qp_add_test(qp_test_plugins_golden
+        SOURCES golden/plugins/test_plugin_golden.cpp
+        LIBS qp::plugins::mechanics
+        LABELS "golden")
 endif()
 
 qp_add_test(qp_test_capability

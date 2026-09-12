@@ -60,6 +60,53 @@ else()
     endif()
 endif()
 
+# -- Floating-point determinism -----------------------------------------------
+#
+# **Every translation unit** gets these, globally rather than per target, because the property is
+# about the comparison between translation units: a kernel compiled with contraction and a test
+# compiled without it disagree in the last bit, and nothing in the source would say why.
+#
+# ## What this does and does not fix, stated separately because the difference matters
+#
+# These flags were added while investigating a golden-test failure, and an earlier version of this
+# comment claimed they **fixed** it. They did not. The record is worth keeping, because the
+# distinction is the whole reason the comment is here rather than in a commit message:
+#
+#   - **The observed failure was not contraction.** `plugin.golden.oscillator_bits` failed on MSVC
+#     with two velocity components off by one unit in the last place. The cause is recorded in this
+#     repository already, in `tests/unit/units/test_floating_point_env.cpp`: the MinGW target is
+#     **32-bit i686**, so `FLT_EVAL_METHOD == 2` and float expressions evaluate in **x87 80-bit
+#     extended precision**. An RK4 velocity accumulator is a chain of `a * b + c` whose
+#     intermediate carries eleven extra bits on one toolchain and not on the other. No compiler
+#     flag here removes that; it is a property of the target, and the golden test now **records**
+#     the divergence per component with the premise that explains it.
+#
+#   - **These flags prevent a different, latent failure.** GCC's default at `-O2` is
+#     `-ffp-contract=fast`, which contracts across statements. Nothing contracts on MinGW i686
+#     because the instruction set has no FMA -- so today's GCC build passes for an accident of
+#     architecture, and the project supports an x64 GCC configuration (ADR-0006) where a contracted
+#     expression would produce different bits from the MSVC build that is the reference. That would
+#     appear as a golden failure on somebody else's machine with no explanation in the source.
+#
+# So: the flags are a guard against a hazard that has not fired, not the repair of one that did.
+# Saying which is which is the difference between a comment that guides the next reader and one
+# that sends them looking in the wrong place -- which is exactly what happened here.
+#
+# Fast-math is pinned off as well even though nothing currently enables it: a flag that appears
+# later, in a target someone adds for performance, would otherwise silently break a property this
+# project spent a charter clause on.
+#
+# The cost is real and worth stating: disabling contraction gives up one fused instruction in hot
+# loops. That is a performance price paid for a correctness guarantee, and it is the trade the
+# platform's premise requires -- a physics result that cannot be reproduced is not a result.
+if(MSVC)
+    # `/fp:precise` is the documented switch that turns contraction off. `/fp:fast` would turn it
+    # on, and it is the setting a performance-minded contributor is most likely to reach for.
+    add_compile_options(/fp:precise)
+else()
+    add_compile_options(-ffp-contract=off -fno-fast-math)
+endif()
+
 add_library(qp_sanitize INTERFACE)
 if(QP_SANITIZE)
     target_compile_options(qp_sanitize INTERFACE -fsanitize=address,undefined -fno-omit-frame-pointer)
