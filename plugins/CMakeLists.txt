@@ -56,4 +56,12 @@ if(QP_BUILD_PLUGINS)
     # the second document format consumer, and it composes with the first rather than copying it, which is what
     # section 9.9 of the plan tree said could not be done without extracting the marshalling first.
     add_subdirectory(experiments)
+
+    # The geomagnetic field and the particles in it. It is its own directory rather than an entry in
+    # models/ because what it owns is a **field** -- a thing evaluated on a lattice and consumed as a
+    # slot by a particle kernel -- and because the field-model family it belongs to is one node per
+    # model, of which this is the first. See its CMakeLists for why the Tsyganenko family is not here
+    # yet: each needs an external Fortran expansion, and a dependency that heavy must be pulled by a
+    # real experiment rather than by symmetry.
+    add_subdirectory(magnetosphere)
 endif()

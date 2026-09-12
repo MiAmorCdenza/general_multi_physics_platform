@@ -456,6 +456,14 @@ if(QP_BUILD_PLUGINS)
         LIBS qp::plugins::experiments qp::plugins::qpjson qp::plugins::models qp::authoring_persist
              qp::authoring_document qp::authoring_commands qp::graph_ir qp::graph_structure
              qp::graph_execution qp::units qp::views_model qp::runtime_file)
+
+    # The geomagnetic field. It links nothing but `units`: the cases are arithmetic checked against closed forms
+    # and published values, and a case that also integrated a particle would have two possible causes for a
+    # failure and no way to tell them apart. The sign convention in particular is asserted here rather than
+    # through a trajectory, because a trajectory that drifts the wrong way takes thousands of steps to say so.
+    qp_add_test(qp_test_plugins_magnetosphere
+        SOURCES unit/plugins/test_magnetosphere.cpp
+        LIBS qp::plugins::magnetosphere qp::units)
 endif()
 
 # The run loop. Qt-free and graph-only: every case drives a stub operator, so it belongs to the loop's
