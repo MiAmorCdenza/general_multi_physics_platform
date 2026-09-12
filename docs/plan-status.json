@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "L0 全部完成（reflect 单一名字来源 + plugin 加载器）；下一步 plugins/ 内容：力学三例（弹簧振子/斜面/碰撞）",
+  "updated": "plugins/ 内容开始落地（mechanics RK4 谐振子）；核心独立性由可执行门禁守住",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -42,7 +42,7 @@
     },
     "compiler_matrix": {
       "state": "passing",
-      "detail": "GCC 15.2.0 (MinGW i686) 503/503 与 MSVC 19.51 (x64) 504/504（MSVC 多一项是 Qt 视图层测试：Qt 只有 MSVC x64 套件）；见 ADR-0004。**本阶段起视图层进了矩阵**：QP_BUILD_VIEWS 默认 OFF 且 build.ps1 从不传它，于是『双编译器全绿』指的只是 core/——views/qt/（画布、属性面板、编辑器窗口）不被任何门禁、任何矩阵条目、任何测试运行编译，它可以停止编译而整个仓库的每个信号都保持绿色。这是最坏的一种缺口，因为界面正是用户唯一碰得到的部分，而它此前只靠「有人记得手工配置一次」来验证。现在 MSVC 一档在发现 Qt 套件时自动打开视图层，找不到就跳过并说明（core/ 按契约必须能在没有 Qt 时构建，缺 Qt 不能变成 core 开发者的红灯）。这一档立刻赚回了成本：GCC 因为 libstdc++ 的传递包含而接受了 test_loader.cpp 缺少 <algorithm>，MSVC 以 C2039 拒绝——一个靠意外存在的 include 会一直编译到某个库头文件重排的那天。"
+      "detail": "GCC 15.2.0 (MinGW i686) 514/514 与 MSVC 19.51 (x64) 515/515（MSVC 多一项是 Qt 视图层测试：Qt 只有 MSVC x64 套件）；见 ADR-0004。**视图层与插件内容都在矩阵里**：QP_BUILD_VIEWS 与 QP_BUILD_PLUGINS 默认 OFF，而 build.ps1 从不传它们，于是『双编译器全绿』指的只是 core/——views/qt/（画布、属性面板、编辑器窗口）不被任何门禁、任何矩阵条目、任何测试运行编译，它可以停止编译而整个仓库的每个信号都保持绿色。这是最坏的一种缺口，因为界面正是用户唯一碰得到的部分，而它此前只靠「有人记得手工配置一次」来验证。现在两档都显式打开。这一档立刻赚回了成本：GCC 因为 libstdc++ 的传递包含而接受了 test_loader.cpp 缺少 <algorithm>，MSVC 以 C2039 拒绝。"
     },
     "cmake_graph": {
       "state": "passing",
@@ -61,10 +61,15 @@
       "tool": "scripts/package.ps1",
       "state": "passing",
       "detail": "组装可分发目录：qp_shell.exe + Qt DLL + 平台插件 + LICENSE / NOTICE / THIRD_PARTY_NOTICES.md + LICENSE.LGPLv3，并**验证产物在把 Qt 目录从 PATH 移除后仍能启动**——只在构建机上能跑的包会通过其它所有检查，所以这一步才是「可分发」这个词的凭据。LGPLv3 全文刻意不入库（仓库里没有 Qt 代码，入库会造成误导），脚本从已安装副本定位，找不到就失败而不是产出一个看起来完整的包。包内容**必须与 NOTICE 声明一致**：首次运行产物里有 Qt6Network 与 tls/networkinformation 插件，而 NOTICE 只声明三个模块——两份文件各自为真却互相矛盾，接收者读到的许可文件描述的是另一个产物。弥合方向是收窄包（--no-network），不是放宽 NOTICE：给一个没有网络功能的课堂工具塞进整套网络栈，既更大又凭空扩大许可面。Qt6Svg 确实会被图标引擎拉进来，因此写进了声明。"
+    },
+    "core_standalone": {
+      "tool": "tests/meta/check_core_standalone.py",
+      "state": "passing",
+      "detail": "把章程那句『views/ 与 plugins/ 可以整个删掉，core/ 仍能编译并通过全部测试』从文档里的一句话变成可执行的检查。层门禁只守住了 include 那一半：**目录可以被依赖而没有任何 include 指向它**——CMake 可以无条件引用它（配置期失败），测试可以按路径读它的文件（于是『core 的套件在没有插件时通过』变成『因为没人那样跑过』）。本检查把构建输入复制到临时树里删掉两个 content 目录再配置。**它第一次运行就抓到一处真实违规**：根 CMakeLists 里 `add_subdirectory(views/model)` 是无条件的，紧挨着它的注释还写着『core 不得依赖 views』——而那一行本身让 core 在没有 views 时配置失败，报错还指向消费者故意没有取的那个路径。断言写在文档里，违规写在一行调用里，这就是每一条悄悄失效的承诺的形状。守卫改成 EXISTS（而不是新加一个选项：选项需要有人记得），且只对 views/model 用 EXISTS而不挂到 QP_BUILD_VIEWS 上——那一半是 Qt 无关的普通 C++，存在的理由正是让**链不了 Qt 的 GCC 构建**也能断言属性面板的编辑器选择规则；挂到 Qt 选项上会让这份覆盖静默消失而套件计数依然健康。本检查自己有反例夹具：临时把守卫去掉后必须失败，恢复后必须通过，两次都验证过。"
     }
   },
   "test_stats": {
-    "ctest_registered": 504,
+    "ctest_registered": 515,
     "compilers_green": [
       "gcc-15.2.0-i686",
       "msvc-19.51-x64"
@@ -218,8 +223,8 @@
     {
       "path": "plugins",
       "layer": "content",
-      "state": "planned",
-      "note": "可整体删除"
+      "state": "implemented",
+      "note": "内容层开始落地：plugins/mechanics 的 RK4 谐振子积分器是本仓库第一个真实插件。**契约在地基，积分器是内容**——core/graph/kernels 拥有算子契约而不含任何积分器，因为 RK4/蛙跳/Verlet/Boris 都是站得住脚的答案，哪一个对取决于物理、课程要求的精度、以及学生该从「看着它失败」里学到什么。把其中一个做进地基会让其余的变成二等公民，而第一个需要辛普列克特性质的教师就得去改地基。本阶段第二处错误很典型：算子起初用 component_count(components()) 当步长，而标量格子的该值是 1——于是两 double 的状态被按步长 1 读，第一个粒子动了一点，第二个粒子的位置被当成了第一个粒子的速度，之后所有数据都累加到了不再对应任何粒子的位置。ABI 把每个采样点的字节数定死为 component_count x element_size 并用 is_consistent 强制，所以算子必须用 abi::expected_spacing 而不是自己算：步长是缓冲区的属性，绝不是算子对物理的想法。第三处是测试自身的诚实问题，两半都由测量而非假设得到结论：RK4 在谐振子上确实耗散，但在 dt=1e-3 时该耗散**低于 double 的分辨率**（实测四百万步后能量反而上升 1.2e-13，纯舍入），而耗散律是 dt^6 而不是截断误差的 dt^4（|R(iy)|^2 = 1 - y^6/72 + O(y^8)）。测试因此改为在能观测到的步长上测量并**直接测出阶数**，而不是把一个在噪声下不可观测的性质断言成一个常量——后者会因为『放宽到噪声也能满足』而永远不再失败。"
     }
   ],
   "licence": {

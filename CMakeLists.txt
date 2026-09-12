@@ -196,21 +196,44 @@ endif()
 # Note: the core layer is always present; views / plugins are consumers, switchable off
 add_subdirectory(core)
 
-# The Qt-FREE half of the view layer, added unconditionally.
+# The view layer, in two halves behind two different guards.
 #
-# It lives outside core/ because it is a consumer -- core must not depend on it --
-# but it needs no Qt, so it is built in every configuration. That is deliberate: the
-# property panel's editor-selection rule is the part of the view layer most likely
-# to be subtly wrong, and keeping it here means it is asserted on BOTH compilers,
-# including the GCC build that cannot link Qt at all.
+# `views/model` is Qt-free and `views` needs Qt. Both are **content**: deleting `views/`
+# is a thing `docs/plan-tree.md` states as the core assertion of the whole layering
+# scheme, and a downstream consumer vendoring `core/` alone will do it.
 #
-# The Qt half (views/) stays behind QP_BUILD_VIEWS.
-add_subdirectory(views/model)
-
-if(QP_BUILD_VIEWS)
+# The Qt-free half is guarded on existence **only**, not on an option, and the
+# distinction is the difference between two real costs. `views/model` holds the property
+# panel's editor-selection rule -- the part of the view layer most likely to be subtly
+# wrong -- and it is plain C++ precisely so the GCC build can assert it. Putting it
+# behind QP_BUILD_VIEWS would chain it to the Qt option, and Qt 6 ships no 32-bit kit, so
+# the GCC build can never set that option: the coverage would disappear while every count
+# in the suite still looked healthy.
+#
+# The original code was an unconditional `add_subdirectory(views/model)` with a comment
+# beside it saying core must not depend on views -- while the line itself made core's
+# configuration fail without it:
+#
+#     add_subdirectory given source "views/model" which is not an existing directory
+#
+# Nothing caught it. The layer gate reads `#include` lines and there is no include
+# pointing at `views/model`; the dependency lived in the build system. A claim was in a
+# document and the violation was in a one-line call, which is the shape of every promise
+# that quietly stops being true.
+#
+# `EXISTS` is what makes the directory genuinely optional: present, it builds everywhere;
+# absent, nothing references it and configuration proceeds.
+#
+# `tests/meta/check_core_standalone.py` configures a copy of this tree with the content
+# directories removed, so the next time one of these lines loses its guard the suite says
+# so instead of a consumer's build saying so.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/views/model")
+    add_subdirectory(views/model)
+endif()
+if(QP_BUILD_VIEWS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/views")
     add_subdirectory(views)
 endif()
-if(QP_BUILD_PLUGINS)
+if(QP_BUILD_PLUGINS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/plugins")
     add_subdirectory(plugins)
 endif()
 

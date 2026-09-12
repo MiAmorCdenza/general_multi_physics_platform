@@ -32,10 +32,10 @@ find_package(Python3 COMPONENTS Interpreter QUIET)
 # -- Contract completeness gate (enforcement.md §5) --------------------------
 if(Python3_Interpreter_FOUND)
     # `--exclude views` hands the view layer's tests to the second invocation
-    # below. Test ownership is a global judgement: the gate checks both that every
-    # @tests id exists and that every TEST_CASE is claimed, so two invocations must
-    # see **disjoint** sets of test cases or each reports the other's legitimate
-    # cases as orphans.
+    # below, and `plugins` to the third. Test ownership is a global judgement: the
+    # gate checks both that every @tests id exists and that every TEST_CASE is
+    # claimed, so the invocations must see **disjoint** sets of test cases or each
+    # reports the other's legitimate cases as orphans.
     add_test(NAME gate.contracts
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_contracts.py
@@ -43,6 +43,7 @@ if(Python3_Interpreter_FOUND)
                 --tests   ${CMAKE_SOURCE_DIR}/tests
                 --exclude unit/views
                 --exclude model
+                --exclude plugins
                 --quiet)
     set_tests_properties(gate.contracts PROPERTIES
         LABELS "gate"
@@ -79,6 +80,34 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(gate.contracts.views PROPERTIES
         LABELS "gate"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+    # The third partition: plugin content.
+    #
+    # Plugins carry contracts like everything else, and for the same reason -- their
+    # headers are the documentation a future author reads before writing a fourth
+    # integrator -- so they need a gate that scans their headers and sees only their
+    # test cases.
+    #
+    # This one is **unconditional**, unlike the test target it complements, which is
+    # built only with QP_BUILD_PLUGINS. The asymmetry is deliberate: a header that
+    # exists in the source tree but is never compiled is exactly the one that rots,
+    # and checking its contract comments costs nothing while compiling it costs a
+    # toolchain. The alternative -- skipping the gate when the plugin is off -- would
+    # mean the gate's coverage depends on a configure flag, so a contract could be
+    # broken on the machine of whoever has that flag off and discovered by whoever
+    # turns it on.
+    if(EXISTS ${CMAKE_SOURCE_DIR}/plugins/mechanics)
+        add_test(NAME gate.contracts.plugins
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/scripts/check_contracts.py
+                    --headers ${CMAKE_SOURCE_DIR}/plugins
+                    --tests   ${CMAKE_SOURCE_DIR}/tests
+                    --only    plugins
+                    --quiet)
+        set_tests_properties(gate.contracts.plugins PROPERTIES
+            LABELS "gate"
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    endif()
 
 else()
     message(WARNING "未找到 Python3，跳过 gate.contracts（契约门禁未启用）")
@@ -207,6 +236,26 @@ if(Python3_Interpreter_FOUND)
                 ${CMAKE_SOURCE_DIR}/tests/meta/check_dialect_gate.py)
     set_tests_properties(meta.dialect_checker PROPERTIES
         LABELS "gate"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+endif()
+
+# -- Core standalone: views/ and plugins/ must really be deletable -----------
+#
+# `docs/plan-tree.md` calls this the core assertion of the whole layering scheme, and
+# the layer gate only enforces the include half of it. This check configures a copy of
+# the tree with both content directories removed, which is the consumer's situation.
+#
+# It found a real violation the first time it ran: `add_subdirectory(views/model)` was
+# unconditional, so deleting views/ broke configuration with a message naming a path
+# the consumer had deliberately not taken.
+if(Python3_Interpreter_FOUND)
+    add_test(NAME meta.core_standalone
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/meta/check_core_standalone.py)
+    set_tests_properties(meta.core_standalone PROPERTIES
+        LABELS "gate"
+        # A configure of a copied tree, so it is seconds rather than milliseconds.
+        TIMEOUT 600
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 endif()
 
@@ -392,6 +441,17 @@ catch_discover_tests(qp_test_plugin_loader
 add_test(NAME "qp_test_plugin_loader.all" COMMAND qp_test_plugin_loader)
 set_tests_properties("qp_test_plugin_loader.all" PROPERTIES LABELS "unit;loader;aggregate")
 
+# -- Plugin content -----------------------------------------------------------
+#
+# Built only with QP_BUILD_PLUGINS, so core/ configures and its whole suite passes
+# with plugins/ deleted. That is the promise the layer gate enforces structurally
+# and this conditional enforces at configure time.
+if(QP_BUILD_PLUGINS)
+    qp_add_test(qp_test_plugins_mechanics
+        SOURCES unit/plugins/test_rk4_oscillator.cpp
+        LIBS qp::plugins::mechanics)
+endif()
+
 qp_add_test(qp_test_capability
     SOURCES unit/authoring/test_capability.cpp
     LIBS qp::authoring_capability)
@@ -429,9 +489,16 @@ qp_add_test(qp_test_runtime_io
 # see disjoint sets of test cases or each reports the other's legitimate cases as
 # orphans -- and the Qt-side file in tests/unit/views/ is one the gate cannot see at
 # all, because it needs a toolkit to compile.
-qp_add_test(qp_test_views_model
-    SOURCES model/test_views_model.cpp
-    LIBS qp::views_model)
+#
+# Guarded on the **target**, not on a variable. `views/` is content and may be deleted
+# from a consumer's checkout entirely, so this file cannot assume the target exists:
+# CMake's `if(TARGET ...)` is the honest way to ask, and it stays correct whether the
+# directory is missing, the option is off, or the two disagree.
+if(TARGET qp::views_model)
+    qp_add_test(qp_test_views_model
+        SOURCES model/test_views_model.cpp
+        LIBS qp::views_model)
+endif()
 
 # The Qt half of the view layer is tested only when Qt is in the build. Guarded
 # rather than skipped: a test that silently does nothing would look like coverage,

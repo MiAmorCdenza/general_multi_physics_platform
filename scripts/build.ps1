@@ -114,8 +114,11 @@ function Invoke-Toolchain {
 
 # -- GCC (MinGW-w64) ----------------------------------------------------------
 if ($Only -in @("all", "gcc")) {
+    # Plugins too, for the same reason as MSVC: content that no matrix entry compiles
+    # is content that rots, and both compilers have to accept it. Qt stays off -- this
+    # is the build that proves core/ and plugins/ do not need it.
     Invoke-Toolchain -Name "GCC (MinGW-w64)" -BuildDir "build" -Generator "Ninja" `
-        -Compiler "g++" -EnvSetup { }
+        -Compiler "g++" -ExtraArgs @("-DQP_BUILD_PLUGINS=ON") -EnvSetup { }
 }
 
 # -- MSVC ---------------------------------------------------------------------
@@ -152,7 +155,10 @@ if ($Only -in @("all", "msvc")) {
             }
         }
 
-        $msvcArgs = @()
+        # Plugin content is in the matrix unconditionally. It is toolchain-neutral, and
+        # leaving it out would recreate exactly the gap views/ had: a directory of real
+        # code that no entry point in this repository ever compiled.
+        $msvcArgs = @("-DQP_BUILD_PLUGINS=ON")
         if ($qtFound.Count -gt 0) {
             $msvcArgs += "-DQP_BUILD_VIEWS=ON"
             Write-Host "  Qt kit: $($qtFound[0].FullName) -- 同时构建并测试 Qt 视图层" -ForegroundColor DarkGray
