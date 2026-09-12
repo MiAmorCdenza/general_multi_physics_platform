@@ -266,6 +266,19 @@ L0 是本项目唯一不可插件化的部分，也是接口面必须最小的�
 | 关键决策 | **新端口类型自动获得可编辑 UI**——加一种类型不需要动任何面板代码 |
 | 依赖 | `ports`, `capability` |
 
+### 5.6 `core/authoring/persist/` —— 存取契约
+
+| 项 | 内容 |
+|---|---|
+| 职责 | 「文档 ↔ 字节」的契约：`DocumentSnapshot`/`DocumentSource`、`DocumentRefusal`、`IDocumentFormat` |
+| 关键类型 | `IDocumentFormat`, `DocumentFormatDesc`, `DocumentSnapshot`, `DocumentSource`, `DocumentRefusal` |
+| 关键决策 | **格式是插件，问题形状不是**：JSON／紧凑二进制／教师用 YAML 都是选择，选择属于内容（§2.2）；但「文档怎么变成字节、怎么变回来、失败叫什么名字」必须是地基，否则每个格式各写一套 |
+| 关键决策 | 写**借用**、读**拥有**：保存路径不得持有图的第二份副本（第二份副本就是第二个答案，两者必然漂移）；而刚解析出来的图总得住在某处，只有调用者知道住哪 |
+| 关键决策 | 拒绝是一个**码**而不是 bool：`malformed` 与 `unsupported_version` 是两种问题、两种修法 |
+| 依赖 | `ir`, `structure`, `document` |
+
+> 为什么单独一个模块而不是塞进 `document`：`document` 的依赖表刻意只到 `ir`，它的文件头写明「文档描述一张图，不持有第二张图」。保存要按值拿到图，那就需要 `structure`——为一个它明说不做的职责去放宽它的依赖表，比新增一个模块更贵。
+
 ---
 
 ## 6. 消费者与内容（不在 `core/`）
@@ -291,6 +304,7 @@ L0 是本项目唯一不可插件化的部分，也是接口面必须最小的�
 | `kernels/` | Boris、蛙跳、RK4、Verlet 的具体实现 |
 | `instruments/` | 具体仪器（含误差模型） |
 | `analysis/` | 回归、不确定度传播、卡方、残差分析 |
+| `formats/` | 具体格式：`qpjson/`（文档，JSON 文本）；后续 `csv/`（迹导出）等 |
 | `views_items/` | 场线、粒子、拖尾等渲染项（三来源：内置 / 用户热扫描 / 节点内联） |
 | `experiments/` | L1 教师层 YAML 实验描述 |
 | `examples/` | 示例图库 |
@@ -354,6 +368,8 @@ units ← diag ← ports ← reflect
               field
 ─────────────────────────（core 边界：以下禁止被 core 依赖）
 runtime → authoring
+            ↑
+        persist（document + structure：格式是插件，契约是地基）
 ─────────────────────────
 views, plugins        （消费者，core 不得 include）
 ```

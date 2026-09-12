@@ -47,6 +47,34 @@ int utf8_sequence_length(unsigned char lead) noexcept {
 /// @brief True when `c` is a UTF-8 continuation byte (10xxxxxx).
 bool is_continuation(unsigned char c) noexcept { return (c & 0xC0) == 0x80; }
 
+/// @brief Whether the `len` bytes starting at `i` form a legal UTF-8 sequence.
+///
+/// The one place legality is decided. `json_escape` replaces an illegal byte with `?` and
+/// `is_valid_utf8` refuses a string that contains one; a second copy of these rules would let the two
+/// drift, and the drift would look like a document that validates and then saves corrupted.
+bool is_legal_sequence(std::string_view in, std::size_t i, int len) noexcept {
+    if (len <= 1) return false;   // 0 means the lead byte cannot start a sequence
+    if (i + static_cast<std::size_t>(len) > in.size()) return false;   // truncated
+    for (int k = 1; k < len; ++k) {
+        if (!is_continuation(static_cast<unsigned char>(in[i + static_cast<std::size_t>(k)]))) {
+            return false;
+        }
+    }
+    // Reject overlong encodings, surrogates and out-of-range code points, which
+    // are structurally well formed but not legal UTF-8.
+    const auto c = static_cast<unsigned char>(in[i]);
+    if (len == 3) {
+        const auto c1 = static_cast<unsigned char>(in[i + 1]);
+        if (c == 0xE0 && c1 < 0xA0) return false;
+        if (c == 0xED && c1 > 0x9F) return false;
+    } else if (len == 4) {
+        const auto c1 = static_cast<unsigned char>(in[i + 1]);
+        if (c == 0xF0 && c1 < 0x90) return false;
+        if (c == 0xF4 && c1 > 0x8F) return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 Severity Diagnostic::severity() const noexcept { return severity_of(code_); }
@@ -141,30 +169,7 @@ std::string json_escape(const std::string& in) noexcept {
         // through would produce a file no JSON parser accepts, which loses the
         // entire log rather than one character.
         const int len = utf8_sequence_length(c);
-        bool valid = len > 1 && i + static_cast<std::size_t>(len) <= in.size();
-        if (valid) {
-            for (int k = 1; k < len; ++k) {
-                if (!is_continuation(static_cast<unsigned char>(in[i + static_cast<std::size_t>(k)]))) {
-                    valid = false;
-                    break;
-                }
-            }
-        }
-        if (valid) {
-            // Reject overlong encodings, surrogates and out-of-range code
-            // points, which are structurally well formed but not legal UTF-8.
-            if (len == 3) {
-                const auto c1 = static_cast<unsigned char>(in[i + 1]);
-                if (c == 0xE0 && c1 < 0xA0) valid = false;
-                if (c == 0xED && c1 > 0x9F) valid = false;
-            } else if (len == 4) {
-                const auto c1 = static_cast<unsigned char>(in[i + 1]);
-                if (c == 0xF0 && c1 < 0x90) valid = false;
-                if (c == 0xF4 && c1 > 0x8F) valid = false;
-            }
-        }
-
-        if (valid) {
+        if (is_legal_sequence(in, i, len)) {
             out.append(in, i, static_cast<std::size_t>(len));
             i += static_cast<std::size_t>(len);
         } else {
@@ -175,6 +180,21 @@ std::string json_escape(const std::string& in) noexcept {
         }
     }
     return out;
+}
+
+bool is_valid_utf8(std::string_view in) noexcept {
+    std::size_t i = 0;
+    while (i < in.size()) {
+        const auto c = static_cast<unsigned char>(in[i]);
+        if (c < 0x80) {
+            ++i;
+            continue;
+        }
+        const int len = utf8_sequence_length(c);
+        if (!is_legal_sequence(in, i, len)) return false;
+        i += static_cast<std::size_t>(len);
+    }
+    return true;
 }
 
 std::string JsonFormatter::format(const Diagnostic& d) const noexcept {

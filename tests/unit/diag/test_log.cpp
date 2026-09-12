@@ -478,6 +478,66 @@ TEST_CASE("diag.log.json_escape_replaces_invalid_utf8", "[diag][log]") {
 }
 
 // ===========================================================================
+// UTF-8 legality
+// ===========================================================================
+
+TEST_CASE("diag.log.valid_utf8_accepts_legal_sequences", "[diag][log]") {
+    using qp::diag::is_valid_utf8;
+    REQUIRE(is_valid_utf8(""));
+    REQUIRE(is_valid_utf8("plain ascii"));
+    REQUIRE(is_valid_utf8("\x7f"));                                    // DEL is legal
+    REQUIRE(is_valid_utf8("\xc2\x80"));                                // shortest encoding of U+0080
+    REQUIRE(is_valid_utf8("\xc3\xa9\xe2\x82\xac\xf0\x9f\x94\xac"));    // 2, 3 and 4 byte sequences
+    REQUIRE(is_valid_utf8("\xf4\x8f\xbf\xbf"));                        // U+10FFFF, the last code point
+}
+
+TEST_CASE("diag.log.valid_utf8_rejects_illegal_ones", "[diag][log]") {
+    using qp::diag::is_valid_utf8;
+    // Each of these is a class of input a file picker can hand a parser, so each is a real answer
+    // rather than a curiosity: a stray continuation byte, a truncated sequence, an overlong encoding
+    // (which is how a path traversal is smuggled past a filter that decodes it), a surrogate half, and
+    // a code point past the end of Unicode.
+    REQUIRE_FALSE(is_valid_utf8("\x80"));
+    REQUIRE_FALSE(is_valid_utf8("\xe2\x82"));
+    REQUIRE_FALSE(is_valid_utf8("\xc0\xaf"));
+    REQUIRE_FALSE(is_valid_utf8("\xed\xa0\x80"));
+    REQUIRE_FALSE(is_valid_utf8("\xf5\x80\x80\x80"));
+    REQUIRE_FALSE(is_valid_utf8("\xff"));
+    // Valid text around an illegal byte is still an illegal string: the whole point of asking is that
+    // one bad byte is enough to make escaping lossy.
+    REQUIRE_FALSE(is_valid_utf8("a\x80z"));
+    REQUIRE_FALSE(is_valid_utf8("caf\xc3\xa9\x80"));
+}
+
+TEST_CASE("diag.log.valid_utf8_agrees_with_json_escape", "[diag][log][property]") {
+    // The two functions must not form separate opinions about legality. Escaping rewrites a string
+    // exactly when it contains a byte that is not legal UTF-8 -- or a character that needs escaping --
+    // so on inputs with nothing else to escape the two answers are the same answer.
+    //
+    // If this ever fails, a caller that validated a document and then saved it would be saving
+    // something other than what it validated.
+    using qp::diag::is_valid_utf8;
+    using qp::diag::json_escape;
+    const std::string inputs[] = {
+        "",
+        "plain",
+        "\xc3\xa9",
+        "\xe2\x82\xac",
+        "\xf0\x9f\x94\xac",
+        "\x7f",
+        "\x80",
+        "\xe2\x82",
+        "\xc0\xaf",
+        "\xed\xa0\x80",
+        "\xf5\x80\x80\x80",
+        "a\x80z",
+    };
+    for (const std::string& s : inputs) {
+        REQUIRE(is_valid_utf8(s) == (json_escape(s) == s));
+    }
+}
+
+// ===========================================================================
 // JSON record shape
 // ===========================================================================
 

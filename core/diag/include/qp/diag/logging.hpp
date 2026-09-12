@@ -52,6 +52,7 @@
 #include <cstdio>
 #include <ctime>
 #include <string>
+#include <string_view>
 
 namespace qp::diag {
 
@@ -185,6 +186,35 @@ enum class Severity : std::uint8_t {
  *              diag.log.json_escape_replaces_invalid_utf8
  */
 [[nodiscard]] std::string json_escape(const std::string& in) noexcept;
+
+/**
+ * @brief Whether every byte of `in` is part of a legal UTF-8 sequence.
+ *
+ * The predicate `json_escape` acts on, exposed because a caller that must not lose data has to ask
+ * *before* escaping. Escaping maps an illegal byte to `?`, which is the right answer for a log line --
+ * a log nobody can parse loses everything -- and the wrong answer for a document, where it is a silent
+ * edit to the user's data. Such a caller refuses the string instead, and needs this to decide.
+ *
+ * One place decides legality, so the two cannot disagree: the sequence checks below are the same code
+ * `json_escape` uses, not a second opinion. A string this rejects is exactly a string escaping would
+ * modify -- asserted, for inputs with nothing else to escape, by
+ * `diag.log.valid_utf8_agrees_with_json_escape`.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        true exactly when the bytes are well-formed UTF-8: no truncated sequence, no overlong
+ *              encoding, no surrogate, no code point above U+10FFFF, no stray continuation byte
+ * @invariant   Depends only on the bytes
+ * @errors      noexcept
+ * @complexity  O(len)
+ * @nondet      none
+ * @frozen      no
+ * @tests       diag.log.valid_utf8_accepts_legal_sequences,
+ *              diag.log.valid_utf8_rejects_illegal_ones,
+ *              diag.log.valid_utf8_agrees_with_json_escape
+ */
+[[nodiscard]] bool is_valid_utf8(std::string_view in) noexcept;
 
 /**
  * @brief One instant, split into whole seconds and milliseconds within them.

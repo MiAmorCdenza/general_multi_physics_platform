@@ -13,6 +13,7 @@
 #   analysis/     regression, uncertainty propagation, chi-square, residuals
 #   instruments/  concrete instruments, including their error models
 #   models/       field models: dipole, magnetotail, envelopes
+#   formats/      document and data formats (JSON today, a CSV trace exporter next)
 #   examples/     example graphs and documents
 #
 # There is deliberately no `kernels/` split separate from a domain. A Boris pusher
@@ -24,5 +25,6 @@
 # foundation -- the same reasoning that keeps Qt behind QP_BUILD_VIEWS.
 
 if(QP_BUILD_PLUGINS)
+    add_subdirectory(formats)
     add_subdirectory(mechanics)
 endif()

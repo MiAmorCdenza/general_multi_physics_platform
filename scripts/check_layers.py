@@ -107,6 +107,12 @@ ALLOWED: dict[str, set[str]] = {
     # and the container that holds instances is structure.
     "layout": {"units", "diag", "ir", "structure", "document"},
     "portui": {"units", "diag", "ports", "capability"},
+    # persist needs structure, which document deliberately does not: a saved
+    # document holds a graph as well as the per-view layout slots, and a graph is
+    # a container of instances. Adding structure to document instead would have
+    # widened that module for a job its own file comment says it does not do --
+    # "a document describes a graph; it does not hold a second one".
+    "persist": {"units", "diag", "ir", "structure", "document"},
 }
 
 # Nothing outside core may be depended on by core

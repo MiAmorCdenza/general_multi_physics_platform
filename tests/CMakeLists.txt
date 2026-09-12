@@ -382,6 +382,13 @@ if(QP_BUILD_PLUGINS)
     qp_add_test(qp_test_plugins_execution
         SOURCES unit/plugins/test_execution_binding.cpp
         LIBS qp::graph_execution qp::plugins::mechanics qp::graph_kernels)
+
+    # The JSON document format, in the plugin partition because it owns a contract
+    # declared in a plugin header. Every case builds a real document and writes it, so
+    # there is nothing here a stub could stand in for.
+    qp_add_test(qp_test_plugins_qpjson
+        SOURCES unit/plugins/test_qpjson_format.cpp
+        LIBS qp::plugins::qpjson qp::authoring_persist qp::authoring_document qp::graph_structure)
 endif()
 
 # The run loop. Qt-free and graph-only: every case drives a stub operator, so it belongs to the loop's
@@ -518,6 +525,18 @@ qp_add_test(qp_test_authoring_session
 qp_add_test(qp_test_authoring_document
     SOURCES unit/authoring/test_document.cpp
     LIBS qp::authoring_document)
+# The persistence contract. A core target, and it stays one: the *interface* is what is
+# tested here, with a stub format, so the suite that has to pass with `plugins/` absent
+# still covers it. The concrete JSON format is tested where it lives, under
+# `unit/plugins/`, because that test genuinely needs the plugin.
+#
+# The split is also what the contract gate needs. Test ownership is judged per
+# invocation, and the ids in `core/authoring/persist/...` are read by the core
+# invocation -- so their cases have to be visible to it, which a file under
+# `unit/plugins/` is not.
+qp_add_test(qp_test_authoring_persist
+    SOURCES unit/authoring/test_persist.cpp
+    LIBS qp::authoring_persist qp::graph_structure)
 qp_add_test(qp_test_authoring_layout
     SOURCES unit/authoring/test_layout.cpp
     LIBS qp::authoring_layout)
