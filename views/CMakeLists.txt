@@ -73,6 +73,8 @@ add_library(qp_views STATIC
     qt/editor_window.hpp
     qt/theme.cpp
     qt/theme.hpp
+    qt/icons.cpp
+    qt/icons.hpp
     src/hello_view.cpp
     include/qp/views/hello_view.hpp)
 

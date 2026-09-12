@@ -5,6 +5,8 @@
 #include "editor_window.hpp"
 
 #include "node_graph_view.hpp"
+
+#include "theme.hpp"
 #include <QAction>
 #include <QFileDialog>
 #include <QMenu>
@@ -181,6 +183,10 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
     run_action_ = tools->addAction(tr("Run"));
     run_action_->setToolTip(QString::fromStdString(run_controller_->description()));
     run_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
+    // The icons are pixel art authored as bitmaps in `icons.cpp` and coloured from the palette, so an action's
+    // glyph follows a palette change like every other colour in the window. See that file for why they are not
+    // image files.
+    run_action_->setIcon(qt::to_icon(qt::icons::Glyph::run));
     connect(run_action_, &QAction::triggered, this, &EditorWindow::run_once);
 
     build_file_menu();
@@ -213,14 +219,17 @@ void EditorWindow::build_file_menu() {
 
     new_action_ = file->addAction(tr("&New"));
     new_action_->setShortcut(QKeySequence::New);
+    new_action_->setIcon(qt::to_icon(qt::icons::Glyph::new_document));
     connect(new_action_, &QAction::triggered, this, &EditorWindow::file_new);
 
     open_action_ = file->addAction(tr("&Open..."));
     open_action_->setShortcut(QKeySequence::Open);
+    open_action_->setIcon(qt::to_icon(qt::icons::Glyph::open));
     connect(open_action_, &QAction::triggered, this, &EditorWindow::file_open);
 
     save_action_ = file->addAction(tr("&Save"));
     save_action_->setShortcut(QKeySequence::Save);
+    save_action_->setIcon(qt::to_icon(qt::icons::Glyph::save));
     connect(save_action_, &QAction::triggered, this, &EditorWindow::file_save);
 
     save_as_action_ = file->addAction(tr("Save &As..."));
@@ -231,6 +240,7 @@ void EditorWindow::build_file_menu() {
     export_action_ = file->addAction(tr("&Export trace..."));
     export_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+E")));
     export_action_->setToolTip(tr("Write the measurement session's trace as a table"));
+    export_action_->setIcon(qt::to_icon(qt::icons::Glyph::export_trace));
     connect(export_action_, &QAction::triggered, this, &EditorWindow::file_export);
 
     // Greyed out rather than hidden when nothing is mounted: a menu entry that disappears teaches the

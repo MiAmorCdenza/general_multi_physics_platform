@@ -766,7 +766,10 @@ if(QP_BUILD_VIEWS)
     # data and two formulas, and a case that asserts a contrast ratio should not depend on an integrator being
     # built. `views/qt`, not `views/model`, because test ownership in the contract gate is judged per invocation
     # and the ids in `theme.hpp` have to be visible to the same invocation that sees this file.
-    add_executable(qp_test_views_theme unit/views/test_theme.cpp ${QP_TEST_MAIN})
+    # No shared test main: the icon cases need a `QApplication`, and this file carries its own `main` for it --
+    # the same arrangement as `qp_test_views_qt`, and linking both would be a duplicate-symbol error rather than
+    # a warning.
+    add_executable(qp_test_views_theme unit/views/test_theme.cpp)
     target_include_directories(qp_test_views_theme PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/views/qt)

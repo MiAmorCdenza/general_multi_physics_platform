@@ -48,7 +48,10 @@
 #pragma once
 
 #include <QColor>
+#include <QIcon>
 #include <QString>
+
+#include "icons.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -458,3 +461,37 @@ struct Palette final {
 [[nodiscard]] QColor text_on(Rgb fill) noexcept;
 
 }  // namespace qp::views::qt::theme
+
+namespace qp::views::qt {
+
+/**
+ * @brief Rasterises one pixel-art glyph into a `QIcon`.
+ *
+ * The bitmaps and their ink **roles** live in `qt/icons.hpp`, which is Qt-free data: eight rows of eight palette
+ * indices per glyph. That is what lets `theme.icons_are_well_formed` check the shapes and
+ * `theme.icons_use_palette_ink` check that no icon hard-codes a colour -- the defect the palette work exists to
+ * remove, and the one an image file would reintroduce invisibly. Only the rasterisation needs a toolkit, and it
+ * is nine lines.
+ *
+ * Nearest-neighbour scaling from the 8x8 grid, which is what makes the result pixel art rather than a blur: the
+ * scale factor is a whole number and a request that is not a multiple of eight is rounded **up**, so no pixel is
+ * dropped. Qt then downsamples if it needs something smaller, which is the one case where crispness becomes Qt's
+ * business rather than this function's.
+ *
+ * @param glyph Which glyph. An out-of-range value yields `new_document` rather than an empty icon.
+ * @param size  The requested edge length in device pixels.
+ *
+ * @ownership   owns the returned icon
+ * @thread      ui
+ * @pre         none
+ * @post        A non-null `QIcon` holding at least one pixmap
+ * @invariant   The same glyph and size produce the same image
+ * @errors      noexcept
+ * @complexity  O(size^2)
+ * @nondet      none
+ * @frozen      no
+ * @tests       theme.icons_are_well_formed, theme.icons_use_palette_ink
+ */
+[[nodiscard]] QIcon to_icon(icons::Glyph glyph, int size = 16) noexcept;
+
+}  // namespace qp::views::qt

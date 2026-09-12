@@ -1,0 +1,32 @@
+views/qt: pixel-art icons as data, coloured from the palette
+
+The goal allows pixel-art icons packaged as icon images, and they are authored as **bitmaps in
+`icons.cpp`** rather than as PNGs under a resource file. Three reasons, all of them this
+project's rules rather than taste:
+
+  - a PNG is binary: it cannot be reviewed in a diff, cannot be regenerated from the
+    repository, and is the one kind of asset nothing here can assert anything about;
+  - an icon is eight rows of eight palette indices, which is data -- and the palette work one
+    commit ago established that a view's colours belong in a form a test can read;
+  - there is no image library in the build, and adding one to draw a floppy disk would be a
+    far larger dependency than the feature.
+
+So `icons.hpp` holds the glyphs and the **role** each of their ink characters plays, the roles
+are `Palette` fields rather than literals, and `theme.icons_are_well_formed` checks that every
+row is eight characters, that every ink index is in range, and that no glyph is blank or
+duplicates another's name. `theme.icons_use_palette_ink` rasterises every glyph and requires
+every opaque pixel to be one of the palette's own colours -- which is what makes "recolor the
+palette and the icons follow" a property rather than a hope, and is exactly the defect an
+image file would have reintroduced invisibly.
+
+Five glyphs: a page with a plus (New), a folder (Open), a floppy (Save), an arrow leaving a
+box (Export trace), a play triangle (Run). Eight by eight is the smallest grid on which those
+are still recognisable and a power of two, so scaling to Qt's icon sizes is exact rather than
+interpolated -- which is the whole point of pixel art.
+
+One implementation note that cost a build: `QPixmap` cannot be constructed without a live
+`QGuiApplication`, so rasterising into one put the function out of reach of the suite that
+checks the glyphs. It renders into a `QImage` and converts, and the test carries its own
+`main` with a `QApplication` -- the same arrangement `qp_test_views_qt` uses.
+
+GCC 661/661, MSVC 663/663; all four contract partitions and the static gates green.

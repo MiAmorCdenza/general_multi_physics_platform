@@ -5,6 +5,8 @@
 #include "theme.hpp"
 
 #include <QByteArray>
+#include <QPainter>
+#include <QPixmap>
 
 #include <algorithm>
 #include <array>
@@ -213,3 +215,54 @@ QColor category_colour(const QString& category) noexcept {
 QColor text_on(Rgb fill) noexcept { return to_qcolor(theme::text_on(palette(), fill)); }
 
 }  // namespace qp::views::qt::theme
+
+namespace qp::views::qt {
+namespace {
+
+/// @brief The palette field an ink role names. Total: an unknown role falls back to the main stroke.
+[[nodiscard]] QColor ink_colour(icons::Ink role) noexcept {
+    const theme::Palette& p = theme::palette();
+    switch (role) {
+        case icons::Ink::stroke: return theme::to_qcolor(p.text);
+        case icons::Ink::accent: return theme::to_qcolor(p.accent);
+        case icons::Ink::warning: return theme::to_qcolor(p.warning);
+        case icons::Ink::shade: return theme::to_qcolor(p.text_muted);
+    }
+    return theme::to_qcolor(p.text);
+}
+
+/// @brief The ink index a glyph character names, or -1 for transparent.
+[[nodiscard]] int ink_index(char c) noexcept {
+    return c >= '0' && c <= '9' ? c - '0' : -1;
+}
+
+}  // namespace
+
+QIcon to_icon(icons::Glyph glyph, int size) noexcept {
+    const icons::IconBitmap& art = icons::bitmap(glyph);
+    const int wanted = size > 0 ? size : static_cast<int>(icons::IconBitmap::kSize);
+    const int grid = static_cast<int>(icons::IconBitmap::kSize);
+    // Whole-number scale, rounded up: a request of 10 must not become a 1x scale with two pixels clipped.
+    const int scale = (wanted + grid - 1) / grid;
+
+    // A `QImage`, not a `QPixmap`, and the difference is not cosmetic: a `QPixmap` requires a live
+    // `QGuiApplication`, so an icon built into one can only be constructed from inside a running GUI -- which
+    // would put this function out of reach of the suite that checks the glyphs, the whole reason the bitmaps are
+    // data in the first place. `QPixmap::fromImage` needs no application object of its own.
+    QImage image{grid * scale, grid * scale, QImage::Format_ARGB32};
+    image.fill(Qt::transparent);
+    QPainter painter{&image};
+    for (std::size_t y = 0; y < art.size; ++y) {
+        const char* row = art.rows[y];
+        for (std::size_t x = 0; x < art.size; ++x) {
+            const int index = ink_index(row[x]);
+            if (index < 0 || static_cast<std::size_t>(index) >= art.ink_count) continue;
+            painter.fillRect(QRect{static_cast<int>(x) * scale, static_cast<int>(y) * scale, scale, scale},
+                             ink_colour(art.ink[index]));
+        }
+    }
+    painter.end();
+    return QIcon{QPixmap::fromImage(image)};
+}
+
+}  // namespace qp::views::qt

@@ -20,10 +20,18 @@
  * categories collapse). A palette that clears them is legible; whether it is *pleasant* is not a property a
  * test can hold, and pretending otherwise is how a colour test becomes a change-detector that gets deleted.
  */
+#define CATCH_CONFIG_RUNNER
+#include <catch2/catch_session.hpp>
 #include <catch2/catch_test_macros.hpp>
 
 #include "theme.hpp"
 
+#include <QApplication>
+#include <QIcon>
+#include <QImage>
+#include <QPixmap>
+
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -264,6 +272,120 @@ TEST_CASE("theme.text_on_a_tinted_node_is_readable", "[views][theme]") {
     CHECK((on_yellow == dark_p.text || on_yellow == dark_p.on_accent));
 }
 
+TEST_CASE("theme.icons_are_well_formed", "[views][theme]") {
+    // An icon is eight rows of eight characters. A row of seven would rasterise a diagonal edge as a vertical
+    // one, and nothing about a glyph makes that visible in a diff -- so the shape rules are asserted rather than
+    // trusted to whoever edited the table last.
+    using qp::views::qt::icons::IconBitmap;
+    using qp::views::qt::icons::Glyph;
+    using qp::views::qt::icons::Ink;
+
+    std::vector<std::string> names;
+    for (std::size_t i = 0; i < qp::views::qt::icons::count(); ++i) {
+        const Glyph glyph = qp::views::qt::icons::glyph_at(i);
+        const IconBitmap& art = qp::views::qt::icons::bitmap(glyph);
+        const std::string label{qp::views::qt::icons::name(glyph)};
+        INFO("glyph " << label);
+
+        REQUIRE_FALSE(label.empty());
+        // The ids are what a test's failure message and a `QAction::objectName` use, so a duplicate would make
+        // two different actions indistinguishable in a log.
+        REQUIRE(std::find(names.begin(), names.end(), label) == names.end());
+        names.push_back(label);
+
+        REQUIRE(art.size == IconBitmap::kSize);
+        REQUIRE(art.rows != nullptr);
+        REQUIRE(art.ink != nullptr);
+        REQUIRE(art.ink_count > 0);
+        REQUIRE(art.ink_count <= IconBitmap::kMaxInk);
+
+        std::size_t ink_used = 0;
+        bool any_pixel = false;
+        for (std::size_t y = 0; y < art.size; ++y) {
+            const std::string row{art.rows[y]};
+            REQUIRE(row.size() == IconBitmap::kSize);
+            for (const char c : row) {
+                if (c == '.') continue;
+                any_pixel = true;
+                REQUIRE(c >= '0');
+                REQUIRE(c <= '9');
+                const auto index = static_cast<std::size_t>(c - '0');
+                // An index past the glyph's own ink list is a transparent pixel that silently draws nothing,
+                // which is how half an icon goes missing.
+                REQUIRE(index < art.ink_count);
+                ink_used = std::max(ink_used, index + 1);
+            }
+        }
+        // Not every declared role has to be used, but an icon that is entirely transparent is not an icon, and
+        // neither is one whose declared ink never appears.
+        REQUIRE(any_pixel);
+        REQUIRE(ink_used > 0);
+    }
+
+    // The table is keyed by a scoped enum, so the guard is that every enumerator is reachable by index and that
+    // an out-of-range index is the documented fallback rather than a crash.
+    REQUIRE(qp::views::qt::icons::glyph_at(0) == Glyph::new_document);
+    REQUIRE(qp::views::qt::icons::glyph_at(qp::views::qt::icons::count() - 1) == Glyph::run);
+    REQUIRE(qp::views::qt::icons::glyph_at(999) == Glyph::new_document);
+    REQUIRE(qp::views::qt::icons::bitmap(Glyph::run).size == IconBitmap::kSize);
+    // `Ink` is a role, not a colour: enumerating it is what makes `icons_use_palette_ink` below possible.
+    REQUIRE(static_cast<int>(Ink::stroke) == 0);
+}
+
+TEST_CASE("theme.icons_use_palette_ink", "[views][theme]") {
+    // The property that keeps an icon from reintroducing the hard-coded colours `theme.hpp` exists to remove.
+    // The bitmaps speak in **roles**, and the two facts that make that real are checked here: rasterising with
+    // the dark palette gives different pixels than rasterising with the light one, and every non-transparent
+    // pixel of a dark-palette icon is one of the dark palette's own colours.
+    using qp::views::qt::icons::Glyph;
+    using qp::views::qt::icons::count;
+    using qp::views::qt::icons::glyph_at;
+
+    std::vector<QRgb> palette_colours;
+    const qp::views::qt::theme::Palette& p = qp::views::qt::theme::palette();
+    for (const qp::views::qt::theme::Rgb c :
+         {p.text, p.text_muted, p.text_disabled, p.accent, p.on_accent, p.warning, p.on_warning,
+          p.category_sources, p.category_models, p.category_instruments, p.category_output, p.edge,
+          p.edge_dim}) {
+        palette_colours.push_back(qp::views::qt::theme::to_qcolor(c).rgb());
+    }
+
+    for (std::size_t i = 0; i < count(); ++i) {
+        const Glyph glyph = glyph_at(i);
+        const QIcon icon = qp::views::qt::to_icon(glyph, 16);
+        REQUIRE_FALSE(icon.isNull());
+        const QPixmap pixmap = icon.pixmap(16, 16);
+        REQUIRE_FALSE(pixmap.isNull());
+
+        std::size_t opaque = 0;
+        for (int y = 0; y < pixmap.height(); ++y) {
+            for (int x = 0; x < pixmap.width(); ++x) {
+                const QColor pixel = pixmap.toImage().pixelColor(x, y);
+                if (pixel.alpha() == 0) continue;
+                ++opaque;
+                const QRgb rgb = pixel.rgb();
+                INFO(qp::views::qt::icons::name(glyph) << " pixel " << x << "," << y);
+                REQUIRE(std::find(palette_colours.begin(), palette_colours.end(), rgb) !=
+                        palette_colours.end());
+            }
+        }
+        // An icon that rasterised to nothing would pass the loop above vacuously.
+        REQUIRE(opaque > 0);
+    }
+
+    // And it is a rasterisation, not a blob: the run glyph is a triangle, so its top row has fewer opaque pixels
+    // than its middle row. This is the check that would catch a scaling bug that filled the whole box.
+    const QImage run = qp::views::qt::to_icon(Glyph::run, 16).pixmap(16, 16).toImage();
+    const auto opaque_in_row = [&run](int y) {
+        int n = 0;
+        for (int x = 0; x < run.width(); ++x) {
+            if (run.pixelColor(x, y).alpha() != 0) ++n;
+        }
+        return n;
+    };
+    REQUIRE(opaque_in_row(2) < opaque_in_row(8));
+}
+
 TEST_CASE("theme.an_unknown_category_still_gets_a_colour", "[views][theme]") {
     // Total on purpose. An unrecognised category is a plugin's typo, and the node still has to be drawn -- in
     // the default group, where a user can see it and wonder, rather than not at all. A lookup that returned
@@ -279,4 +401,21 @@ TEST_CASE("theme.an_unknown_category_still_gets_a_colour", "[views][theme]") {
     REQUIRE(count == 4);
     CHECK(qp::views::qt::theme::category_colour(p, names[0]) == p.category_sources);
     CHECK(qp::views::qt::theme::category_colour(p, names[3]) == p.category_output);
+}
+
+/**
+ * @brief A `QApplication`, so the icon cases can rasterise.
+ *
+ * Most of this file is arithmetic on three bytes and needs nothing, which is the point of the palette living in
+ * data. The **icons** are the exception: `QIcon` and `QPixmap` are GUI types, and Qt refuses to construct one
+ * before an application object exists. Built in `main` rather than as a static, because a static `QApplication`
+ * outlives `main`'s teardown order and Qt warns about it.
+ *
+ * This is the same shape as `test_views_qt.cpp`, and it needs the same CMake treatment: the executable must run
+ * with Qt's DLLs on `PATH`, so it is a plain `add_executable` with one CTest entry rather than
+ * `catch_discover_tests`, which would have to run it at build time.
+ */
+int main(int argc, char** argv) {
+    QApplication app(argc, argv);
+    return Catch::Session().run(argc, argv);
 }
