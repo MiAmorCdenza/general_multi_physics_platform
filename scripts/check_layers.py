@@ -78,7 +78,12 @@ ALLOWED: dict[str, set[str]] = {
     "run": {"units", "diag", "abi", "ports"},
     "store": {"units", "diag", "ports"},
     "trace": {"units", "diag", "run", "store"},
-    "io": {"units", "diag", "abi", "store"},
+    # io needs trace, not just store: what a user exports is a **time series**,
+    # and a series without its sample times is not the same artifact -- it is
+    # a column of numbers whose spacing a reader has to guess. The plan-tree
+    # table listed store and abi, which covers writing a single frozen dataset
+    # but not the run that produced it.
+    "io": {"units", "diag", "abi", "store", "trace"},
     # L3 view services
     "document": {"units", "diag", "ir", "abi"},
     # capability needs plugin, not ports: it negotiates what a plugin may

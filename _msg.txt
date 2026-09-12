@@ -1,0 +1,45 @@
+﻿feat(runtime): add the timeline and the export contract -- L2 complete
+
+core/runtime/trace -- the record of what happened and when. Charter C3 makes the
+timeline a platform mechanism rather than a view's private state, and the reason is
+worth restating: the obvious implementation is for the plot widget to keep the
+samples it drew. It works until a second view needs them -- a table, an export, a
+fit -- and the copies then disagree because they were sampled at different moments.
+Worse, a *saved* run has no timeline at all, so the numbers in a report cannot be
+traced back to the run that produced them.
+
+A sample carries both an index and a time, and the separation is the load-bearing
+decision. Simulation time is computed: `t += dt` accumulates floating-point error,
+so two samples can share a `t` after rounding. A consumer that identified samples by
+time would silently collapse or reorder them and attach values to the wrong
+instants. `index` is exact and total; `t` is what a human reads and a fit uses.
+
+Appends are append-only and require non-decreasing time. A trace is evidence, and
+the cheapest way to get a wrong answer out of a lab session is to delete the point
+that disagreed with the hypothesis. An out-of-order append is *refused rather than
+sorted into place*: inserting it would renumber every later sample, so an index
+taken before the insert -- a cursor, a cache key, a column position in a saved file
+-- would point at a different measurement, with nothing in the record to show it.
+
+core/runtime/io -- the export contract and the format registry. Every format is a
+plugin: CSV, TSV, JSON, HDF5, a spreadsheet, a figure, a lab's own templated report
+are all defensible, and which is right depends on the course, the institution and
+the journal. A platform that embedded CSV would be deciding for everybody. So this
+module owns the interface and the registry and writes no file itself.
+
+What the contract refuses to lose is the uncertainty. A CSV of bare numbers is
+exactly the artifact this platform exists to replace -- the uncertainty is then
+reconstructed by hand in a spreadsheet, or far more often dropped. So
+`keeps_uncertainty` is declared, a format that cannot carry it must say so, and a
+caller who needs it can refuse the format rather than publish a table that lost its
+error bars. The check runs *before* the write and is a separate pure function, so
+"this format cannot keep your uncertainties" is answerable in a dialog instead of
+discovered in a published table.
+
+Layer whitelist widening, the fourth and last of this phase and again with its
+reason in the ALLOWED table: io needs trace, not just store, because what a user
+exports is a time series and a series without its sample times is a different
+artifact -- a column of numbers whose spacing the reader has to guess.
+
+GCC 15.2.0 (MinGW i686) 478/478 with views off and no Qt present; MSVC 19.51 (x64)
+479/479 with views on; all six gates green. L2 is complete: run, store, trace, io.

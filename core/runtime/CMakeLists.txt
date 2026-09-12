@@ -11,3 +11,5 @@
 
 add_subdirectory(run)
 add_subdirectory(store)
+add_subdirectory(trace)
+add_subdirectory(io)

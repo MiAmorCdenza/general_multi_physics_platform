@@ -316,6 +316,12 @@ qp_add_test(qp_test_runtime_run
 qp_add_test(qp_test_runtime_store
     SOURCES unit/runtime/test_store.cpp
     LIBS qp::runtime_store)
+qp_add_test(qp_test_runtime_trace
+    SOURCES unit/runtime/test_trace.cpp
+    LIBS qp::runtime_trace)
+qp_add_test(qp_test_runtime_io
+    SOURCES unit/runtime/test_io.cpp
+    LIBS qp::runtime_io)
 
 # The Qt-FREE half of the view layer. It is listed here, in the ordinary suite,
 # precisely because it does not need Qt: that is what lets the properties panel's

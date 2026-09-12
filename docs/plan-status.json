@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "打包链路打通：scripts/package.ps1 产出可分发目录并验证在无 Qt 的 PATH 下能跑",
+  "updated": "L2 完成（runtime run/store/trace/io 四模块全部 verified）；下一步 core/plugin 加载器与 plugins/ 内容",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -13,7 +13,7 @@
     "contract_completeness": {
       "tool": "scripts/check_contracts.py",
       "state": "passing",
-      "detail": "两次调用，用例集合互不相交。`gate.contracts` 扫 core/（271 契约），`gate.contracts.views` 扫 views/model（10 契约）。两次调用都必须看到**不相交**的用例集合——门禁的判据是全局的（既查每个 @tests id 存在，也查每个 TEST_CASE 被认领），所以任何一个目录落进两次调用里，就会在另一方看来全是孤儿。为此外层加了 `--exclude`（支持目录名与路径片段），并且它必须同时作用于**孤儿统计**和**测试文件里的模块级契约块扫描**——只作用于前者时，被交出去的子树仍会用自己的模块契约去认领另一方才能看到的用例。这个不一致是真实踩到的：views 门禁当时报 fp.* 不存在。模型测试也因此从 tests/unit/views/ 挪到 tests/model/。"
+      "detail": "两次调用，用例集合互不相交。`gate.contracts` 扫 core/（291 契约，含 runtime run/store/trace/io），`gate.contracts.views` 扫 views/model（10 契约）。外层 `--exclude` 支持目录名与路径片段，且同时作用于孤儿统计与测试文件里的模块级契约块扫描。"
     },
     "gate_self_test": {
       "tool": "tests/meta/check_contract_checker.py",
@@ -23,7 +23,7 @@
     "layer_dependency": {
       "tool": "scripts/check_layers.py",
       "state": "passing",
-      "detail": "L1 允许方向 / L2 禁 Qt / L3 Eigen 受限 / L4 禁反向依赖 / L5 未登记模块。由 tests/meta/check_layer_checker.py 用 4 反例 + 1 正例验证：只测反例会漏掉『把一切都报错』的退化实现。本阶段两处白名单加宽都带理由：kernels -> field（批次要交给算子的是『一段被描述的采样』，在 kernels 里复制一份会造成同一概念两个互不兼容的答案）、capability -> plugin（它协商的是 manifest，从不碰端口类型）、layout -> structure（位置是逐节点实例的，而保存实例的容器是 structure）。"
+      "detail": "L1 允许方向 / L2 禁 Qt / L3 Eigen 受限 / L4 禁反向依赖 / L5 未登记模块。由 tests/meta/check_layer_checker.py 用 4 反例 + 1 正例验证。本阶段共四处白名单加宽，每处都在 ALLOWED 表里写了理由：kernels -> field（批次是『一段被描述的采样』）；capability -> plugin（协商的是 manifest）；layout -> structure（位置是逐节点实例的）；io -> trace（用户导出的是**时间序列**，没有采样时刻的序列不是同一个产物——读者得去猜间距）。"
     },
     "code_dialect": {
       "tool": "scripts/check_dialect.py",
@@ -64,7 +64,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 465,
+    "ctest_registered": 479,
     "compilers_green": [
       "gcc-15.2.0-i686",
       "msvc-19.51-x64"
@@ -170,14 +170,14 @@
     {
       "path": "core/runtime/trace",
       "layer": "L2",
-      "state": "planned",
-      "note": "C3 时间轴"
+      "state": "verified",
+      "note": "时间轴：平台对『发生了什么、什么时候』的记录。**为什么它是平台机制而不是视图的私有状态**——最直觉的实现是让绘图控件保存它画过的采样。这能work，直到第二个视图需要这些数据（表格、导出、拟合），然后两份副本因为采样时刻不同而不一致；更糟的是**一次已保存的运行根本没有时间轴**，报告里的数字无法回溯到产生它的那次运行。章程 C3 因此把它定为平台关切。**为什么一个采样同时带 index 和 t**：仿真时间是算出来的（`t += dt` 累积浮点误差，定步长只是近似定），所以舍入后两个采样可能带同一个 t，而按时间识别采样的消费者会静默地把它们合并或重排，数值就挂到了错误的时间点上。index 精确且完备，t 是人读的、拟合用的、导出写的；两者不一致时，index 是身份、t 是数据。**为什么只追加且要求时间不减**：时间轴是证据。允许编辑或删除会让『这次运行产生了这个』变得不可验证，而从一次实验课里拿到错误答案最省事的办法就是删掉那个与假设不符的点。乱序追加被**拒绝而不是插入排序**——插入会让其后每个采样重新编号，于是插入前取的索引（游标、缓存键、已存文件的列位置）会指向另一个测量，而记录里看不出发生过什么。刻意不做的：重采样、平滑、插值、除区间之外的统计——那些是有多个站得住脚答案的分析，属于插件。"
     },
     {
       "path": "core/runtime/io",
       "layer": "L2",
-      "state": "planned",
-      "note": "格式是插件"
+      "state": "verified",
+      "note": "导出契约与格式注册表。**格式全是插件**：CSV、TSV、JSON、HDF5、表格、图、某实验室自己的报告模板——每一种都站得住脚，哪一种对取决于课程、学校与期刊。内置 CSV 就等于替所有人做了决定，而它需要的第二种格式会变成一次核心改动。所以本模块拥有接口与注册表，**自己一个文件都不写**。契约**拒绝丢掉的那一样东西是不确定度**：只有纯数字的 CSV 恰好是这个平台存在的理由所要取代的产物——不确定度要么在表格软件里被手工重建，要么（更常见）直接消失。因此 FormatCapabilities::keeps_uncertainty 是显式声明的，装不下它的格式**必须说出来**，在意这件事的调用方可以据此拒绝该格式，而不是默默发表一张丢了误差棒的表。这是『用户能看见的限制』与『评审时才发现』的区别。检查发生在**写之前**（check_export 是独立的纯函数），所以『这个格式留不住你的不确定度』能在对话框里回答，而不是在一次已经成功、却丢了数据的写之后。"
     },
     {
       "path": "core/authoring/document",
