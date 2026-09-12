@@ -78,6 +78,15 @@ struct RunReport final {
     std::string operator_name{};
     /// The node type that was run, for the record.
     std::string node_type{};
+    /// The node that was run.
+    ///
+    /// Carried out of a run because a trace and a reading both need to name where they came from, and the
+    /// only place that knows is here: `check_run` picks the node and the binder runs it. A caller that
+    /// re-derived the choice -- by searching the graph again for "the first node a binder claims" -- would
+    /// be running a second selection rule, and the two would disagree the moment the graph changed between
+    /// the run and the report. A default-constructed id means no node was chosen, which is the case for
+    /// every refused run.
+    qp::graph::NodeId node{};
     /// The run identity the trace carries, so a caller can look it up in the ledger.
     qp::runtime::RunId run{};
     /// How many **errors** `graph/validate` found before the run started. Reported rather than enforced: the

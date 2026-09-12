@@ -310,6 +310,45 @@ TEST_CASE("store.dataset.weighted_mean", "[store]") {
     }
 }
 
+TEST_CASE("store.dataset.add_keeps_the_source", "[store]") {
+    // The overload that carries provenance, and the reason it exists beside the two that do not: a caller
+    // holding a source must be able to append the value **and** where it came from in one operation. Appending
+    // and then reaching back into `readings()` to stamp the last entry would leave the record briefly claiming
+    // the number came from nowhere, and a reader who caught it at that moment would be reading a lie.
+    Dataset d{"length", dim_of(1)};
+
+    Measurement record;
+    record.reading = UncertainValue::measured(0.0241, 0.0005, dim_of(1));
+    record.source = Measurement::Source{7, 3};
+    d.add(record);
+
+    REQUIRE(d.size() == 1);
+    REQUIRE(d.readings().back().source.index == 7);
+    REQUIRE(d.readings().back().source.generation == 3);
+    REQUIRE(d.readings().back().reading.value == 0.0241);
+
+    // The default is invalid, which is the honest source for a reading somebody typed in: there is no node
+    // behind it, and index zero would name node zero as though it were a device.
+    Measurement manual;
+    manual.reading = UncertainValue::unquantified(0.0238, dim_of(1));
+    d.add(manual);
+    REQUIRE(d.size() == 2);
+    REQUIRE_FALSE(d.readings().back().source.valid());
+    // Still counted, because a reading with no provenance is a measurement -- one whose origin nobody wrote
+    // down. Dropping it would make a hand-entered value impossible to record at all.
+    REQUIRE(d.valid_count() == 2);
+
+    // The dimension rule is the same one the other overloads apply: the dataset's dimension wins, and the
+    // source does not decide it. The alternative is a series whose mean mixes axes and is reported as a
+    // measurement.
+    Measurement wrong;
+    wrong.reading = UncertainValue::measured(1.0, 0.0, dim_of(0, 0, 1));
+    wrong.source = Measurement::Source{9, 1};
+    d.add(wrong);
+    REQUIRE(d.readings().back().reading.dim == dim_of(1));
+    REQUIRE(d.readings().back().source.index == 9);
+}
+
 TEST_CASE("store.dataset.valid_flags", "[store]") {
     Dataset d{"flags", dim_of(0, 0, 1)};
     UncertainValue v = UncertainValue::measured(1.0, 0.1);

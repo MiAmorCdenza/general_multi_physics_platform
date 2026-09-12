@@ -108,6 +108,7 @@ enum class Glyph : std::uint8_t {
     save = 2,
     export_trace = 3,
     run = 4,
+    measure = 5,
 };
 
 /// @brief The bitmap for a glyph. Total: an unknown glyph yields the `new_document` glyph rather than nothing.
@@ -150,7 +151,7 @@ enum class Glyph : std::uint8_t {
 /// @nondet      none
 /// @frozen      no
 /// @tests       theme.icons_are_well_formed
-[[nodiscard]] constexpr std::size_t count() noexcept { return 5; }
+[[nodiscard]] constexpr std::size_t count() noexcept { return 6; }
 
 /// @brief The glyph for index `i`, or `new_document` past the end.
 ///

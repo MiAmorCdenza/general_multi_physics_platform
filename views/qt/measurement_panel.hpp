@@ -44,7 +44,10 @@
 
 #include <QWidget>
 
+#include <qp/graph/ir/ids.hpp>
 #include <qp/views/model/measurement_model.hpp>
+
+#include <optional>
 
 class QLabel;
 class QTableWidget;
@@ -91,7 +94,53 @@ public:
     /// @brief The gap lines currently displayed, one per model gap, in the model's order.
     [[nodiscard]] QStringList gap_lines() const;
 
+    /**
+     * @brief The source of the reading selected in the table, or nothing.
+     *
+     * The direction the loop was missing: every other path in this window goes **from** the graph **to** the
+     * numbers, and this is the one that goes back. A student reading "0.4998 +/- 0.0003" should be able to ask
+     * which device produced it without remembering which node they ran.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         none
+     * @post        The source of the selected row when it has one, otherwise nothing
+     * @invariant   Agrees with `MeasurementModel::source_of` for the selected row
+     * @errors      Reports nothing: a row with no source and no selected row are the same answer here, which is
+     *              why the return is an optional rather than a validity flag
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.measurement.a_reading_points_at_its_node
+     */
+    [[nodiscard]] std::optional<qp::runtime::Measurement::Source> selected_source() const;
+
+Q_SIGNALS:
+    /**
+     * @brief Emitted when the user selects a row, naming the node that produced that reading.
+     *
+     * Only for a row that **has** a source. A reading typed in by hand has none, and emitting an invalid id would
+     * make the window clear its selection to point at nothing -- which reads as "the reading was discarded".
+     *
+     * @param node The node that produced the selected reading. Always valid when emitted.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         The selected row has a source
+     * @post        A receiver can reveal and select `node`
+     * @invariant   Never emitted for a reading with no source
+     * @errors      None: a signal carries no failure, and a row with nothing behind it is reported by silence
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.measurement.a_reading_points_at_its_node
+     */
+    void reading_selected(qp::graph::NodeId node);
+
 private:
+    /// @brief Wires the table's selection to `reading_selected`.
+    void on_row_selected(int row);
+
     qp::views::model::MeasurementModel& model_;
     QTableWidget* table_ = nullptr;
     QLabel* summary_ = nullptr;

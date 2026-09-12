@@ -197,6 +197,9 @@ public:
      * @param u      The standard uncertainty. Ignored unless `kind` is `standard`, because
      *               storing it otherwise would put a number in a field that means "we
      *               quantified this".
+     * @param source Which node produced this reading, or a default-constructed value for a reading a user typed
+     *               in. The default is the honest one for the manual case, which is a legitimate kind of reading
+     *               in a lab session and has no node behind it.
      *
      * @ownership   value
      * @thread      ui
@@ -207,11 +210,36 @@ public:
      * @complexity  O(1) amortized
      * @nondet      none
      * @frozen      no
-     * @tests       measurement.model.add_and_retake
+     * @tests       measurement.model.add_and_retake, measurement.model.a_reading_names_its_node
      */
     void add_reading(double value,
                      qp::runtime::UncertaintyKind kind = qp::runtime::UncertaintyKind::unknown,
-                     double u = 0.0);
+                     double u = 0.0,
+                     qp::runtime::Measurement::Source source = {});
+
+    /**
+     * @brief Which node produced the reading at `index`, or nothing.
+     *
+     * The reverse lookup the panel needs in order to **point at** the thing a number came from: a report whose
+     * numbers cannot be traced back to a device is the artefact this platform replaces. Nothing is returned for
+     * an out-of-range index or for a reading with no source, which are different situations and the same answer.
+     *
+     * @param index Index into `dataset().readings()`.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         none
+     * @post        The source when the reading exists, has one, and is live; nothing otherwise
+     * @invariant   A rejected reading still reports its source, because the record of where a discarded reading
+     *              came from is part of why it was discarded
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.a_reading_names_its_node
+     */
+    [[nodiscard]] std::optional<qp::runtime::Measurement::Source> source_of(
+        std::size_t index) const noexcept;
 
     /**
      * @brief Marks a reading as rejected, or reports that it could not be.

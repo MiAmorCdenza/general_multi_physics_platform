@@ -24,7 +24,8 @@ MeasurementModel::MeasurementModel(store::RunLedger& ledger, std::string quantit
                                      qp::units::Dim dim, store::RunId run)
     : ledger_(ledger), dataset_(std::move(quantity), dim), trace_(run) {}
 
-void MeasurementModel::add_reading(double value, store::UncertaintyKind kind, double u) {
+void MeasurementModel::add_reading(double value, store::UncertaintyKind kind, double u,
+                                   qp::runtime::Measurement::Source source) {
     // The uncertainty is stored only for the state that has one. Writing `u` through for an
     // `exact` reading would put a number in a field whose meaning is "we quantified this",
     // and `is_usable()` would then report a quantity nobody measured.
@@ -32,17 +33,33 @@ void MeasurementModel::add_reading(double value, store::UncertaintyKind kind, do
     // `UncertainValue`'s three factory functions are used rather than assembling the struct
     // field by field, so that the invariant "u is meaningless unless kind == standard" is
     // stated once, in the type that owns it, instead of being re-asserted here.
+    store::Measurement record{};
     switch (kind) {
         case store::UncertaintyKind::exact:
-            dataset_.add(store::UncertainValue::exact(value, dataset_.dim()));
+            record.reading = store::UncertainValue::exact(value, dataset_.dim());
             break;
         case store::UncertaintyKind::standard:
-            dataset_.add(store::UncertainValue::measured(value, u, dataset_.dim()));
+            record.reading = store::UncertainValue::measured(value, u, dataset_.dim());
             break;
         case store::UncertaintyKind::unknown:
-            dataset_.add(store::UncertainValue::unquantified(value, dataset_.dim()));
+            record.reading = store::UncertainValue::unquantified(value, dataset_.dim());
             break;
     }
+    // Set after the reading so the provenance travels **with** the value rather than beside it: a caller that
+    // recorded where a number came from and then failed to record the number would leave a source with nothing
+    // to attribute.
+    record.source = source;
+    dataset_.add(record);
+}
+
+std::optional<qp::runtime::Measurement::Source> MeasurementModel::source_of(
+    std::size_t index) const noexcept {
+    const std::vector<store::Measurement>& readings = dataset_.readings();
+    if (index >= readings.size()) return std::nullopt;
+    // A reading with no source and a reading whose index is past the end are different situations and the same
+    // answer: nothing to point at. Callers that need to tell them apart can ask for the reading itself.
+    if (!readings[index].source.valid()) return std::nullopt;
+    return readings[index].source;
 }
 
 diag::Result<void> MeasurementModel::reject(std::size_t index) { return dataset_.reject(index); }

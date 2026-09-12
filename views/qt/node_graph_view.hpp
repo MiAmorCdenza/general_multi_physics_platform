@@ -211,6 +211,39 @@ public:
      */
     void rebuild();
 
+    /**
+     * @brief Stops reporting selection changes, permanently.
+     *
+     * ## Why a widget needs a way to go quiet before it dies
+     *
+     * A `QGraphicsScene` raises `selectionChanged` while it is being **cleared**, and clearing it is what
+     * `~QGraphicsView` does on its way out. The handler this class installs on that signal emits `node_selected`,
+     * which the window connects to its property panel -- so tearing the canvas down rebuilt a *sibling* panel's
+     * widgets from inside the canvas's destructor. Depending on which of the window's children Qt destroyed first,
+     * that ran against a half-destroyed panel, and the process died with a segmentation fault **after** every
+     * assertion in the test had passed. Which is the worst shape a defect can have: nothing failed, and the exit
+     * code said otherwise.
+     *
+     * The fix is not a null check in the handler: by the time it runs there is no correct answer to give, because
+     * the panel it would talk to may already be gone. The honest move is for the canvas to stop speaking before
+     * its items are taken apart, and the window calls this first thing in its own destructor.
+     *
+     * Idempotent, and never re-armed: a canvas that went quiet and then started emitting again would be worse
+     * than one that never did.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         none
+     * @post        A later selection change emits nothing, whatever its cause
+     * @invariant   `items_match_graph()` is unaffected: this silences a signal, not the canvas
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.editor_window.a_destroyed_window_reports_nothing
+     */
+    void go_quiet() noexcept;
+
     /// @brief Number of node items currently drawn. Used by the tests.
     [[nodiscard]] int node_item_count() const noexcept;
 
@@ -226,8 +259,144 @@ public:
     /// @brief The remembered position of `node`, or a default when it has none.
     [[nodiscard]] QPointF position_of(qp::graph::NodeId node) const;
 
+    /**
+     * @brief Reports where the cursor is, from a **viewport** point, as a mouse move does.
+     *
+     * Public because the feedback it drives is the thing worth asserting and Qt's own delivery is not: a test can
+     * ask "is this stub highlighted" without a mapped window or a platform plugin, exactly as `connect_ports` lets
+     * it assert a drag's outcome without synthesising the drag. `mouseMoveEvent` calls this and then lets the base
+     * class pan, so a test here exercises the same code the widget runs.
+     *
+     * @param viewport_pos A point in the widget's coordinates, not the scene's.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         none
+     * @post        `hovered_port()`/`hovered_node()` reflect the stub nearest that point, within the grab radius
+     * @invariant   At most one stub is highlighted afterwards
+     * @errors      Reports nothing: a point near no stub clears the highlight, which is a state and not a failure
+     * @complexity  O(nodes x ports)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.canvas.a_port_shows_itself_under_the_cursor
+     */
+    void hover_at(const QPoint& viewport_pos);
+
     /// @brief The node the user currently has selected, if any.
     [[nodiscard]] std::optional<qp::graph::NodeId> selected_node() const;
+
+    /**
+     * @brief Which port stub, if any, is currently highlighted under the cursor.
+     *
+     * ## Why the canvas reports this instead of a caller inspecting pixels
+     *
+     * The port highlight is the feedback that tells a user a press will start a wire rather than move the box, and
+     * the grab radius is measured in **device** pixels and divided by the zoom -- so whether a given point is close
+     * enough is a question only the canvas can answer. A test that guessed at the radius would be asserting its own
+     * arithmetic, and the first zoom change would leave it asserting something the widget no longer does.
+     *
+     * `first` is the port number, `second` is true for an output stub. Nothing is reported when the cursor is not
+     * near a stub, which is the state a press treats as "drag the node".
+     *
+     * @ownership   owns the returned value
+     * @thread      ui
+     * @pre         none
+     * @post        Agrees with what the last `update_hover` highlighted
+     * @invariant   At most one port is reported at a time
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.canvas.a_port_shows_itself_under_the_cursor
+     */
+    [[nodiscard]] std::optional<std::pair<qp::graph::PortIndex, bool>> hovered_port() const noexcept;
+
+    /**
+     * @brief The node whose hovered stub is highlighted, or nothing.
+     *
+     * Separate from `hovered_port` because both halves are needed and neither implies the other: the port number is
+     * meaningless without the node, and a node with no stub under the cursor reports nothing rather than port 0.
+     *
+     * @ownership   owns the returned value
+     * @thread      ui
+     * @pre         none
+     * @post        The node reported by the last `update_hover`, when it found one
+     * @invariant   Valid exactly when `hovered_port()` has a value
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.canvas.a_port_shows_itself_under_the_cursor
+     */
+    [[nodiscard]] std::optional<qp::graph::NodeId> hovered_node() const noexcept;
+
+    /**
+     * @brief How prominently `node` is drawn: `1.0` lit, `kDimmedProminence` faded.
+     *
+     * The neighbourhood highlight is a reading aid, and what makes it one is that the faded nodes are **still
+     * there** -- so the property worth asserting is not "the others are hidden" but "the others are drawn at a
+     * measurably lower prominence while remaining legible". `1.0` is returned for a node the canvas does not draw,
+     * because "not faded" is the safe answer for one that is absent.
+     *
+     * @param node The node to ask about.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         none
+     * @post        `kDimmedProminence` exactly when the node is outside the current selection's neighbourhood
+     * @invariant   `1.0` whenever nothing is selected
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.canvas.the_neighbourhood_is_lit_and_the_rest_is_dimmed
+     */
+    [[nodiscard]] qreal prominence_of(qp::graph::NodeId node) const noexcept;
+
+    /**
+     * @brief The source node of the nth drawn edge, or an invalid id past the end.
+     *
+     * Needed by any caller that wants to ask about an edge's prominence: `edge_endpoints` gives the geometry, and
+     * geometry does not say which nodes an edge joins.
+     *
+     * @param index Which edge, in the order `rebuild` drew them.
+     *
+     * @ownership   owns the returned value
+     * @thread      ui
+     * @pre         none
+     * @post        The edge's source node when the edge exists, otherwise an invalid id
+     * @invariant   Matches the graph's edge at the same position
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.canvas.the_neighbourhood_is_lit_and_the_rest_is_dimmed
+     */
+    [[nodiscard]] qp::graph::NodeId edge_source(std::size_t index) const noexcept;
+
+    /**
+     * @brief How prominently the nth drawn edge is drawn.
+     *
+     * @param index Which edge, in the order `rebuild` drew them.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         none
+     * @post        `kDimmedProminence` for an edge neither of whose endpoints is in the neighbourhood
+     * @invariant   `1.0` for an out-of-range index
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.canvas.the_neighbourhood_is_lit_and_the_rest_is_dimmed
+     */
+    [[nodiscard]] qreal edge_prominence(std::size_t index) const noexcept;
+
+    /// @brief How far the nodes outside the selection's neighbourhood are faded towards the canvas.
+    ///
+    /// Exposed so a test can hold the highlight to the **same** number the paint code uses rather than to a literal
+    /// that would silently stop matching. See the private constant of the same name for why it is `0.35`.
+    static constexpr qreal kDimmedProminence = 0.35;
 
     /**
      * @brief Selects `node` as if the user had clicked it, and reports it.
@@ -251,6 +420,28 @@ public:
      * @tests       qt.views.nodegraph.delete_removes_the_node_and_its_edges
      */
     void select_node(qp::graph::NodeId node);
+
+    /**
+     * @brief Clears the selection, so the neighbourhood highlight goes back to lighting everything.
+     *
+     * The counterpart `select_node` cannot express. `select_node({})` reads as "select nothing" and is a no-op by
+     * its own contract -- it looks the id up, does not find it, and returns -- so a caller who wanted to **undo** a
+     * selection had no way to say so, and the highlight was a mode the user could enter and not leave. That is
+     * exactly what makes a fade a nuisance rather than a reading aid.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         none
+     * @post        `selected_node()` is empty and every item is drawn at full prominence
+     * @invariant   Emits `node_selected` for nobody: a deselection is not a selection, and a window that followed
+     *              it would clear its property panel by way of a signal that names no node
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.canvas.the_neighbourhood_is_lit_and_the_rest_is_dimmed
+     */
+    void clear_selection() noexcept;
 
     /**
      * @brief Removes the node the user has selected, with every edge that touched it.
@@ -505,6 +696,19 @@ private:
     /// @brief Recomputes the endpoints of every edge touching `moved`. Called on each drag step.
     void update_edges_for(const NodeItem& moved);
 
+    /// @brief Recomputes the neighbourhood highlight from the current selection.
+    void refresh_prominence();
+
+    /// @brief Reports which stub the cursor is over, and sets the cursor to the gesture a press would start.
+    void update_hover(const QPoint& viewport_pos);
+
+    /// @brief How far the nodes outside the selection's neighbourhood are faded towards the canvas.
+    ///
+    /// An alias for the public constant -- the highlight is one rule, and two constants that had to agree would be
+    /// the kind of duplication this project keeps removing. Public so a test can hold the paint code to **the same
+    /// number** it uses: a test with its own copy of `0.35` stops failing the moment the paint code changes.
+    static constexpr qreal kDimmed = NodeGraphView::kDimmedProminence;
+
     qp::authoring::Session& session_;
     const qp::graph::NodeTypeRegistry& catalog_;
     qp::authoring::Document& document_;
@@ -523,6 +727,15 @@ private:
     bool framed_ = false;
     /// Whether a deferred framing is in flight. See rebuild().
     bool pending_frame_ = false;
+    /// Whether a rebuild is in progress, so scene signals raised **from inside** it are ignored.
+    ///
+    /// `scene_->clear()` deletes items, and deleting a selected one makes Qt emit `selectionChanged`
+    /// synchronously -- so a handler that walks the item maps would read a half-built scene and dereference freed
+    /// pointers. This is the flag that stops it, and it exists because the first version of the neighbourhood
+    /// highlight crashed on exactly that.
+    bool rebuilding_ = false;
+    /// Whether this canvas has been told to stop reporting. See `go_quiet`.
+    bool quiet_ = false;
     std::string last_error_;
 };
 

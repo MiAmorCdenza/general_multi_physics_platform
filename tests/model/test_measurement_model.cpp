@@ -185,6 +185,55 @@ TEST_CASE("measurement.model.unknown_is_not_zero", "[measurement][model]") {
     }
 }
 
+TEST_CASE("measurement.model.a_reading_names_its_node", "[measurement][model]") {
+    // A number in a report that cannot be traced to the device that produced it is the
+    // artefact the whole platform exists to replace. The run identity answers "which run";
+    // this answers "which node of that run", and it is the answer a window needs in order to
+    // **point at** the thing a reading came from.
+    //
+    // `Source` is a flat pair of integers rather than a `graph::NodeId` because `store` sits in
+    // L2 and the node identifier belongs to L1 -- naming a node is not a reason for the
+    // recording layer to depend on the graph layer. So the model converts, and this checks the
+    // conversion is the identity it claims to be rather than a reordering.
+    Session session;
+    MeasurementModel& m = session.model();
+
+    const rt::Measurement::Source scope{7, 3};
+    m.add_reading(0.0241, rt::UncertaintyKind::standard, 0.0005, scope);
+    // A reading a user typed in. The default is the honest source for one: there is no node
+    // behind it, and inventing one would attribute a hand-entered number to a device that
+    // never produced it.
+    m.add_reading(0.0238, rt::UncertaintyKind::standard, 0.0005);
+
+    REQUIRE(m.source_of(0).has_value());
+    REQUIRE(m.source_of(0)->index == 7);
+    REQUIRE(m.source_of(0)->generation == 3);
+    REQUIRE(m.source_of(0)->valid());
+
+    // Nothing for the manual reading, for an index past the end, and for a source of zeroes.
+    // Three different situations with one answer, which is what the optional return says.
+    REQUIRE_FALSE(m.source_of(1).has_value());
+    REQUIRE_FALSE(m.source_of(99).has_value());
+
+    // The provenance is stored with the **reading**, so the two cannot drift apart: the value
+    // and where it came from are one record.
+    REQUIRE(m.dataset().readings()[0].reading.value == 0.0241);
+    REQUIRE(m.dataset().readings()[0].source == scope);
+
+    // A rejected reading keeps its source. Rejection is not deletion -- the record of where a
+    // discarded reading came from is part of why it was discarded, and a source that vanished
+    // with the rejection would leave a row in the table that points at nothing.
+    REQUIRE(m.reject(0).has_value());
+    REQUIRE_FALSE(m.dataset().readings()[0].valid);
+    REQUIRE(m.source_of(0).has_value());
+    REQUIRE(m.source_of(0)->index == 7);
+
+    // A default-constructed source is what "no node" looks like, and it is invalid.
+    REQUIRE_FALSE(rt::Measurement::Source{}.valid());
+    REQUIRE_FALSE(rt::Measurement::Source{0, 3}.valid());
+    REQUIRE_FALSE(rt::Measurement::Source{7, 0}.valid());
+}
+
 TEST_CASE("measurement.model.report_names_its_gaps", "[measurement][model]") {
     // An empty session's only gap is that it is empty, and it says exactly that. Every
     // other statement about the statistics would be meaningless without this one, so it is

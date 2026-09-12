@@ -29,6 +29,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <limits>
 #include <map>
@@ -306,6 +307,46 @@ public:
         return std::make_pair(best->number, best_is_output);
     }
 
+    /// @brief Whether a connection gesture is in flight anywhere on the canvas.
+    ///
+    /// A flag rather than a check of the view's own state: the item has no view, and asking one would make the
+    /// paint code depend on the widget that owns it. The view sets this on every item when the gesture starts and
+    /// ends -- two calls, both in `mousePressEvent` and `mouseReleaseEvent`.
+    void set_aiming(bool aiming) noexcept {
+        if (aiming_ == aiming) return;
+        aiming_ = aiming;
+        update();
+    }
+
+    /// @brief Whether `(port, is_output)` is the stub the cursor is currently over, so it can be drawn larger.
+    void set_hovered(std::optional<std::pair<qp::graph::PortIndex, bool>> port) noexcept {
+        if (hovered_ == port) return;
+        hovered_ = port;
+        update();
+    }
+
+    /// @brief The port the cursor is over, if any. Read by the view to name it in a status line.
+    [[nodiscard]] const std::optional<std::pair<qp::graph::PortIndex, bool>>& hovered() const noexcept {
+        return hovered_;
+    }
+
+    /**
+     * @brief Sets how prominently this node is drawn, for the neighbourhood highlight.
+     *
+     * `1.0` is normal. A dimmed node is still drawn, still hit-testable and still draggable: fading is a reading
+     * aid, not a mode, and a node a user cannot click because it is "not selected" would make the highlight a
+     * trap.
+     *
+     * @param factor `0.0`..`1.0`.
+     */
+    void set_prominence(qreal factor) noexcept {
+        if (qFuzzyCompare(prominence_, factor)) return;
+        prominence_ = factor;
+        update();
+    }
+
+    [[nodiscard]] qreal prominence() const noexcept { return prominence_; }
+
     void set_move_handler(std::function<void(NodeItem&)> handler) {
         on_settled_ = std::move(handler);
     }
@@ -321,6 +362,15 @@ public:
         const qreal right = m.width + kPortRadius;
         const qreal extra = kPortRadius + 1.0;
         return QRectF(left, -extra, right - left, m.height + 2.0 * extra);
+    }
+
+    /// @brief How large a stub is drawn. The hovered one is bigger, so a press has a visible target.
+    [[nodiscard]] qreal port_radius(qp::graph::PortIndex port, bool is_output) const noexcept {
+        const bool hovered = hovered_.has_value() && hovered_->first == port &&
+                             hovered_->second == is_output;
+        // Also enlarged while a connection is being drawn, which is when the user is hunting for the destination:
+        // the canvas tells every stub to show itself rather than making them aim at a hidden target.
+        return (hovered || aiming_) ? kPortRadius * 1.6 : kPortRadius;
     }
 
     void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override {
@@ -349,10 +399,25 @@ public:
         const QRectF box(0.0, 0.0, m.width, m.height);
         const qreal header_height = m.header_height;
 
+        // The neighbourhood highlight, applied by **fading towards the surface** rather than by making the item
+        // translucent. A translucent item lets the background show through its text, so a dimmed label becomes
+        // harder to read than a dimmed fill -- and the point of dimming is to move attention, not to make
+        // something illegible. Blending each colour towards the canvas is the version that keeps a dimmed node
+        // readable while the selected one stands out.
+        const auto faded = [this, &c](QColor colour) {
+            if (prominence_ >= 1.0) return colour;
+            const QColor background = qt::theme::to_qcolor(c.surface);
+            const qreal keep = std::clamp(prominence_, 0.0, 1.0);
+            return QColor::fromRgbF(colour.redF() * keep + background.redF() * (1.0 - keep),
+                                    colour.greenF() * keep + background.greenF() * (1.0 - keep),
+                                    colour.blueF() * keep + background.blueF() * (1.0 - keep));
+        };
+
         QColor band = qt::theme::category_colour(category_);
         if (chosen) {
             band = band.lighter(115);
         }
+        band = faded(band);
         const auto as_theme_rgb = [](const QColor& colour) {
             return qt::theme::Rgb{static_cast<std::uint8_t>(colour.red()),
                                   static_cast<std::uint8_t>(colour.green()),
@@ -371,7 +436,7 @@ public:
         painter->setPen(Qt::NoPen);
         painter->setBrush(band);
         painter->drawRoundedRect(box, 5.0, 5.0);
-        painter->setBrush(qt::theme::to_qcolor(c.surface_raised));
+        painter->setBrush(faded(qt::theme::to_qcolor(c.surface_raised)));
         painter->drawRect(QRectF(0.0, header_height, m.width, m.height - header_height));
 
         // One outline around the whole box, so the category colour reads as a header rather than as a fill that
@@ -382,7 +447,7 @@ public:
         // is a selection state a user cannot see. The ink chosen for the title is by construction one of the two
         // most contrasting colours available for that fill, so a lighter step of it is guaranteed to read.
         const QColor title_ink = qt::theme::text_on(as_theme_rgb(band));
-        const QColor ring = chosen ? title_ink.lighter(150) : qt::theme::to_qcolor(c.edge_dim);
+        const QColor ring = chosen ? title_ink.lighter(150) : faded(qt::theme::to_qcolor(c.edge_dim));
         painter->setBrush(Qt::NoBrush);
         painter->setPen(QPen(ring, chosen ? 2.0 : 1.5));
         painter->drawRoundedRect(box, 5.0, 5.0);
@@ -391,9 +456,8 @@ public:
         painter->setPen(title_ink);
         painter->drawText(QRectF(11.0, 2.0, m.width - 22.0, header_height - 4.0),
                           Qt::AlignLeft | Qt::AlignVCenter, title_);
-
         painter->setFont(label_font);
-        painter->setPen(qt::theme::to_qcolor(c.text_muted));
+        painter->setPen(faded(qt::theme::to_qcolor(c.text_muted)));
         painter->drawText(QRectF(11.0, header_height + 1.0, m.width - 22.0, m.port_row_height),
                           Qt::AlignLeft | Qt::AlignVCenter, type_name_);
 
@@ -417,20 +481,27 @@ public:
                 const qreal y = port_local_y(inputs_[i].number, /*is_output=*/false);
                 // An input is drawn as a **ring**: a connection arrives here, and an open circle reads as a
                 // socket. An output is a filled disc, so the direction of a wire is visible without tracing it.
-                painter->setBrush(qt::theme::to_qcolor(c.surface_raised));
-                painter->setPen(QPen(qt::theme::to_qcolor(c.accent), 1.6));
-                painter->drawEllipse(QPointF(0.0, y), kPortRadius, kPortRadius);
-                painter->setPen(qt::theme::to_qcolor(c.text));
+                //
+                // The hovered stub is drawn larger, and the pen is thicker: without that there is no feedback
+                // that a press here would start a connection rather than select the node, and a gesture nobody
+                // can discover is a gesture nobody uses.
+                const qreal radius = port_radius(inputs_[i].number, /*is_output=*/false);
+                const bool hot = radius > kPortRadius;
+                painter->setBrush(faded(qt::theme::to_qcolor(c.surface_raised)));
+                painter->setPen(QPen(qt::theme::to_qcolor(c.accent), hot ? 2.4 : 1.6));
+                painter->drawEllipse(QPointF(0.0, y), radius, radius);
+                painter->setPen(faded(qt::theme::to_qcolor(c.text)));
                 painter->drawText(QRectF(10.0, y - m.port_row_height / 2.0, m.width / 2.0 - 12.0,
                                          m.port_row_height),
                                   Qt::AlignLeft | Qt::AlignVCenter, inputs_[i].label);
             }
             if (i < outputs_.size()) {
                 const qreal y = port_local_y(outputs_[i].number, /*is_output=*/true);
+                const qreal radius = port_radius(outputs_[i].number, /*is_output=*/true);
                 painter->setPen(Qt::NoPen);
-                painter->setBrush(qt::theme::to_qcolor(c.accent));
-                painter->drawEllipse(QPointF(m.width, y), kPortRadius, kPortRadius);
-                painter->setPen(qt::theme::to_qcolor(c.text));
+                painter->setBrush(faded(qt::theme::to_qcolor(c.accent)));
+                painter->drawEllipse(QPointF(m.width, y), radius, radius);
+                painter->setPen(faded(qt::theme::to_qcolor(c.text)));
                 painter->drawText(QRectF(m.width / 2.0, y - m.port_row_height / 2.0,
                                          m.width / 2.0 - 10.0, m.port_row_height),
                                   Qt::AlignRight | Qt::AlignVCenter, outputs_[i].label);
@@ -440,7 +511,7 @@ public:
         // `text_muted`, not `text_disabled`: this is a node's own identity, meant to be read. The dark palette's
         // disabled grey measures 2.5:1 on `surface_raised`, which is below the graphics floor -- and a disabled
         // colour on information that is not disabled is how a palette's own rules get quietly broken.
-        painter->setPen(qt::theme::to_qcolor(c.text_muted));
+        painter->setPen(faded(qt::theme::to_qcolor(c.text_muted)));
         painter->drawText(QRectF(0.0, m.height - m.port_row_height, m.width, m.port_row_height - 2.0),
                           Qt::AlignHCenter | Qt::AlignVCenter, describe(id_));
     }
@@ -490,6 +561,12 @@ private:
     std::vector<Port> outputs_{};
     std::function<void(NodeItem&)> on_settled_{};
     std::function<void(NodeItem&)> on_dragged_{};
+    /// The stub under the cursor, if any, so it can be drawn as the thing a press would grab.
+    std::optional<std::pair<qp::graph::PortIndex, bool>> hovered_{};
+    /// Whether a connection gesture is in flight, so every stub shows itself as a target.
+    bool aiming_ = false;
+    /// How prominently this box is drawn. See `set_prominence`.
+    qreal prominence_ = 1.0;
 };
 
 /**
@@ -548,16 +625,38 @@ public:
         return QRectF(from_, to_).normalized().adjusted(-2.0, -2.0, 2.0, 2.0);
     }
 
+    /// @brief Sets how prominently this edge is drawn, for the neighbourhood highlight. See `NodeItem`.
+    void set_prominence(qreal factor) noexcept {
+        if (qFuzzyCompare(prominence_, factor)) return;
+        prominence_ = factor;
+        update();
+    }
+
+    /// @brief How prominently this edge is drawn. Read by the view when a caller asks.
+    [[nodiscard]] qreal prominence() const noexcept { return prominence_; }
+
     void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override {
         const qt::theme::Palette& c = qt::theme::palette();
+        // Faded towards the canvas rather than made translucent, for the reason `NodeItem` gives: a translucent
+        // line over a dark background disappears rather than receding, and a connection that vanishes is
+        // indistinguishable from one that was never made.
+        const auto faded = [this, &c](QColor colour) {
+            if (prominence_ >= 1.0) return colour;
+            const QColor background = qt::theme::to_qcolor(c.surface);
+            const qreal keep = std::clamp(prominence_, 0.0, 1.0);
+            return QColor::fromRgbF(colour.redF() * keep + background.redF() * (1.0 - keep),
+                                    colour.greenF() * keep + background.greenF() * (1.0 - keep),
+                                    colour.blueF() * keep + background.blueF() * (1.0 - keep));
+        };
+
         painter->setRenderHint(QPainter::Antialiasing, true);
-        painter->setPen(QPen(qt::theme::to_qcolor(c.edge), 1.6));
+        painter->setPen(QPen(faded(qt::theme::to_qcolor(c.edge)), 1.6));
         painter->drawLine(from_, to_);
         // A small dot at the source end, so two edges crossing between the same pair of boxes can still be told
         // apart by which stub each one starts at. Without it the line's direction is only inferable from the
         // ring/disc difference between the ports themselves.
         painter->setPen(Qt::NoPen);
-        painter->setBrush(qt::theme::to_qcolor(c.edge));
+        painter->setBrush(faded(qt::theme::to_qcolor(c.edge)));
         painter->drawEllipse(from_, 2.0, 2.0);
     }
 
@@ -568,6 +667,8 @@ private:
     qp::graph::PortRef to_port_{};
     QPointF from_{};
     QPointF to_{};
+    /// How prominently this edge is drawn. See `set_prominence`.
+    qreal prominence_ = 1.0;
 };
 
 // ===========================================================================
@@ -680,22 +781,56 @@ NodeGraphView::NodeGraphView(qp::authoring::Session& session, const qp::graph::N
     // Registered before the first rebuild, so a change landing between
     // construction and the first draw is not missed.
     (void)session_.add_listener(*bridge_);
+
+    // The selection signal the window and the property panel depend on.
+    //
+    // It was **declared and never emitted**: `node_selected` appears in this header, `EditorWindow` connects a
+    // handler to it, and nothing raised it -- so clicking a node left the property panel showing "Select a node to
+    // edit its parameters" while a node was plainly selected. A signal that is declared, connected and never
+    // emitted is worse than a missing one: the wiring looks complete to anyone reading either file.
+    //
+    // Connected to the **scene's** signal rather than to a handler of our own, so every way a selection can change
+    // -- a click, a rubber-band drag, `select_node`, a removal -- raises it exactly once.
+    connect(scene_, &QGraphicsScene::selectionChanged, this, [this] {
+        // A rebuild deletes and re-creates every item, and deleting a selected one emits this signal from inside
+        // `scene_->clear()`. Doing the work then would read a half-built scene; `rebuild` recomputes the highlight
+        // once it is whole again.
+        if (rebuilding_) return;
+        // And once the window is being torn down there is nothing left to tell. See `go_quiet`: `~QGraphicsView`
+        // clears the scene, that raises this signal, and the handler used to rebuild a sibling panel's widgets from
+        // inside the canvas's destructor.
+        if (quiet_) return;
+        refresh_prominence();
+        const std::optional<qp::graph::NodeId> chosen = selected_node();
+        if (chosen.has_value()) Q_EMIT node_selected(*chosen);
+    });
+
     rebuild();
 }
 
 NodeGraphView::~NodeGraphView() = default;
 
+void NodeGraphView::go_quiet() noexcept { quiet_ = true; }
+
 void NodeGraphView::rebuild() {
-    // The scene is cleared and rebuilt rather than patched. A partial update has
-    // to know which commands affect which items, and getting that mapping subtly
-    // wrong is how a canvas ends up drawing a node that no longer exists -- which
-    // is the failure mode this whole design is arranged to prevent.
-    scene_->clear();
+    // **Order matters here, and it took a segmentation fault to learn.**
+    //
+    // `scene_->clear()` deletes every item, and deleting a selected item makes Qt emit `selectionChanged`
+    // **synchronously**. So the handlers that read `node_items_` and `edge_items_` run *inside* that call -- and
+    // they were reading vectors still full of the pointers Qt had just freed. The crash was a
+    // use-after-free in `refresh_prominence`, which dereferences each edge's two node pointers.
+    //
+    // Two fixes, and both are needed: the pointer vectors are emptied **before** the scene is cleared, so the
+    // handlers find nothing to dereference; and the rebuild is fenced by `rebuilding_`, so a handler that would
+    // do work reads the quiet flag instead of a half-built scene.
+    rebuilding_ = true;
     node_items_.clear();
-    // The scene owned them, so they are gone with it; holding the pointers would be holding dangling ones.
     edge_items_.clear();
+    // The scene owned the items, so they are gone with it; holding the pointers into the next line would be
+    // holding dangling ones.
     drag_from_ = nullptr;
     drag_line_ = nullptr;
+    scene_->clear();
 
     const qp::graph::Graph& graph = session_.graph();
     const std::map<std::uint64_t, QPointF> stored = decode_layout(document_.layouts().get(kGraphViewId));
@@ -809,6 +944,12 @@ void NodeGraphView::rebuild() {
             frame_graph();
         });
     }
+
+    // The scene is whole again, so the handlers may read it. The highlight is recomputed here rather than left to
+    // the selection signal: a rebuild replaces every item, and an item that was faded before is a fresh item with
+    // full prominence now.
+    rebuilding_ = false;
+    refresh_prominence();
 }
 
 void NodeGraphView::update_edges_for(const NodeItem& moved) {
@@ -883,6 +1024,12 @@ void NodeGraphView::mousePressEvent(QMouseEvent* event) {
 
         drag_from_ = item;
         drag_from_port_ = found->first;
+        // Every stub shows itself as a target while a wire is in flight, so the user is not aiming at a hidden
+        // thing. Set on all of them because the item that will receive the wire is not known yet.
+        for (const auto& [key, other] : node_items_) {
+            (void)key;
+            other->set_aiming(true);
+        }
         const QPointF start = item->port_scene_pos(found->first, /*is_output=*/true);
 
         // The preview: a plain line in the edge colour, owned by the scene and destroyed when the gesture ends.
@@ -912,12 +1059,91 @@ void NodeGraphView::mouseMoveEvent(QMouseEvent* event) {
         return;
     }
     if (drag_from_ == nullptr || drag_line_ == nullptr) {
+        // Not mid-gesture: report which port the cursor is over, so a press has a visible target. This runs on
+        // every mouse move, so it is a hit test over the drawn stubs and nothing else -- the same
+        // `nearest_port` a press uses, which is what keeps the highlight and the gesture from disagreeing
+        // about where the target is.
+        update_hover(event->pos());
         QGraphicsView::mouseMoveEvent(event);
         return;
     }
     drag_line_->setLine(QLineF(drag_from_->port_scene_pos(drag_from_port_, /*is_output=*/true),
                                mapToScene(event->pos())));
     event->accept();
+}
+
+void NodeGraphView::update_hover(const QPoint& viewport_pos) {
+    const QPointF scene_point = mapToScene(viewport_pos);
+    const qreal zoom = transform().m11() > 0.0 ? transform().m11() : 1.0;
+    const qreal radius = kPortGrabPixels / zoom;
+
+    NodeItem* found = nullptr;
+    std::optional<std::pair<qp::graph::PortIndex, bool>> port;
+    for (const auto& [key, item] : node_items_) {
+        (void)key;
+        const auto hit = item->nearest_port(scene_point, radius);
+        if (!hit.has_value()) continue;
+        found = item;
+        port = hit;
+        break;
+    }
+
+    // Cleared on every item but the one under the cursor, so moving from a port to empty canvas removes the
+    // highlight instead of leaving the last one lit.
+    for (const auto& [key, item] : node_items_) {
+        (void)key;
+        item->set_hovered(item == found ? port : std::nullopt);
+    }
+
+    // The cursor is the second half of the feedback, and it says **which** gesture the press would start: a
+    // crosshair for an output (a wire leaves here), a pointing hand for an input (a wire can arrive here), and
+    // the arrow otherwise, where a press selects or drags.
+    if (!port.has_value()) {
+        viewport()->setCursor(Qt::ArrowCursor);
+    } else {
+        viewport()->setCursor(port->second ? Qt::CrossCursor : Qt::PointingHandCursor);
+    }
+}
+
+void NodeGraphView::refresh_prominence() {
+    // The neighbourhood highlight: with a node selected, it and everything it is wired to are drawn normally and
+    // everything else is faded. The question a user asks while reading a graph is "what does this depend on, and
+    // what depends on it" -- and the answer is exactly the selected node's neighbours.
+    //
+    // The **edges** fade with their endpoints rather than on their own rule: an edge is interesting precisely when
+    // one of the two nodes it joins is, so deriving it from the nodes keeps the two consistent without a second
+    // rule that could disagree.
+    const std::optional<qp::graph::NodeId> chosen = selected_node();
+    if (!chosen.has_value()) {
+        for (const auto& [key, item] : node_items_) {
+            (void)key;
+            item->set_prominence(1.0);
+        }
+        for (EdgeItem* edge : edge_items_) edge->set_prominence(1.0);
+        return;
+    }
+
+    std::unordered_map<std::uint64_t, bool> related;
+    related[key_of(*chosen)] = true;
+    for (const qp::graph::Edge& edge : session_.graph().edges()) {
+        if (edge.from.node == *chosen) related[key_of(edge.to.node)] = true;
+        if (edge.to.node == *chosen) related[key_of(edge.from.node)] = true;
+    }
+
+    for (const auto& [key, item] : node_items_) {
+        const bool lit = related.find(key) != related.end();
+        item->set_prominence(lit ? 1.0 : kDimmedProminence);
+    }
+    for (EdgeItem* edge : edge_items_) {
+        // An edge is interesting when **either** endpoint is, which is the rule the fade derives from the nodes
+        // rather than inventing a second one. The consequence is worth stating because it looks wrong at first
+        // glance: the wire leaving a lit node into a dimmed one is still drawn lit, and that is the point -- it is
+        // the wire along which the selection's influence travels, and fading it would cut the very connection the
+        // highlight exists to show.
+        const bool lit = related.find(key_of(edge->from_port().node)) != related.end() ||
+                         related.find(key_of(edge->to_port().node)) != related.end();
+        edge->set_prominence(lit ? 1.0 : kDimmedProminence);
+    }
 }
 
 void NodeGraphView::wheelEvent(QWheelEvent* event) {
@@ -1055,6 +1281,10 @@ void NodeGraphView::mouseReleaseEvent(QMouseEvent* event) {
 
     NodeItem* const source = drag_from_;
     const qp::graph::PortIndex source_port = drag_from_port_;
+    for (const auto& [key, other] : node_items_) {
+        (void)key;
+        other->set_aiming(false);
+    }
     scene_->removeItem(drag_line_);
     delete drag_line_;
     drag_line_ = nullptr;
@@ -1194,6 +1424,54 @@ void NodeGraphView::select_node(qp::graph::NodeId node) {
     // click does. A second notion of "selected" is how a panel comes to disagree with a canvas.
     scene_->clearSelection();
     it->second->setSelected(true);
+}
+
+void NodeGraphView::hover_at(const QPoint& viewport_pos) { update_hover(viewport_pos); }
+
+void NodeGraphView::clear_selection() noexcept {
+    // Through the scene, like `select_node`, and for the same reason: the highlight, `selectedItems()` and Qt's
+    // `selectionChanged` all follow from the scene's own model, so there is no second notion of "selected" here to
+    // disagree with it. `QGraphicsScene::clearSelection` raises `selectionChanged`, which the handler above turns
+    // into a full-prominence refresh -- and it emits nothing, because `selected_node()` then has no answer.
+    scene_->clearSelection();
+}
+
+std::optional<std::pair<qp::graph::PortIndex, bool>> NodeGraphView::hovered_port() const noexcept {
+    // Read from the items rather than from a member the widget keeps beside them. The item **is** the state: it is
+    // what `port_radius` consults when it paints, so reporting anything else would be reporting an intention rather
+    // than what the canvas shows -- and the two would diverge the first time a hover was cleared on one path only.
+    for (const auto& [key, item] : node_items_) {
+        (void)key;
+        if (item->hovered().has_value()) return item->hovered();
+    }
+    return std::nullopt;
+}
+
+std::optional<qp::graph::NodeId> NodeGraphView::hovered_node() const noexcept {
+    for (const auto& [key, item] : node_items_) {
+        (void)key;
+        if (item->hovered().has_value()) return item->node_id();
+    }
+    return std::nullopt;
+}
+
+qreal NodeGraphView::prominence_of(qp::graph::NodeId node) const noexcept {
+    const auto it = node_items_.find(key_of(node));
+    // `1.0` for a node the canvas does not draw: "not faded" is the safe answer for one that is absent, and the
+    // alternative -- a dimmed value for a node nobody can see -- would make a caller's assertion depend on the
+    // node's existence rather than on the highlight.
+    if (it == node_items_.end()) return 1.0;
+    return it->second->prominence();
+}
+
+qp::graph::NodeId NodeGraphView::edge_source(std::size_t index) const noexcept {
+    if (index >= edge_items_.size()) return {};
+    return edge_items_[index]->from_port().node;
+}
+
+qreal NodeGraphView::edge_prominence(std::size_t index) const noexcept {
+    if (index >= edge_items_.size()) return 1.0;
+    return edge_items_[index]->prominence();
 }
 
 }  // namespace qp::views

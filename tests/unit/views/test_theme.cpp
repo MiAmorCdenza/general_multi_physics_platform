@@ -325,7 +325,7 @@ TEST_CASE("theme.icons_are_well_formed", "[views][theme]") {
     // The table is keyed by a scoped enum, so the guard is that every enumerator is reachable by index and that
     // an out-of-range index is the documented fallback rather than a crash.
     REQUIRE(qp::views::qt::icons::glyph_at(0) == Glyph::new_document);
-    REQUIRE(qp::views::qt::icons::glyph_at(qp::views::qt::icons::count() - 1) == Glyph::run);
+    REQUIRE(qp::views::qt::icons::glyph_at(qp::views::qt::icons::count() - 1) == Glyph::measure);
     REQUIRE(qp::views::qt::icons::glyph_at(999) == Glyph::new_document);
     REQUIRE(qp::views::qt::icons::bitmap(Glyph::run).size == IconBitmap::kSize);
     // `Ink` is a role, not a colour: enumerating it is what makes `icons_use_palette_ink` below possible.

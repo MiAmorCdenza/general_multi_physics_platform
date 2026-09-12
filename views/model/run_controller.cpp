@@ -72,6 +72,10 @@ RunResult RunController::run() const {
         return out;
     }
     out.report.node_type = ready.type_name;
+    // Recorded on the success path only. `RunReadiness::node` is documented as invalid for `empty_graph` and
+    // `no_operator`, so copying it before the refusal check would publish an id that means "none" as though it
+    // meant "this one" -- and a caller stamping provenance from it would attribute a reading to node 0.
+    out.report.node = ready.node;
 
     const qp::graph::Node* candidate = graph.find_node(ready.node);
     if (candidate == nullptr) {

@@ -98,6 +98,29 @@ const char* const kRun[] = {
 };
 constexpr Ink kRunInk[] = {Ink::accent, Ink::stroke, Ink::stroke, Ink::stroke};
 
+// -- measure: a graduated scale with one value picked out --------------------
+//
+// A ruler with three ticks and a bright slide on one of them, because the action records **one** number from a
+// series: the reading a person chooses to write down. A clock or a curve would say "wait" or "look", and the act
+// this button performs is neither.
+//
+// The first version was a vertical scale drawn almost entirely in the stroke role, and at 16x16 -- the size a
+// toolbar asks for -- it rendered as a dark blob with a faint notch, which is what a screenshot of the running
+// window showed. Two changes fix it: the ticks are horizontal so the shape reads as a scale, and each one **ends
+// in the accent colour**, so the glyph has three bright marks instead of one dark mass. An icon nobody can name is
+// a button nobody presses.
+const char* const kMeasure[] = {
+    "00000000",
+    "01111110",
+    "01110110",
+    "01101110",
+    "01110110",
+    "01101110",
+    "01111110",
+    "00000000",
+};
+constexpr Ink kMeasureInk[] = {Ink::stroke, Ink::accent, Ink::stroke, Ink::stroke};
+
 }  // namespace
 
 const IconBitmap& bitmap(Glyph glyph) noexcept {
@@ -107,6 +130,7 @@ const IconBitmap& bitmap(Glyph glyph) noexcept {
         {kSave, IconBitmap::kSize, kSaveInk, 4},
         {kExport, IconBitmap::kSize, kExportInk, 4},
         {kRun, IconBitmap::kSize, kRunInk, 4},
+        {kMeasure, IconBitmap::kSize, kMeasureInk, 4},
     };
     const auto index = static_cast<std::size_t>(glyph);
     return kBitmaps[index < count() ? index : 0];
@@ -119,6 +143,7 @@ std::string_view name(Glyph glyph) noexcept {
         case Glyph::save: return "save";
         case Glyph::export_trace: return "export_trace";
         case Glyph::run: return "run";
+        case Glyph::measure: return "measure";
     }
     return "unknown";
 }

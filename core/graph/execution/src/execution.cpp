@@ -76,6 +76,10 @@ diag::Result<void> GraphRun::prepare(const Node& node,
         // run, which is the difference between "the run failed" and "nothing can run demo.foo yet".
         return diag::ErrorCode::not_implemented;
     }
+    // Recorded from the node that was actually bound, so the trace says which node produced its channels.
+    // Taken **after** a binder claimed the node: a run that refused to bind has no source to name, and
+    // naming the node anyway would attribute a trace that does not exist to a node that did nothing.
+    source_node_ = rt::Channel::NodeRef{node.id.index, node.id.generation};
 
     // A fresh trace per run so a second run does not append to the first one's samples, and its channels
     // are declared **here** rather than in `set_run`: a bound loop is one that can record, and
@@ -90,10 +94,14 @@ diag::Result<void> GraphRun::prepare(const Node& node,
 }
 
 diag::Result<void> GraphRun::declare_channels() {
-    const auto x_channel = trace_.add_channel(rt::Channel{kPositionChannel, qp::units::dims::length});
+    // Both channels come from the same node, and the source travels with each: a reader looking at one column
+    // of a report asks "which node made this number", and an answer that required the other column to be present
+    // would be an answer that disappears when a run records only one quantity.
+    const auto x_channel =
+        trace_.add_channel(rt::Channel{kPositionChannel, qp::units::dims::length, source_node_});
     if (!x_channel.has_value()) return x_channel.error();
     const auto v_channel =
-        trace_.add_channel(rt::Channel{kVelocityChannel, qp::units::dims::velocity});
+        trace_.add_channel(rt::Channel{kVelocityChannel, qp::units::dims::velocity, source_node_});
     if (!v_channel.has_value()) return v_channel.error();
     return {};
 }

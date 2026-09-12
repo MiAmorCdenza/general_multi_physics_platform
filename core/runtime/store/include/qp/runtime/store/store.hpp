@@ -179,6 +179,34 @@ struct Measurement final {
     std::optional<double> t{};
     /// Whether the analyst still counts this reading. False keeps it in the record.
     bool valid = true;
+    /// Which node produced this reading, as a `(index, generation)` pair, or an invalid one when nothing did.
+    ///
+    /// ## Why a reading says where it came from
+    ///
+    /// "Measure -> record -> uncertainty -> report" is the loop this platform exists for, and the report is the
+    /// end of it -- but a number in a report that cannot be traced back to the device that produced it is the
+    /// artefact the loop replaces. The trace's channels carry their originating node for the same reason; this
+    /// carries it for a **reading**, which is the other thing a dataset holds.
+    ///
+    /// Flat integers rather than a `NodeId`, and for the same layering reason `trace::Channel` gives: `store` is
+    /// L2 and a node identifier belongs to L1's IR. The pair is layout-compatible with a `NodeId` by construction
+    /// and a caller converts.
+    ///
+    /// Invalid for a reading a user typed in by hand, which is a legitimate kind of reading in a lab session and
+    /// has no node behind it.
+    struct Source final {
+        std::uint32_t index = 0;
+        std::uint32_t generation = 0;
+
+        [[nodiscard]] constexpr bool valid() const noexcept { return index != 0 && generation != 0; }
+        [[nodiscard]] friend constexpr bool operator==(Source a, Source b) noexcept {
+            return a.index == b.index && a.generation == b.generation;
+        }
+        [[nodiscard]] friend constexpr bool operator!=(Source a, Source b) noexcept {
+            return !(a == b);
+        }
+    };
+    Source source{};
 };
 
 /**
@@ -222,6 +250,29 @@ public:
 
     /// @brief Appends a bounded value with a quantified uncertainty.
     void add(double value, double uncertainty) noexcept;
+
+    /**
+     * @brief Appends a whole record: the reading **and** where it came from.
+     *
+     * The two `add` overloads above drop everything but the value, which is right for a reading with no
+     * provenance and wrong for one an instrument produced. A caller that has a source must use this, because the
+     * alternative -- appending the value and then reaching back into `readings()` to stamp it -- would leave the
+     * record briefly claiming the number came from nowhere.
+     *
+     * @param reading The record. Its reading's dimension is overwritten with the dataset's, as above.
+     *
+     * @ownership   value
+     * @thread      main
+     * @pre         none
+     * @post        `readings().back() == reading` up to the dimension normalisation, and `size()` is one larger
+     * @invariant   The record is appended once; nothing else in the series changes
+     * @errors      noexcept
+     * @complexity  O(1) amortized
+     * @nondet      none
+     * @frozen      no
+     * @tests       store.dataset.add_keeps_the_source
+     */
+    void add(Measurement record) noexcept;
 
     /// @brief Every reading, valid or not. The record keeps the rejected ones.
     [[nodiscard]] const std::vector<Measurement>& readings() const noexcept { return items_; }

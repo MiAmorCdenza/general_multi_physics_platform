@@ -11,6 +11,7 @@
 #include <QFileDialog>
 #include <QMenu>
 #include <QMenuBar>
+#include <QSize>
 #include <QToolBar>
 
 #include <qp/views/model/demo_library.hpp>
@@ -43,10 +44,15 @@ namespace {
 
 /// @brief Initial width of the measurement dock, in logical pixels.
 ///
-/// Wide enough for the readings table's four columns at QFont's default size, and no wider: the
-/// canvas is the panel that cannot do its job without width, and a dock that takes more than it
-/// needs takes it from the canvas.
-constexpr int kDockWidth = 320;
+/// Wide enough for the readings table's four columns at QFont's default size, and no wider: the canvas is the
+/// panel that cannot do its job without width, and a dock that takes more than it needs takes it from the
+/// canvas.
+///
+/// It used to be `320`, which was not wide enough, and a screenshot of the running window is what said so: the
+/// table's "status" column was outside the visible dock, so a session that had rejected a reading showed three
+/// columns and no sign of it. The status column is the one that says whether a number counts -- the panel's
+/// whole point one layer down -- so a width that hides it is a width that hides the feature.
+constexpr int kDockWidth = 420;
 
 }  // namespace
 
@@ -146,6 +152,16 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
     setCentralWidget(central);
 
     measurements_panel_ = new MeasurementPanel(measurements_, this);
+    // An explicit **maximum** as well as the initial width below, and the maximum is what actually decides it: a
+    // `QDockWidget` sizes itself from its child's size hint, and a `QTableWidget`'s hint grows with its content --
+    // so a window that was resized wider handed the extra width to the dock rather than to the canvas, and the
+    // canvas (the one panel that cannot do its job without width) lost the argument. Measured on the running
+    // window: at 1680 logical pixels the dock had taken 892 of them and the canvas was left with 692, which is
+    // not a layout that any `resizeDocks` call can fix from the outside.
+    //
+    // `kDockWidth` is a maximum rather than a preference, and it is the narrowest width at which the readings
+    // table shows all four of its columns.
+    measurements_panel_->setMaximumWidth(kDockWidth);
     auto* dock = new QDockWidget(tr("Measurement"), this);
     dock->setWidget(measurements_panel_);
     // Not closable and not floatable. The panel is the reporting half of the loop the
@@ -155,6 +171,9 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
     addDockWidget(Qt::RightDockWidgetArea, dock);
 
     confidence_panel_ = new ConfidencePanel(confidence_, this);
+    // The same maximum, for the same reason. Both of these panels are tables of a fixed number of columns; neither
+    // gets more useful when it is wider, and the space comes straight out of the canvas.
+    confidence_panel_->setMaximumWidth(kDockWidth);
     auto* confidence_dock = new QDockWidget(tr("Confidence"), this);
     confidence_dock->setWidget(confidence_panel_);
     confidence_dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
@@ -167,8 +186,18 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
     // An explicit width, applied after the first layout pass. A table of readings has no opinion
     // about how wide it should be, and letting `sizeHint` decide is how the dock took 420 of the
     // window's 1280 while the canvas had 185 and could not show the graph it was drawing.
-    QTimer::singleShot(0, this, [this, dock] {
-        resizeDocks({dock}, {kDockWidth}, Qt::Horizontal);
+    //
+    // **Both** docks are sized, not just the measurement one. The first version named one dock, and the
+    // confidence dock below it then took whatever its own `sizeHint` asked for -- which is the same defect the
+    // comment above records, one dock further down. Sizing them as a pair is also what makes the two tabs line
+    // up: they are read together, and two panels of different widths in one column read as two unrelated tools.
+    //
+    // And the canvas is framed **after** the docks have taken their share. `NodeGraphView::rebuild` defers its
+    // first framing to the next event-loop turn, which used to land before the docks were resized -- so the fit
+    // was computed against a canvas that was about to get narrower, and the running window showed a graph
+    // scrolled off the right-hand edge with "Fit graph" as the only way to find it.
+    QTimer::singleShot(0, this, [this, dock, confidence_dock] {
+        resizeDocks({dock, confidence_dock}, {kDockWidth, kDockWidth}, Qt::Horizontal);
     });
 
     // The Run action. Built after the panels, because `run_once` refreshes them.
@@ -180,6 +209,14 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
         qp::graph::ResolveContext{&content_->node_types(), &qp::ports::builtin_registry()});
     auto* tools = addToolBar(tr("Experiment"));
     tools->setMovable(false);
+    // An explicit icon size, because the default is not one. An `IconBitmap` is an 8x8 grid and `to_icon`
+    // rasterises it at a **whole-number** scale, so a toolbar at Qt's usual 24-pixel default gets the 8-pixel
+    // glyph replicated three times -- and `QToolBar` then scales that bitmap back down to fit the button, which
+    // is what turned the "measure" glyph into an unreadable smudge in a screenshot of the running window.
+    // `ToolButtonTextBesideIcon` is the other half: a tooltip is invisible until the pointer rests on the button,
+    // and two icon-only buttons in a row are two buttons nobody can name.
+    tools->setIconSize(QSize(16, 16));
+    tools->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     run_action_ = tools->addAction(tr("Run"));
     run_action_->setToolTip(QString::fromStdString(run_controller_->description()));
     run_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
@@ -188,6 +225,17 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
     // image files.
     run_action_->setIcon(qt::to_icon(qt::icons::Glyph::run));
     connect(run_action_, &QAction::triggered, this, &EditorWindow::run_once);
+
+    // The measurement action, next to Run because it is the other half of the same act: a run produces a
+    // series and this writes one number of it down, attributed to the node the user has selected. Toolbar
+    // rather than menu for the same reason Run is -- both are about the experiment, and the File and View
+    // menus are about the document and the picture.
+    measure_action_ = tools->addAction(tr("Measure"));
+    measure_action_->setToolTip(
+        tr("Record the selected node's latest value as a reading, attributed to that node"));
+    measure_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+M")));
+    measure_action_->setIcon(qt::to_icon(qt::icons::Glyph::measure));
+    connect(measure_action_, &QAction::triggered, this, &EditorWindow::measure_selection);
 
     build_file_menu();
     build_view_menu();
@@ -201,6 +249,20 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
     connect(canvas_, &NodeGraphView::node_selected, this, &EditorWindow::on_node_selected);
     connect(canvas_, &NodeGraphView::mutation_failed, this, &EditorWindow::on_mutation_failed);
     connect(properties_, &PropertyPanel::edit_failed, this, &EditorWindow::on_mutation_failed);
+
+    // **The loop closes here.** Every other connection in this window carries a graph change out to the
+    // panels; this one carries a reading back to the graph, so a student who highlights a row sees the
+    // device that produced it. Both halves are needed and neither is optional: `reveal` scrolls a node
+    // that may be off screen into view, and `select_node` is what raises the neighbourhood highlight --
+    // a reveal without a selection would move the viewport and point at nothing.
+    //
+    // It goes through the same selection path a click does, so the property panel follows: the parameters
+    // of the node behind a number are exactly what a reader wants next.
+    connect(measurements_panel_, &MeasurementPanel::reading_selected, this,
+            [this](qp::graph::NodeId node) {
+                canvas_->reveal(node);
+                canvas_->select_node(node);
+            });
 
     // The status line follows the session, not just the edits this window starts.
     // A line that only updated on the paths this class knows about would go stale
@@ -516,7 +578,20 @@ void EditorWindow::seed_demo() {
     refresh_status();
 }
 
-EditorWindow::~EditorWindow() = default;
+EditorWindow::~EditorWindow() {
+    // **First statement in the destructor, and it is load-bearing.**
+    //
+    // Qt destroys the window's children after this body runs, in an order this class does not control. Tearing
+    // down the canvas clears its `QGraphicsScene`, and clearing a scene raises `selectionChanged` -- which the
+    // canvas forwards as `node_selected`, which this window routes to the property panel. So the canvas's
+    // destructor rebuilt a sibling panel's widgets, and if the panel had already been destroyed the process died
+    // with a segmentation fault **after** every assertion in the suite had passed. A green test run with a
+    // non-zero exit code is the worst shape a defect can take: the report is wrong in the direction of "fine".
+    //
+    // The canvas is also the only child that reports anything, so silencing it here is enough; the measurement and
+    // confidence panels are pure readers with no outgoing signals.
+    if (canvas_ != nullptr) canvas_->go_quiet();
+}
 
 qp::graph::NodeId EditorWindow::add_node(const std::string& type_name) {
     if (content_->node_types().find(type_name) == nullptr) {
@@ -790,6 +865,62 @@ void EditorWindow::run_once() {
 
     refresh_panels();
     refresh_status();
+}
+
+void EditorWindow::measure_selection() {
+    namespace rt = qp::runtime;
+
+    const std::optional<qp::graph::NodeId> selected = canvas_->selected_node();
+    if (!selected.has_value()) {
+        status_->setText(tr("Select the node to take a reading from"));
+        return;
+    }
+
+    const rt::Trace& trace = measurements_.trace();
+    if (trace.empty() || trace.channels().empty()) {
+        // Named as what to do about it rather than as what is missing. "The trace is empty" is true and
+        // leaves the user nowhere to go; the Run button is the answer, so the sentence says so.
+        status_->setText(tr("Nothing to read yet -- run the experiment first"));
+        return;
+    }
+
+    // The channel is chosen by **dimension**, not by position. A trace's first channel is whichever the
+    // operator happened to write first, and taking `values[0]` would make the reading depend on that
+    // ordering -- so a run that wrote velocity first would record a velocity into a length dataset and the
+    // dataset would normalise it into metres. The dimension is the only property that makes the reading
+    // belong to this session.
+    const std::vector<rt::Channel>& channels = trace.channels();
+    std::size_t channel = channels.size();
+    for (std::size_t i = 0; i < channels.size(); ++i) {
+        if (channels[i].dim == measurements_.dataset().dim()) {
+            channel = i;
+            break;
+        }
+    }
+    if (channel == channels.size()) {
+        status_->setText(tr("The trace has no channel measured in this session's dimension"));
+        return;
+    }
+
+    // The last sample: the final state of the run, which is the one a lab session writes down. Every other
+    // sample is a step on the way there, and the trace exists so the way there is recoverable.
+    const rt::Sample& last = trace.samples().back();
+    if (channel >= last.values.size()) {
+        status_->setText(tr("The trace's last sample does not carry that channel"));
+        return;
+    }
+
+    const rt::UncertainValue& value = last.values[channel];
+    measurements_.add_reading(value.value, value.kind, value.u,
+                              rt::Measurement::Source{selected->index, selected->generation});
+
+    // Refreshed **before** the status line, because the panel is what changed and a table that is
+    // repainted a moment after the sentence describing it is the flicker that makes a window feel broken.
+    refresh_panels();
+    status_->setText(tr("Recorded %1 from node %2 (%3)")
+                         .arg(value.value)
+                         .arg(selected->index)
+                         .arg(QString::fromStdString(channels[channel].name)));
 }
 
 void EditorWindow::refresh_panels() {

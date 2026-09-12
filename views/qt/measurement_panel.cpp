@@ -14,10 +14,12 @@
 #include <QTableWidgetItem>
 #include <QVBoxLayout>
 
+#include <qp/graph/ir/ids.hpp>
 #include <qp/runtime/store/store.hpp>
 #include <qp/units/unit_symbol.hpp>
 
 #include <cmath>
+#include <optional>
 
 namespace qp::views {
 namespace {
@@ -99,6 +101,19 @@ MeasurementPanel::MeasurementPanel(model::MeasurementModel& model, QWidget* pare
     // been done yet, and painting it red trains the reader to ignore it.
     gaps_->setStyleSheet(QStringLiteral("color: %1;").arg(qt::theme::to_qcolor(qt::theme::palette().warning).name()));
     layout->addWidget(gaps_);
+
+    // The one wire in this window that runs from the numbers back to the graph. Every other
+    // connection goes the other way -- the document changes and the canvas redraws -- so this
+    // is the direction that was missing: a student reading a value off the table can ask
+    // which device produced it, which is the question a lab report is graded on.
+    //
+    // Wired to `itemSelectionChanged` rather than to `cellClicked`, because a row can also be
+    // chosen with the keyboard or by a programmatic `selectRow`, and a highlight that only
+    // appeared for mouse clicks would be a highlight that stops working the moment somebody
+    // navigates the table the way a screen reader does.
+    connect(table_, &QTableWidget::itemSelectionChanged, this, [this] {
+        on_row_selected(table_->currentRow());
+    });
 
     refresh();
 }
@@ -182,6 +197,29 @@ QStringList MeasurementPanel::gap_lines() const {
     const QString text = gaps_->text();
     if (text.isEmpty()) return {};
     return text.split(QStringLiteral("\n"), Qt::SkipEmptyParts);
+}
+
+std::optional<qp::runtime::Measurement::Source> MeasurementPanel::selected_source() const {
+    const int row = table_->currentRow();
+    if (row < 0) return std::nullopt;
+    return model_.source_of(static_cast<std::size_t>(row));
+}
+
+void MeasurementPanel::on_row_selected(int row) {
+    if (row < 0) return;
+
+    // Asked of the model rather than read off the widget. A row number in a table is a display
+    // artifact -- sorting, filtering or an inserted separator would each change what it means --
+    // and the model is the only place that maps a position in `readings()` to the node behind it.
+    const std::optional<rt::Measurement::Source> source =
+        model_.source_of(static_cast<std::size_t>(row));
+
+    // Silence for a reading with no source, rather than an invalid id. See the signal's docs: an
+    // invalid id would make the window clear its canvas selection, and "nothing is selected"
+    // reads as "the reading was thrown away".
+    if (!source.has_value() || !source->valid()) return;
+
+    Q_EMIT reading_selected(qp::graph::NodeId{source->index, source->generation});
 }
 
 }  // namespace qp::views

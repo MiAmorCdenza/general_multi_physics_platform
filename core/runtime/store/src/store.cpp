@@ -39,6 +39,14 @@ void Dataset::add(double value, double uncertainty) noexcept {
     add(UncertainValue::measured(value, uncertainty, dim_));
 }
 
+void Dataset::add(Measurement record) noexcept {
+    // The same dimension rule as the overloads above, restated here rather than delegated so the reason stays
+    // visible at the point it applies: the dataset's dimension wins, because a series whose mean is meaningless is
+    // worse than a rejected reading -- the wrong number would be reported as though it were a measurement.
+    record.reading.dim = dim_;
+    items_.push_back(std::move(record));
+}
+
 diag::Result<void> Dataset::reject(std::size_t index) noexcept {
     if (index >= items_.size()) return diag::ErrorCode::out_of_range;
     items_[index].valid = false;

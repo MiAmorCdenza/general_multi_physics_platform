@@ -812,6 +812,10 @@ private:
     StateView state_{};
     std::unique_ptr<IStateOperator> operator_{};
     std::string operator_name_{};
+    /// The node a binder claimed, as the trace's own node reference. Invalid until `prepare` succeeds, which is
+    /// what makes the trace's `source` field mean "the node that produced this" rather than "the node we hoped
+    /// to run".
+    qp::runtime::Channel::NodeRef source_node_{};
     qp::runtime::Trace trace_{qp::runtime::RunId{}};
     /// Faults recorded while calling the operator; see `faults()`. Owned rather than borrowed because a
     /// run is the thing that discovers them.

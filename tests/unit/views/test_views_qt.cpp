@@ -20,6 +20,14 @@
  * graph no longer has -- which is not visible in a screenshot, so it is asserted
  * here.
  *
+ * ## The direction that is hardest to test, and why it is here
+ *
+ * Three of these cases assert **feedback** rather than output: which stub lights up under the cursor, which nodes
+ * stay lit around a selection, and which device a recorded number points back at. None of them changes a number
+ * anywhere, so none of them can be caught by a model-level assertion -- and all three fail silently, as a canvas
+ * that merely stops responding to the mouse. That is why their evidence has to be a query on the widget rather than
+ * an inspection of pixels, and why the widget exposes `hovered_port`, `prominence_of` and `selected_source` at all.
+ *
  * @ownership   owns
  * @thread      ui
  * @pre         none
@@ -1004,6 +1012,249 @@ TEST_CASE("qt.views.confidence.unmeasurable_is_not_zero", "[views][qt]") {
 
     // And the model explains which channel is missing rather than only that something is.
     REQUIRE_FALSE(panel.note_lines().isEmpty());
+}
+
+TEST_CASE("qt.views.editor_window.a_destroyed_window_reports_nothing", "[views][qt]") {
+    // The defect this pins produced **no failing assertion**: every check in the suite passed and the process
+    // exited with 0xC0000005. QGraphicsView clears its scene in its destructor, clearing a scene raises
+    // `selectionChanged`, and the canvas forwards that as `node_selected` -- which the window routes to the
+    // property panel. So destroying the canvas rebuilt a sibling panel's widgets, and whether that was survivable
+    // depended on which of the window's children Qt happened to destroy first.
+    //
+    // A green run with a non-zero exit code is worse than a red one, because the summary says "fine". So the
+    // property is asserted rather than left to a comment: a window with a selection can be destroyed, and the
+    // canvas stays silent through it.
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::NodeGraphView* canvas = nullptr;
+    {
+        qp::views::EditorWindow window{window_content};
+        window.seed_demo();
+        canvas = window.findChild<qp::views::NodeGraphView*>();
+        REQUIRE(canvas != nullptr);
+
+        // A selection, which is the state the crash needed: the scene has an item to deselect on the way out.
+        const qp::graph::NodeId scope = window.session().graph().find_node_by_name("n3");
+        REQUIRE(scope.valid());
+        canvas->select_node(scope);
+        REQUIRE(canvas->selected_node() == std::optional<qp::graph::NodeId>{scope});
+
+        // The window silences the canvas **before** Qt starts taking its children apart, so no later selection
+        // change is reported to anybody.
+        canvas->go_quiet();
+        int reports = 0;
+        QObject::connect(canvas, &qp::views::NodeGraphView::node_selected,
+                         [&reports](qp::graph::NodeId) { ++reports; });
+        canvas->clear_selection();
+        canvas->select_node(scope);
+        REQUIRE(reports == 0);
+        // Silence is not deafness: the canvas still knows what is selected, it just stopped announcing it.
+        REQUIRE(canvas->selected_node() == std::optional<qp::graph::NodeId>{scope});
+    }
+    // The destruction above is the assertion -- a window holding a selection dies without a fault.
+    QCoreApplication::processEvents();
+    REQUIRE(true);
+}
+
+TEST_CASE("qt.views.canvas.a_port_shows_itself_under_the_cursor", "[views][qt]") {
+    // The canvas drew stubs that gave no sign of being targets: the grab radius is twelve device pixels, and
+    // nothing about a five-and-a-half-unit circle says "press here". A user found out by trial, and a press that
+    // missed started moving the box instead.
+    //
+    // So the property is that the canvas **reports** the stub under the cursor and enlarges exactly that one --
+    // and the report is what this asserts, because the enlargement is the same flag read at paint time. The
+    // radius is divided by the zoom, so whether a point is close enough is a question only the canvas can
+    // answer; a test with its own copy of the arithmetic would be asserting itself.
+    qp::authoring::Session session;
+    qp::authoring::Document document;
+    qp::graph::NodeTypeRegistry catalog;
+    REQUIRE(qp::views::register_demo_library(catalog).has_value());
+
+    qp::views::NodeGraphView canvas{session, catalog, document};
+    const qp::graph::NodeId source = add_node(session, "demo.signal");
+    const qp::graph::NodeId model = add_node(session, "demo.spring_damper");
+    REQUIRE(canvas.connect_ports(source, 1, model, 1));
+
+    // Nothing under the cursor to begin with, which is the state a press treats as "drag the node".
+    REQUIRE_FALSE(canvas.hovered_port().has_value());
+    REQUIRE_FALSE(canvas.hovered_node().has_value());
+
+    // `edge_endpoints` is the canvas's own answer for where the two stubs are, and `paint` draws them from the same
+    // expression -- so the test asks about the very point a user aims at rather than about a coordinate it guessed.
+    const auto [from, to] = canvas.edge_endpoints(0);
+
+    canvas.hover_at(canvas.mapFromScene(from));
+    const auto over_output = canvas.hovered_port();
+    REQUIRE(over_output.has_value());
+    REQUIRE(over_output->first == 1);
+    // The output end, which is the half the cursor is on: a wire leaves here, and the canvas says so.
+    REQUIRE(over_output->second);
+    REQUIRE(canvas.hovered_node() == std::optional<qp::graph::NodeId>{source});
+
+    canvas.hover_at(canvas.mapFromScene(to));
+    const auto over_input = canvas.hovered_port();
+    REQUIRE(over_input.has_value());
+    REQUIRE(over_input->first == 1);
+    // An input is a different gesture -- a wire may arrive here -- so it is reported as a different half rather
+    // than as "port 1 of the model".
+    REQUIRE_FALSE(over_input->second);
+    REQUIRE(canvas.hovered_node() == std::optional<qp::graph::NodeId>{model});
+
+    // And moving away clears it, on **every** item: a highlight left behind on the last one is how a stub appears
+    // to be a target after the cursor has left it.
+    const QPointF empty = canvas.mapFromScene(QPointF{from.x() + 40.0, from.y() - 40.0});
+    canvas.hover_at(empty.toPoint());
+    REQUIRE_FALSE(canvas.hovered_port().has_value());
+    REQUIRE_FALSE(canvas.hovered_node().has_value());
+}
+
+TEST_CASE("qt.views.canvas.the_neighbourhood_is_lit_and_the_rest_is_dimmed", "[views][qt]") {
+    // The question a user asks while reading a graph is "what does this depend on, and what depends on it", and
+    // the answer is the selected node's neighbours. So selecting one node lights it and everything it is wired to,
+    // and fades the rest -- **fades**, not hides: a dimmed node has to stay locatable enough to read a title and
+    // decide whether to click it, which is why the prominence is a number and not a boolean.
+    //
+    // The chain is deliberate. Three nodes in a row means the middle one has two neighbours and there is a fourth
+    // node touching none of them, so the test can tell "the neighbourhood" from "everything selected or not".
+    qp::authoring::Session session;
+    qp::authoring::Document document;
+    qp::graph::NodeTypeRegistry catalog;
+    REQUIRE(qp::views::register_demo_library(catalog).has_value());
+
+    qp::views::NodeGraphView canvas{session, catalog, document};
+    const qp::graph::NodeId signal = add_node(session, "demo.signal");
+    const qp::graph::NodeId damper = add_node(session, "demo.spring_damper");
+    const qp::graph::NodeId filter = add_node(session, "demo.filter");
+    const qp::graph::NodeId sink = add_node(session, "demo.export");
+    REQUIRE(canvas.connect_ports(signal, 1, damper, 1));
+    REQUIRE(canvas.connect_ports(damper, 1, filter, 1));
+    REQUIRE(canvas.connect_ports(filter, 1, sink, 1));
+    REQUIRE(canvas.node_item_count() == 4);
+    REQUIRE(canvas.edge_item_count() == 3);
+
+    // With nothing selected every node is drawn normally, because a highlight with no subject is a canvas that has
+    // faded itself.
+    for (const qp::graph::NodeId node : {signal, damper, filter, sink}) {
+        REQUIRE(canvas.prominence_of(node) == 1.0);
+    }
+    for (std::size_t i = 0; i < 3; ++i) REQUIRE(canvas.edge_prominence(i) == 1.0);
+
+    canvas.select_node(damper);
+
+    // The selected node and its two neighbours are lit.
+    REQUIRE(canvas.prominence_of(damper) == 1.0);
+    REQUIRE(canvas.prominence_of(signal) == 1.0);
+    REQUIRE(canvas.prominence_of(filter) == 1.0);
+    // The node two wires away is not, which is what makes this a neighbourhood rather than "the connected
+    // component": the question is about what this node touches, and a transitive answer would light the whole graph
+    // the moment it was connected.
+    REQUIRE(canvas.prominence_of(sink) == qp::views::NodeGraphView::kDimmedProminence);
+    REQUIRE(canvas.prominence_of(sink) < 1.0);
+
+    // The edges follow their endpoints rather than a rule of their own, so an edge is lit when **either** end is.
+    // That has a consequence worth asserting explicitly, because the first version of this test expected the
+    // opposite: the wire from the lit filter into the dimmed sink is **lit**, and it should be. It is the wire
+    // along which the selection's influence travels -- it is what the damper is connected *to*, two hops out --
+    // and fading it would cut the connection the highlight exists to show.
+    REQUIRE(canvas.edge_source(0) == signal);
+    REQUIRE(canvas.edge_source(1) == damper);
+    REQUIRE(canvas.edge_source(2) == filter);
+    REQUIRE(canvas.edge_prominence(0) == 1.0);
+    REQUIRE(canvas.edge_prominence(1) == 1.0);
+    REQUIRE(canvas.edge_prominence(2) == 1.0);
+
+    // What the fade does reach is a wire with **neither** end in the neighbourhood. Selecting the signal instead
+    // gives one: its only neighbour is the damper, so the two wires beyond the damper are both dimmed -- including
+    // the one joining two nodes that are both in the graph's connected component.
+    // What the fade does reach is a wire whose **both** ends are outside the neighbourhood. Selecting the signal
+    // gives one: its only neighbour is the damper, so the wire leaving the damper for the filter stays lit -- it
+    // touches the neighbourhood -- while the wire from the filter to the sink, with neither end lit, goes dim.
+    // Only the far end of the graph recedes; everything one hop from the selection, and the wires into it, stay.
+    canvas.select_node(signal);
+    REQUIRE(canvas.prominence_of(signal) == 1.0);
+    REQUIRE(canvas.prominence_of(damper) == 1.0);
+    REQUIRE(canvas.prominence_of(filter) == qp::views::NodeGraphView::kDimmedProminence);
+    REQUIRE(canvas.edge_prominence(0) == 1.0);
+    REQUIRE(canvas.edge_prominence(1) == 1.0);
+    REQUIRE(canvas.edge_prominence(2) == qp::views::NodeGraphView::kDimmedProminence);
+
+    // Back to the damper for the remaining assertions.
+    canvas.select_node(damper);
+
+    // Out-of-range asks answer rather than crash, and answer "not faded": a caller should not have to check the
+    // count before asking about a node.
+    REQUIRE(canvas.edge_prominence(99) == 1.0);
+    REQUIRE_FALSE(canvas.edge_source(99).valid());
+    REQUIRE(canvas.prominence_of(qp::graph::NodeId{99, 1}) == 1.0);
+
+    // Deselecting puts the whole graph back. A highlight that could be entered and not left would make the canvas
+    // a mode -- and `select_node({})` is **not** how you leave it: that call is a documented no-op, because it
+    // looks up an id that does not exist. The first version of this test used it and asserted against a graph that
+    // was still faded, which is the sort of assumption a test is supposed to catch rather than contain.
+    canvas.clear_selection();
+    REQUIRE_FALSE(canvas.selected_node().has_value());
+    for (const qp::graph::NodeId node : {signal, damper, filter, sink}) {
+        REQUIRE(canvas.prominence_of(node) == 1.0);
+    }
+    for (std::size_t i = 0; i < 3; ++i) REQUIRE(canvas.edge_prominence(i) == 1.0);
+}
+
+TEST_CASE("qt.views.measurement.a_reading_points_at_its_node", "[views][qt]") {
+    // **The loop closing.** Every other path in this window runs from the graph to the numbers: the canvas is
+    // drawn from the session, the panel reads the dataset, the report reads the dataset. This is the one that runs
+    // back -- a student reading a value off the table asks which device produced it, and the answer is a node.
+    //
+    // What makes it work is that the reading carries a source at all. A dataset is otherwise a list of numbers
+    // with no way back to the experiment, which is the artefact the platform exists to replace.
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
+    window.seed_demo();
+
+    auto* canvas = window.findChild<qp::views::NodeGraphView*>();
+    auto* panel = window.findChild<qp::views::MeasurementPanel*>();
+    REQUIRE(canvas != nullptr);
+    REQUIRE(panel != nullptr);
+
+    // Seeded readings have no source, and that is the honest answer rather than an oversight: this build records
+    // them from a stored demonstration, not from a node. A reading a user typed in is the same case.
+    REQUIRE(window.measurements().dataset().readings().size() == 3);
+    REQUIRE_FALSE(window.measurements().source_of(0).has_value());
+    // The panel's own answer with no row selected, which is also the state a fresh session is in.
+    REQUIRE_FALSE(panel->selected_source().has_value());
+
+    // Take one from a node. The instrument is selected, the session already holds a trace whose first channel is a
+    // length, and the reading is attributed to the node the user chose -- not to whichever node the last run
+    // happened to use.
+    const qp::graph::NodeId scope = window.session().graph().find_node_by_name("n3");
+    REQUIRE(scope.valid());
+    canvas->select_node(scope);
+    window.measure_selection();
+
+    REQUIRE(window.measurements().dataset().readings().size() == 4);
+    const std::size_t added = 3;
+    const auto source = window.measurements().source_of(added);
+    REQUIRE(source.has_value());
+    REQUIRE(source->index == scope.index);
+    REQUIRE(source->generation == scope.generation);
+    // And the reading's own value is the trace's last sample rather than a zero or a placeholder: the point of
+    // taking a reading is the number, and a source with nothing behind it would be a citation for a blank.
+    REQUIRE(window.measurements().dataset().readings()[added].reading.value ==
+            window.measurements().trace().samples().back().values[0].value);
+
+    // The model's answer for a row is a flat `Source` pair, and the panel converts it to the id a canvas speaks.
+    // Both are asserted because the conversion is where the two shapes meet and a wrong field order would
+    // type-check.
+    const auto model_source = window.measurements().source_of(added);
+    REQUIRE(model_source.has_value());
+    const qp::graph::NodeId from_model{model_source->index, model_source->generation};
+    REQUIRE(from_model == scope);
+
+    // And the id points at a node the canvas can actually reveal and highlight -- the last link in the chain, and
+    // the one a screenshot shows.
+    canvas->select_node(from_model);
+    REQUIRE(canvas->selected_node() == std::optional<qp::graph::NodeId>{scope});
+    REQUIRE(canvas->prominence_of(scope) == 1.0);
+
+    window.close();
 }
 
 int main(int argc, char** argv) {

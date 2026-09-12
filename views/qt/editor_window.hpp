@@ -32,7 +32,8 @@
  * @tests       qt.views.editor_window.shares_one_session,
  *              qt.views.editor_window.file_menu_follows_the_document,
  *              qt.views.measurement.one_ledger_per_session,
- *              qt.views.measurement.fresh_window_is_empty
+ *              qt.views.measurement.fresh_window_is_empty,
+ *              qt.views.measurement.a_reading_points_at_its_node
  */
 #pragma once
 
@@ -170,6 +171,39 @@ public:
     /// not cover the wiring, which is where the defects in a thin layer always are.
     void run_once();
 
+    /// @brief Records one reading taken from the node the canvas has selected.
+    ///
+    /// ## Why a reading has to be taken rather than derived
+    ///
+    /// The value is the **last sample of the trace**, and the node it is attributed to is the one the user
+    /// selected. Both halves matter. A reading is a single number a person decided to write down, so it
+    /// cannot be produced by a run on its own: a run makes a series, and choosing one point of it -- the
+    /// final state, after the transient -- is the act this models. And the attribution is the **selected**
+    /// node rather than the node the last run used, because the honest claim is "this is what that device
+    /// reads", and the user is the one who knows which device that is.
+    ///
+    /// This is the reverse direction of the loop the window exists to demonstrate. Every other path goes
+    /// from the graph to the numbers; this one gives a number the identity of the node behind it, which is
+    /// what lets `MeasurementPanel::reading_selected` point back at it.
+    ///
+    /// Refuses, in the status line, when there is nothing to take a reading from: no selection, an empty
+    /// trace, or a channel whose dimension is not the session's. The last is the one that matters, and it is
+    /// **not** silently coerced: `Dataset::add` normalises a reading's dimension to the dataset's, so a
+    /// velocity recorded into a length dataset would be stored as a length -- a wrong number reported as a
+    /// measurement, which is the failure mode this platform exists to prevent.
+    ///
+    /// @ownership   owns the record
+    /// @thread      ui
+    /// @pre         none
+    /// @post        On success the dataset grows by one reading carrying this node as its source
+    /// @invariant   Never writes to the graph, and never changes the dataset's dimension
+    /// @errors      noexcept; a refusal is a sentence in the status line
+    /// @complexity  O(channels)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       qt.views.measurement.a_reading_points_at_its_node
+    void measure_selection();
+
     /// @brief Records a few readings so the measurement panel is not empty on start.
     ///
     /// A repeat measurement of one length with a deliberately **mixed** provenance: two
@@ -277,6 +311,8 @@ private:
     // which would make the plugin split a claim rather than a property.
     std::unique_ptr<qp::views::model::RunController> run_controller_{};
     QAction* run_action_ = nullptr;
+    // The measure action, kept for the same reason the others are: a test drives the path the button does.
+    QAction* measure_action_ = nullptr;
 
     // The File menu's actions, kept so a test can invoke the same path the menu does.
     QAction* new_action_ = nullptr;

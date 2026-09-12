@@ -116,9 +116,40 @@ struct Channel final {
     std::string name{};
     /// The dimension of this quantity, one per value.
     units::Dim dim{};
+    /// Which node produced this channel, or an invalid id for a channel with no single source.
+    ///
+    /// ## Why a channel carries its origin
+    ///
+    /// The closed loop this platform is built around ends in a report, and a number in a report that cannot be
+    /// traced back to what produced it is exactly the artefact the loop exists to replace. The run identity
+    /// already answers "which run"; this answers "which node of that run", which is the question a reader asks
+    /// next and the one a window needs in order to **point at** the thing a reading came from.
+    ///
+    /// Optional rather than required, and the invalid default is the honest one: a channel assembled from several
+    /// nodes, or read back from a file written before this field existed, has no single source, and saying
+    /// "unknown" is better than naming the first node that happened to contribute.
+    ///
+    /// A `NodeId`'s **shape** rather than `graph::NodeId` itself: `trace` sits in L2 and `ir` in L1, and
+    /// `check_layers.py` would refuse the edge -- naming a node is not a reason for the recording layer to depend
+    /// on the graph layer. The two are layout-compatible by construction (`tests/abi` covers the shape), and a
+    /// caller converts. The alternative was to add `trace -> ir` to that whitelist, which would mean the module
+    /// that records what happened knows what a node type is.
+    struct NodeRef final {
+        std::uint32_t index = 0;
+        std::uint32_t generation = 0;
+
+        [[nodiscard]] constexpr bool valid() const noexcept { return index != 0 && generation != 0; }
+        [[nodiscard]] friend constexpr bool operator==(NodeRef a, NodeRef b) noexcept {
+            return a.index == b.index && a.generation == b.generation;
+        }
+        [[nodiscard]] friend constexpr bool operator!=(NodeRef a, NodeRef b) noexcept {
+            return !(a == b);
+        }
+    };
+    NodeRef source{};
 
     [[nodiscard]] friend bool operator==(const Channel& a, const Channel& b) {
-        return a.name == b.name && a.dim == b.dim;
+        return a.name == b.name && a.dim == b.dim && a.source == b.source;
     }
 };
 
