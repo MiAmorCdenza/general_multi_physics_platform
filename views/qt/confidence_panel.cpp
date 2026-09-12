@@ -4,6 +4,8 @@
  */
 #include "confidence_panel.hpp"
 
+#include "theme.hpp"
+
 #include <QFont>
 #include <QHeaderView>
 #include <QLabel>
@@ -63,7 +65,7 @@ ConfidencePanel::ConfidencePanel(model::ConfidenceModel& model, QWidget* parent)
 
     notes_ = new QLabel(this);
     notes_->setWordWrap(true);
-    notes_->setStyleSheet(QStringLiteral("color: #8a6d00;"));
+    notes_->setStyleSheet(QStringLiteral("color: %1;").arg(qt::theme::to_qcolor(qt::theme::palette().warning).name()));
     layout->addWidget(notes_);
 
     refresh();

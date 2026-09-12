@@ -4,6 +4,8 @@
  */
 #include "property_panel.hpp"
 
+#include "theme.hpp"
+
 #include <qp/graph/mutate/command.hpp>
 
 #include <QCheckBox>
@@ -94,9 +96,10 @@ void PropertyPanel::rebuild_rows() {
     }
 
     const auto heading = new QLabel(
-        QStringLiteral("<b>%1</b><br/><span style=\"color:#9aa2ac\">%2</span>")
+        QStringLiteral("<b>%1</b><br/><span style=\"color:%3\">%2</span>")
             .arg(QString::fromStdString(desc->label.empty() ? desc->type_name : desc->label),
-                 QString::fromStdString(desc->type_name)),
+                 QString::fromStdString(desc->type_name),
+                 qt::theme::to_qcolor(qt::theme::palette().text_muted).name()),
         this);
     heading->setTextFormat(Qt::RichText);
     form_->addRow(heading);

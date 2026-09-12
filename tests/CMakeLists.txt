@@ -708,6 +708,11 @@ if(TARGET qp::views_model AND TARGET qp::plugins::mechanics)
              qp::runtime_trace)
 endif()
 
+# The palette, added here rather than inside the guard above: `views/model` is a target in every configuration,
+# so C5's thresholds are checked by both matrix entries.
+if(TARGET qp::views_model)
+endif()
+
 # The Qt half of the view layer is tested only when Qt is in the build. Guarded
 # rather than skipped: a test that silently does nothing would look like coverage,
 # and the Qt-free half above is what carries the coverage on every configuration.
@@ -751,5 +756,23 @@ if(QP_BUILD_VIEWS)
     get_target_property(_qt_core_location Qt6::Core LOCATION)
     get_filename_component(_qt_dll_dir "${_qt_core_location}" DIRECTORY)
     set_tests_properties(qp_test_views_qt.all PROPERTIES
+        ENVIRONMENT "PATH=${_qt_dll_dir};$ENV{PATH}")
+
+    # Charter C5's palette. A **plain** add_executable and one CTest entry, for the same reason
+    # `qp_test_views_qt` is: the executable links Qt, so `catch_discover_tests` would have to run it at build
+    # time and would fail on a missing Qt DLL -- on MSVC as a modal dialog that blocks the build.
+    #
+    # It is its own target rather than a file inside `qp_test_views_qt` because it needs no plugin: the theme is
+    # data and two formulas, and a case that asserts a contrast ratio should not depend on an integrator being
+    # built. `views/qt`, not `views/model`, because test ownership in the contract gate is judged per invocation
+    # and the ids in `theme.hpp` have to be visible to the same invocation that sees this file.
+    add_executable(qp_test_views_theme unit/views/test_theme.cpp ${QP_TEST_MAIN})
+    target_include_directories(qp_test_views_theme PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/views/qt)
+    target_link_libraries(qp_test_views_theme PRIVATE qp::views Catch2::Catch2)
+    add_test(NAME qp_test_views_theme.all COMMAND qp_test_views_theme)
+    set_tests_properties(qp_test_views_theme.all PROPERTIES LABELS "views;qt;theme;aggregate")
+    set_tests_properties(qp_test_views_theme.all PROPERTIES
         ENVIRONMENT "PATH=${_qt_dll_dir};$ENV{PATH}")
 endif()

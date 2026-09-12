@@ -3,6 +3,9 @@
  * @brief Implementation of the node editor canvas.
  */
 #include "node_graph_view.hpp"
+
+#include "theme.hpp"
+
 #include <qp/graph/ir/node_type_registry.hpp>
 
 #include <qp/graph/mutate/command.hpp>
@@ -74,11 +77,12 @@ QString describe(qp::diag::ErrorCode code) {
  */
 class NodeItem final : public QGraphicsItem {
 public:
-    NodeItem(qp::graph::NodeId id, QString title, QString type_name, QStringList input_labels,
-             QStringList output_labels, QPointF position)
+    NodeItem(qp::graph::NodeId id, QString title, QString type_name, QString category,
+             QStringList input_labels, QStringList output_labels, QPointF position)
         : id_(id),
           title_(std::move(title)),
           type_name_(std::move(type_name)),
+          category_(std::move(category)),
           inputs_(std::move(input_labels)),
           outputs_(std::move(output_labels)) {
         setPos(position);
@@ -104,27 +108,72 @@ public:
         const bool chosen = isSelected();
         painter->setRenderHint(QPainter::Antialiasing, true);
 
+        // Every colour from the palette. The literals that used to be here were a palette with no definition:
+        // "is the node title readable" was answerable only by looking, and `theme.text_clears_wcag_aa` could
+        // not see this file at all. The category tint is the node's own group colour, so a type registered by a
+        // plugin is drawn in its category's colour without the canvas knowing the category exists.
+        //
+        // ## Why the box has two zones
+        //
+        // The first themed build tinted the whole box and wrote every label inside it. A screenshot review found
+        // the secondary line washed out on one group, and making the pair a checked property
+        // (`theme.text_on_a_tinted_node_is_readable`) then showed the deeper problem: on `#8C663F` the best
+        // available ink measures 4.18:1, so **no** colour in this palette can label that fill readably. A
+        // mid-tone fill is simply not a background for body text.
+        //
+        // So the colour identifies the node and the text sits on a surface: a header band in the category colour
+        // carrying the title (one short line, at the best ink the fill admits), and a body on `surface_raised`
+        // carrying everything that has to be read -- the type name, the port labels, the footer. The pairs the
+        // body uses are the ones `theme.text_clears_wcag_aa` already asserts.
+        const qt::theme::Palette& c = qt::theme::palette();
         const QRectF box(0.0, 0.0, kNodeWidth, kNodeHeight);
-        painter->setBrush(chosen ? QColor(0x2d, 0x5a, 0x88) : QColor(0x33, 0x37, 0x3d));
-        painter->setPen(QPen(chosen ? QColor(0x6c, 0xb0, 0xf0) : QColor(0x55, 0x5b, 0x63), 1.5));
+        constexpr qreal kHeaderHeight = 22.0;
+
+        QColor band = qt::theme::category_colour(category_);
+        if (chosen) {
+            band = band.lighter(115);
+        }
+        const auto as_theme_rgb = [](const QColor& colour) {
+            return qt::theme::Rgb{static_cast<std::uint8_t>(colour.red()),
+                                  static_cast<std::uint8_t>(colour.green()),
+                                  static_cast<std::uint8_t>(colour.blue())};
+        };
+
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(band);
+        painter->drawRoundedRect(box, 5.0, 5.0);
+        painter->setBrush(qt::theme::to_qcolor(c.surface_raised));
+        painter->drawRect(QRectF(0.0, kHeaderHeight, kNodeWidth, kNodeHeight - kHeaderHeight));
+
+        // One outline around the whole box, so the category colour reads as a header rather than as a fill that
+        // failed to cover the bottom.
+        //
+        // The selected ring is derived from the **band's own ink** rather than from `accent`, and that is a
+        // measurement rather than a preference: `accent` against the selected output band measures 1.8:1, which
+        // is a selection state a user cannot see. The ink chosen for the title is by construction one of the two
+        // most contrasting colours available for that fill, so a lighter step of it is guaranteed to read.
+        const QColor title_ink = qt::theme::text_on(as_theme_rgb(band));
+        const QColor ring = chosen ? title_ink.lighter(150) : qt::theme::to_qcolor(c.edge_dim);
+        painter->setBrush(Qt::NoBrush);
+        painter->setPen(QPen(ring, chosen ? 2.0 : 1.5));
         painter->drawRoundedRect(box, 5.0, 5.0);
 
-        painter->setPen(QColor(0xe6, 0xe8, 0xea));
-        painter->drawText(QRectF(9.0, 4.0, kNodeWidth - 18.0, 20.0),
+        painter->setPen(title_ink);
+        painter->drawText(QRectF(9.0, 2.0, kNodeWidth - 18.0, kHeaderHeight - 4.0),
                           Qt::AlignLeft | Qt::AlignVCenter, title_);
 
-        painter->setPen(QColor(0x8f, 0x97, 0xa1));
-        painter->drawText(QRectF(9.0, 22.0, kNodeWidth - 18.0, 15.0),
+        painter->setPen(qt::theme::to_qcolor(c.text_muted));
+        painter->drawText(QRectF(9.0, kHeaderHeight + 1.0, kNodeWidth - 18.0, 15.0),
                           Qt::AlignLeft | Qt::AlignVCenter, type_name_);
 
         // Input labels on the left, output labels on the right, each with a stub.
         // The labels come from the node's descriptor, so a node type whose ports
         // were registered shows them without the canvas knowing anything about it.
-        painter->setPen(QColor(0xa8, 0xb0, 0xba));
-        painter->setBrush(QColor(0x8a, 0xb4, 0xd8));
+        painter->setPen(qt::theme::to_qcolor(c.text));
+        painter->setBrush(qt::theme::to_qcolor(c.accent));
         const int rows = std::max(inputs_.size(), outputs_.size());
         for (int i = 0; i < rows; ++i) {
-            const qreal y = 40.0 + i * kPortSpacing;
+            const qreal y = 44.0 + i * kPortSpacing;
             if (i < inputs_.size()) {
                 painter->drawEllipse(QPointF(0.0, y), kPortRadius, kPortRadius);
                 painter->drawText(QRectF(8.0, y - 8.0, kNodeWidth / 2.0 - 10.0, 16.0),
@@ -137,7 +186,10 @@ public:
             }
         }
 
-        painter->setPen(QColor(0x69, 0x71, 0x7b));
+        // `text_muted`, not `text_disabled`: this is a node's own identity, meant to be read. The dark palette's
+        // disabled grey measures 2.5:1 on `surface_raised`, which is below the graphics floor -- and a disabled
+        // colour on information that is not disabled is how a palette's own rules get quietly broken.
+        painter->setPen(qt::theme::to_qcolor(c.text_muted));
         painter->drawText(QRectF(0.0, kNodeHeight - 13.0, kNodeWidth, 12.0),
                           Qt::AlignHCenter | Qt::AlignVCenter, describe(id_));
     }
@@ -158,6 +210,9 @@ private:
     qp::graph::NodeId id_{};
     QString title_{};
     QString type_name_{};
+    /// The descriptor's `category`, kept so the box can be tinted by group. Read from the catalog at rebuild
+    /// time like every other string here -- the item holds no view of the graph of its own.
+    QString category_{};
     QStringList inputs_{};
     QStringList outputs_{};
     std::function<void(NodeItem&)> on_settled_{};
@@ -188,7 +243,7 @@ public:
 
     void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override {
         painter->setRenderHint(QPainter::Antialiasing, true);
-        painter->setPen(QPen(QColor(0x7a, 0x84, 0x90), 1.6));
+        painter->setPen(QPen(qt::theme::to_qcolor(qt::theme::palette().edge), 1.6));
         painter->drawLine(from_, to_);
     }
 
@@ -294,7 +349,7 @@ NodeGraphView::NodeGraphView(qp::authoring::Session& session, const qp::graph::N
     setScene(scene_);
     setRenderHint(QPainter::Antialiasing, true);
     setDragMode(QGraphicsView::RubberBandDrag);
-    setBackgroundBrush(QColor(0x1e, 0x21, 0x24));
+    setBackgroundBrush(qt::theme::to_qcolor(qt::theme::palette().surface));
 
     bridge_ = std::make_unique<Bridge>(*this);
     // Registered before the first rebuild, so a change landing between
@@ -321,11 +376,15 @@ void NodeGraphView::rebuild() {
         if (!slot.node.id.valid()) continue;
 
         QString title = QString::fromStdString(slot.node.type_name);
+        QString category{};
         QStringList inputs;
         QStringList outputs;
         if (const qp::graph::NodeDesc* desc = catalog_.find(slot.node.type_name);
             desc != nullptr) {
             title = QString::fromStdString(desc->label.empty() ? desc->type_name : desc->label);
+            // The group colour the box is tinted with, so a palette that groups by category and a canvas that
+            // colours by category cannot disagree about which category a node is in.
+            category = QString::fromStdString(desc->category);
             // Only connectable ports are labelled as sockets. A parameter drawn
             // with a socket would invite a user to wire it, and the connection
             // would then be refused -- a UI that offers something the model
@@ -349,7 +408,7 @@ void NodeGraphView::rebuild() {
         }
 
         auto* item = new NodeItem(slot.node.id, title, QString::fromStdString(slot.node.type_name),
-                                  inputs, outputs, position);
+                                  category, inputs, outputs, position);
         item->set_move_handler([this](NodeItem& moved) {
             remember_position(moved.node_id(), moved.pos());
         });

@@ -4,6 +4,8 @@
  */
 #include "measurement_panel.hpp"
 
+#include "theme.hpp"
+
 #include <QFont>
 #include <QHeaderView>
 #include <QLabel>
@@ -95,7 +97,7 @@ MeasurementPanel::MeasurementPanel(model::MeasurementModel& model, QWidget* pare
     gaps_->setWordWrap(true);
     // Amber rather than red. A gap is not an error: it is a statement about what has not
     // been done yet, and painting it red trains the reader to ignore it.
-    gaps_->setStyleSheet(QStringLiteral("color: #8a6d00;"));
+    gaps_->setStyleSheet(QStringLiteral("color: %1;").arg(qt::theme::to_qcolor(qt::theme::palette().warning).name()));
     layout->addWidget(gaps_);
 
     refresh();
@@ -125,7 +127,7 @@ void MeasurementPanel::refresh() {
             table_->setItem(row, 3, new QTableWidgetItem(tr("counted")));
         } else {
             auto* item = new QTableWidgetItem(tr("rejected"));
-            item->setForeground(QColor(QStringLiteral("#8a6d00")));
+            item->setForeground(qt::theme::to_qcolor(qt::theme::palette().warning));
             table_->setItem(row, 3, item);
         }
     }

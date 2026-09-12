@@ -71,6 +71,8 @@ add_library(qp_views STATIC
     qt/confidence_panel.hpp
     qt/editor_window.cpp
     qt/editor_window.hpp
+    qt/theme.cpp
+    qt/theme.hpp
     src/hello_view.cpp
     include/qp/views/hello_view.hpp)
 

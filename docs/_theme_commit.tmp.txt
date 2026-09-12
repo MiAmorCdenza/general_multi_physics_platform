@@ -1,0 +1,48 @@
+views/qt: charter C5 as an executable acceptance criterion
+
+C5 says the UI must be "high contrast, large type and colour-blind safe" and puts that in a
+view plugin's acceptance criteria. It was true by inspection: the canvas, the panels and the
+warning text each held their own `QColor(0x..)` literals, so "is the warning readable" was
+answerable only by looking at a screenshot and "is this palette colour-blind safe" was not
+answerable at all.
+
+A colour is three numbers. WCAG 2.1 contrast is a formula over them and a colour-vision
+deficiency is a linear-light matrix, so `views/qt/theme.hpp` now holds the palette as data
+and the two measurements as functions, and the ordinary Catch2 suite checks them on **both**
+compilers with no event loop. The Qt layer only turns the values into `QColor`s.
+
+The tests found two real defects, and both are worth recording because neither was visible as
+a failing assertion until the property was stated:
+
+1. The four category colours were the blue/green/amber/purple set that "looks right". Under
+   deuteranopia `sources` and `output` measured 0.019 apart -- effectively one colour. A
+   search over the hue/lightness space produced a set whose minimum pairwise distance is
+   0.209, with every swatch clearing 3:1 against the surface. The light palette got its own
+   search and a smaller best (0.084), which is the honest consequence of a bright surface
+   leaving a third of the usable luminance range.
+
+2. Tinting the whole node box put labels on a fill, a foreground/background pair the palette
+   never declared. A screenshot review found the secondary line washed out on one group; making
+   the pair a checked property then showed the deeper problem -- on `#8C663F` the best
+   available ink measures 4.18:1, so **no** colour in this palette can label that fill to AA.
+   A mid-tone fill is not a background for body text. So the box became two zones: a category
+   header band carrying one short title, and a body on `surface_raised` carrying everything
+   that has to be read. The node's own four pairs are asserted too, which caught a third
+   finding from the same review -- the footer was using `text_disabled` (2.5:1 there) for a
+   node's identity, which is information, not a disabled control.
+
+`text_on` computes the ink for a fill rather than applying a rule of thumb, and the selected
+node's ring is derived from that ink rather than from `accent`: `accent` against the selected
+output band measures 1.8:1, which is a selection state nobody can see.
+
+The palette moved from `views/model` to `views/qt` while this was being written, and the
+reason is the contract gate's: test ownership is judged per invocation, so the ids a header
+claims must be visible to the invocation that sees the header's tests. One partition, not two.
+
+Also wire the second theme pair into `views/qt`, and note the one thing the vision review
+raised that is **not** fixed: at the default zoom the node boxes are small enough that the
+text is hard to read. That is a canvas layout question rather than a palette one -- the
+colours and sizes are now a contract, the zoom is not -- and it is recorded in the audit
+rather than quietly left.
+
+GCC 661/661, MSVC 663/663; all four contract partitions and the static gates green.
