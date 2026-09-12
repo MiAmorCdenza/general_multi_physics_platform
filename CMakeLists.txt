@@ -131,22 +131,55 @@ endif()
 # external/Qt via aqtinstall. Override the location with -DQP_QT_ROOT=<path>.
 set(QP_QT_ROOT "${CMAKE_SOURCE_DIR}/external/Qt" CACHE PATH
     "Root under which Qt kits are installed (qp fetch_deps.ps1 -WithQt)")
+set(QP_QT_VERSION "" CACHE STRING
+    "Qt version to look for under QP_QT_ROOT; empty means the newest one found")
 
 if(QP_BUILD_VIEWS)
-    # Prefer an explicit QP_QT_ROOT; also accept an existing CMAKE_PREFIX_PATH or
-    # the conventional C:/Qt location, so a machine with Qt already installed works
-    # without being told twice.
-    set(QP_QT_KIT "${QP_QT_ROOT}/6.8.3/msvc2022_64")
-    if(EXISTS "${QP_QT_KIT}/lib/cmake/Qt6/Qt6Config.cmake")
+    # The kit is **discovered**, not spelled out. An earlier version of this file
+    # hard-coded `6.8.3/msvc2022_64`, which meant a Qt upgrade -- or a colleague with
+    # a different Qt installed -- silently configured with no Qt at all, and the
+    # symptom was `find_package(Qt6)` failing in views/ rather than a message naming
+    # the version mismatch. Discovery also keeps the version out of two places.
+    #
+    # The search order is: an explicit QP_QT_VERSION, then QP_QT_ROOT, then the
+    # conventional C:/Qt. Newest first in each, so an upgrade is picked up without
+    # editing anything.
+    set(_qt_candidates "")
+    foreach(_root IN ITEMS "${QP_QT_ROOT}" "C:/Qt")
+        if(NOT EXISTS "${_root}")
+            continue()
+        endif()
+        if(QP_QT_VERSION)
+            file(GLOB _versions "${_root}/${QP_QT_VERSION}")
+        else()
+            file(GLOB _versions "${_root}/*.*")
+        endif()
+        list(SORT _versions COMPARE NATURAL ORDER DESCENDING)
+        foreach(_version_dir IN LISTS _versions)
+            # Only the MSVC kit: there is no 32-bit Qt 6, and this project's GCC
+            # toolchain is MinGW i686, so a MinGW kit would not match the build.
+            file(GLOB _kits "${_version_dir}/msvc*_64")
+            foreach(_kit IN LISTS _kits)
+                if(EXISTS "${_kit}/lib/cmake/Qt6/Qt6Config.cmake")
+                    list(APPEND _qt_candidates "${_kit}")
+                endif()
+            endforeach()
+        endforeach()
+    endforeach()
+
+    if(_qt_candidates)
+        list(GET _qt_candidates 0 QP_QT_KIT)
         list(APPEND CMAKE_PREFIX_PATH "${QP_QT_KIT}")
         message(STATUS "Qt: using kit ${QP_QT_KIT}")
-    elseif(EXISTS "C:/Qt/6.8.3/msvc2022_64/lib/cmake/Qt6/Qt6Config.cmake")
-        list(APPEND CMAKE_PREFIX_PATH "C:/Qt/6.8.3/msvc2022_64")
-        message(STATUS "Qt: using kit C:/Qt/6.8.3/msvc2022_64")
     else()
-        message(STATUS "Qt: no kit under QP_QT_ROOT (${QP_QT_ROOT}); "
-                       "falling back to find_package's own search")
+        message(STATUS "Qt: no kit found under ${QP_QT_ROOT} or C:/Qt. "
+                       "Run: pwsh scripts/fetch_deps.ps1 -WithQt")
     endif()
+    unset(_qt_candidates)
+    unset(_versions)
+    unset(_kits)
+    unset(_version_dir)
+    unset(_root)
 
     # Found here rather than inside views/ so that the imported targets are visible
     # to the whole project. A package located in a subdirectory yields targets

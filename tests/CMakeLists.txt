@@ -48,29 +48,33 @@ if(Python3_Interpreter_FOUND)
         LABELS "gate"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
-    # The complement of the gate above. This invocation owns exactly the test cases
-    # under tests/model/, so every other directory is excluded -- including the
-    # Qt-side file, whose ids live in headers this gate cannot see because they need
-    # Qt to compile.
+    # The complement of the gate above. This invocation owns exactly one subtree of the
+    # tests, stated positively.
+    #
+    # It used to enumerate what to skip: unit/views, unit/graph, unit/diag, unit/ports,
+    # unit/runtime, unit/plugin, unit/authoring, unit/units, golden, glue, abi, meta,
+    # smoke, support. Adding core/reflect then broke this gate, and broke it in the
+    # worst available way: the new directory was not in the list, so its test ids were
+    # treated as ids this gate owns, no contract under views/model referenced them, and
+    # the gate reported orphans naming reflect -- a module it has nothing to do with.
+    # The failure points at the wrong module, so the natural conclusion is that reflect
+    # is broken. A gate whose maintenance is "remember to edit me whenever anything is
+    # added" gets edited wrongly, and one that fails for the wrong reason gets deleted.
+    #
+    # `--only model` inverts that: the subject is stated, so a module added tomorrow is
+    # out of scope until someone writes it in. No other directory in this tree contains
+    # `model` as a path segment, and if one ever does, this gate acquires it visibly --
+    # which is the correct failure, not a silent one.
+    #
+    # The Qt-side views files are excluded because their ids live in headers this gate
+    # cannot see -- those need Qt to compile.
     add_test(NAME gate.contracts.views
         COMMAND ${Python3_EXECUTABLE}
                 ${CMAKE_SOURCE_DIR}/scripts/check_contracts.py
                 --headers ${CMAKE_SOURCE_DIR}/views/model
                 --tests   ${CMAKE_SOURCE_DIR}/tests
                 --exclude unit/views
-                --exclude unit/graph
-                --exclude unit/diag
-                --exclude unit/ports
-                --exclude unit/runtime
-                --exclude unit/plugin
-                --exclude unit/authoring
-                --exclude unit/units
-                --exclude golden
-                --exclude glue
-                --exclude abi
-                --exclude meta
-                --exclude smoke
-                --exclude support
+                --only    model
                 --quiet)
     set_tests_properties(gate.contracts.views PROPERTIES
         LABELS "gate"
@@ -268,6 +272,9 @@ qp_add_test(qp_test_abi_layout
 qp_add_test(qp_test_ports
     SOURCES unit/ports/test_ports.cpp
     LIBS qp::ports)
+qp_add_test(qp_test_reflect
+    SOURCES unit/reflect/test_reflect.cpp
+    LIBS qp::reflect)
 qp_add_test(qp_test_graph_ir
     SOURCES unit/graph/test_ir.cpp
     LIBS qp::graph_ir)

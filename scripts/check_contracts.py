@@ -366,23 +366,54 @@ def parse_header(path: Path, skip_trivial: bool = True,
     return contracts, violations
 
 
-def collect_test_ids(tests_dir: Path, exclude: set[str] | None = None) -> set[str]:
+def _path_matches(path_parts: tuple[str, ...], rel: str, terms: set[str]) -> bool:
+    """Whether a test file is selected by any of `terms`.
+
+    Both filters use the same spelling: a term matches either a directory name
+    anywhere in the path (`views`) or a path fragment relative to the tests root
+    (`unit/views`).
+
+    An earlier version compared `exclude` terms against both the absolute path parts
+    and the relative path while comparing `only` terms against the relative path
+    alone. So `--exclude tests/model` worked (the absolute parts contained it) and
+    `--only tests/model` silently matched nothing -- the gate then reported every id
+    as unreferenced, which looks like a catastrophic regression rather than a filter
+    that selected an empty set. Two spellings for one concept, one of which was not
+    the documented one.
+    """
+    return any(term in path_parts or term in rel for term in terms)
+
+
+def collect_test_ids(tests_dir: Path, exclude: set[str] | None = None,
+                     only: set[str] | None = None) -> set[str]:
     """Every TEST_CASE id under `tests_dir`, minus the excluded subtrees.
 
     `exclude` matches a directory **name** anywhere in the path. It exists so that
     one consumer's tests can be handed to a second invocation: test ownership is a
     global judgement, so two invocations must see disjoint sets of test cases or
     each one reports the other's legitimate cases as orphans.
+
+    `only`, when given, is the **inverse** filter and wins over `exclude`: a path is
+    read only if it matches one of its terms.
+
+    Both filters exist because the exclusion form alone is a maintenance trap. The
+    views gate used to enumerate every other module's directory by name, so adding
+    `core/reflect` left its directory unlisted: the gate then claimed reflect's test
+    ids, found no contract in `views/model` referencing them, and reported orphans
+    from a module it has nothing to do with. The message names reflect, so the
+    obvious reading is that reflect is broken -- a gate that fails for the wrong
+    reason is a gate someone eventually deletes. Stating the subject positively ("only
+    this subtree is mine") cannot acquire a new one by omission.
     """
     skip = exclude or set()
+    allow = only or set()
     ids: set[str] = set()
     for path in tests_dir.rglob("*.cpp"):
-        # A term matches either a directory name anywhere in the path (`views`) or
-        # a path fragment (`unit/views`). The fragment form exists because the
-        # directory-name form cannot tell `tests/unit/views` from
-        # `tests/unit/units`: both contain a segment starting with "unit".
         rel = path.relative_to(tests_dir).as_posix()
-        if any(term in path.parts or term in rel for term in skip):
+        if allow:
+            if not _path_matches(path.parts, rel, allow):
+                continue
+        elif _path_matches(path.parts, rel, skip):
             continue
         for m in TEST_CASE_RE.finditer(path.read_text(encoding="utf-8", errors="replace")):
             ids.add(m.group("id"))
@@ -412,7 +443,14 @@ def main(argv: list[str] | None = None) -> int:
                              "用于把某个子树的用例交给另一次调用去管辖："
                              "用例归属是**全局**判据，所以两次调用必须看到互不相交的用例集合，"
                              "否则一方的合规用例在另一方看来全是孤儿。"
-                             "写法可以是目录名 `views`，也可以是路径片段 `unit/views`。")
+                             "写法可以是目录名 `views`，也可以是相对测试根目录的路径片段 `unit/views`。")
+    parser.add_argument("--only", action="append", default=[],
+                        help="只收集匹配这些目录名或路径片段的测试用例（可重复），"
+                             "写法与 --exclude 相同，且优先于它。"
+                             "用于「本次调用只管辖这一棵子树」："
+                             "排除式清单每加一个模块就要改一次，漏改时门禁会去认领一个"
+                             "与它无关的模块的用例，然后报出那个模块的孤儿——"
+                             "一条指错方向的失败信息，比一条漏报更容易让人删掉门禁。")
     args = parser.parse_args(argv)
 
     headers_root = Path(args.headers)
@@ -426,7 +464,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"错误：测试目录不存在 {tests_root}", file=sys.stderr)
         return 1
 
-    declared_tests = collect_test_ids(tests_root, set(args.exclude))
+    declared_tests = collect_test_ids(tests_root, set(args.exclude), set(args.only))
     violations: list[Violation] = []
     all_contracts: list[FunctionContract] = []
     referenced: set[str] = set()
@@ -447,9 +485,13 @@ def main(argv: list[str] | None = None) -> int:
     # complaining about `fp.*`, whose cases belong to the first gate's test root.
     if args.scan_tests:
         skip = set(args.exclude)
+        allow = set(args.only)
         for path in sorted(tests_root.rglob("*.cpp")):
             rel = path.relative_to(tests_root).as_posix()
-            if any(term in path.parts or term in rel for term in skip):
+            if allow:
+                if not _path_matches(path.parts, rel, allow):
+                    continue
+            elif _path_matches(path.parts, rel, skip):
                 continue
             contracts, _ = parse_header(path)
             all_contracts.extend(c for c in contracts if c.signature == "<module>")

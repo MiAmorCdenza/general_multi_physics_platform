@@ -103,6 +103,50 @@ def main() -> int:
     else:
         print("  [OK  ] 模块级契约与函数契约区分正确")
 
+    # -- Test selection: --only and --exclude must be duals with one spelling --
+    #
+    # The views gate hands one subtree to a second invocation, so "which cases are
+    # mine" is a real mechanism with a real failure mode. It failed once: `--only`
+    # compared its terms against the tests-root-relative path while `--exclude`
+    # compared against the absolute path too, so `--only tests/model` matched nothing.
+    # The gate then saw an empty case set and reported every id in the other module as
+    # unreferenced -- twelve violations naming units, for a filter typo. The two
+    # spellings have to be one spelling, and both directions have to be exercised.
+    #
+    # These run against the real tests tree, so they also pin the property that matters
+    # in production: the two filters partition the cases rather than overlapping.
+    tests_root = REPO / "tests"
+    everything = cc.collect_test_ids(tests_root)
+    model_ids = cc.collect_test_ids(tests_root, None, {"model"})
+    unit_ids = cc.collect_test_ids(tests_root, None, {"unit"})
+    complement = cc.collect_test_ids(tests_root, {"model"}, None)
+
+    if not everything:
+        failures.append("测试树里一个用例都没收集到——选择器可能把全部用例滤掉了")
+        print("  [FAIL] 测试树用例总数为 0")
+    elif not model_ids:
+        failures.append("--only model 收集到 0 个用例：过滤语义可能又退回了绝对路径匹配")
+        print("  [FAIL] --only model 收集到 0 个用例")
+    elif model_ids & unit_ids:
+        failures.append(f"--only model 与 --only unit 相交：{sorted(model_ids & unit_ids)}")
+        print("  [FAIL] --only 两个不相交作用域出现交集")
+    elif complement != everything - model_ids:
+        failures.append("--exclude 与 --only 不是互为补集："
+                        f"--exclude model 得到 {len(complement)} 个、"
+                        f"全集减 --only model 得到 {len(everything - model_ids)} 个")
+        print("  [FAIL] --exclude 与 --only 语义不对称")
+    elif cc.collect_test_ids(tests_root, None, {"nonexistent/dir"}):
+        # An allowlist that matches nothing must select nothing. If it ever falls back
+        # to "match everything", a caller with a typo in its scope silently checks the
+        # whole tree instead of its own subtree -- and reports every other module's
+        # cases as orphans, which is the exact failure this flag was added to end.
+        failures.append("--only 匹配不到任何目录时应当返回空集并让上层报错，"
+                        "而不是静默返回全集")
+        print("  [FAIL] --only 空匹配没有返回空集")
+    else:
+        print(f"  [OK  ] --only / --exclude 互为补集（model {len(model_ids)} + "
+              f"其余 {len(complement)} = {len(everything)}）")
+
     if failures:
         print("\n门禁自检失败：", file=sys.stderr)
         for f in failures:

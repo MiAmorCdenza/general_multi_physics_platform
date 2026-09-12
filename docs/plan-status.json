@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "L2 完成（runtime run/store/trace/io 四模块全部 verified）；下一步 core/plugin 加载器与 plugins/ 内容",
+  "updated": "L0 core/reflect 完成（名字与枚举的单一来源）；下一步 plugins/ 内容与 core/plugin 加载器",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -13,7 +13,7 @@
     "contract_completeness": {
       "tool": "scripts/check_contracts.py",
       "state": "passing",
-      "detail": "两次调用，用例集合互不相交。`gate.contracts` 扫 core/（291 契约，含 runtime run/store/trace/io），`gate.contracts.views` 扫 views/model（10 契约）。外层 `--exclude` 支持目录名与路径片段，且同时作用于孤儿统计与测试文件里的模块级契约块扫描。"
+      "detail": "两次调用，用例集合互不相交，且**互补关系是被自检钉住的**。`gate.contracts` 扫 core/（301 契约，含 runtime run/store/trace/io 与 reflect），`gate.contracts.views` 扫 views/model（7 契约）。views 那道门禁原本用**排除式**清单列出所有其它模块目录，于是新增 core/reflect 时它漏列了：门禁把 reflect 的用例认成自己该管的，找不到 views/model 里的引用，于是报出**reflect 的孤儿**——一条指向无关模块的失败信息，读起来就是 reflect 坏了。改成 `--only model` 正面声明管辖范围：明天新增的模块默认不在范围内，除非有人显式写进去。`--exclude` 与 `--only` 必须**同一种拼写**——第一版 `--only` 只比对相对路径而 `--exclude` 还比对绝对路径，于是 `--only tests/model` 静默匹配 0 个用例，门禁报出 12 处『units 的用例无人引用』。两个方向现在都由 tests/meta/check_contract_checker.py 用真实测试树验证互为补集，无匹配时返回空集而不是全集（否则一处拼写错误会让门禁去检查整棵树）。"
     },
     "gate_self_test": {
       "tool": "tests/meta/check_contract_checker.py",
@@ -64,7 +64,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 479,
+    "ctest_registered": 485,
     "compilers_green": [
       "gcc-15.2.0-i686",
       "msvc-19.51-x64"
@@ -104,8 +104,8 @@
     {
       "path": "core/reflect",
       "layer": "L0",
-      "state": "planned",
-      "note": "units 已完成 unit_symbol 部分；type_name 随 ports 一并成型"
+      "state": "verified",
+      "note": "名字与枚举的**单一来源**。存在的理由是一条具体的坏结果：同一个量在四处被拼成四种样子——属性面板写 'mu'、日志写 'u'、导出的 CSV 表头写 'uncertainty'、插件的 manifest 又写 'mu_k'——于是读文件的人无法把列对回量，而每一处各自都「是对的」。所以名字在这里定义一次，别处只许引用。type_name 的路径是**编译器**的 typeid 而不是库反射（C++ 无反射），因此过了三道归一：剥掉命名空间与模板实参、剥掉 ABI 装饰、转小写加前缀。归一化不是美化，是**键的稳定性**——名字是文档里查东西用的键，而 MSVC 与 GCC 对同一个模板类型的拼写不同，不归一就会写出只在编译它的那台机器上打得开的文件。验证器拒非 ASCII：名字是键，而依赖控制台代码页的键正是 dialect 门禁在别处防的那种失效。枚举部分是本阶段唯一一次**设计错误被编译器抓住**：第一版概念要求 `E::names()`，而 C++ 的 enum 体内只能有枚举量，任何 enum 都不可能满足——模块会照常编译，而失败会表现为某个完全正确的插件枚举「不满足约束」。改为枚举旁的自由函数（ADL 找到，前缀 qp_enum_ 避免与同命名空间任何 names 撞名后静默选错重载），标签于是和它描述的类型挨着，无需特化或注册。enum_label 越界返回空而不是终止：文档里可能存着新版本写的整数，「这个选项不认识」是读者必须能说出的话。unit_symbol_of 是**转发而非第二套实现**——units 的符号拼写已有黄金测试，反射层自己再格式化一次就正好制造本模块要消灭的第二来源（维度为空时 units 定的是 '1' 而不是空串，本模块的测试最初就写错了这一点，被 units 的黄金测试纠正）。"
     },
     {
       "path": "core/graph/ir",
@@ -231,8 +231,7 @@
     "reason": "章程的核心断言是「views/ 与 plugins/ 可以整个删掉，core/ 仍能编译并通过全部测试」，即 core 被设计成**可复用的地基**。可复用的地基应该让它尽可能容易被复用（含专利授权、无 copyleft 摩擦），而不是给它加一道需要法律判断的门槛。否决 LGPL-3.0 的要点：core 是静态库，LGPL-3.0 §4 只允许走 §4(d)(0)（须提供目标代码让用户可重新链接）；LGPL 是为「库」写的而本项目同时是应用与框架；它会给插件生态制造一条取决于构建方式的分界线（DLL 插件不受传染、静态链接 core 的插件受传染），而插件作者不该需要先读许可法才能判断能否闭源。",
     "qt_obligations": "Qt 6.8.3 以 LGPL-3.0 动态链接使用（Qt6Core/Gui/Widgets），未修改 Qt 源码。LGPL-3.0 全文**刻意不入库**——仓库里没有 Qt 代码，入库会产生「这里有 LGPL 代码」的误导；全文属于发行包，由打包步骤作为 LICENSE.LGPLv3 放入。Qt Charts 刻意不用（GPL-3.0 而非 LGPL），绘图改用 QCustomPlot(MIT) 或 QWT(LGPL)。",
     "outstanding": [
-      "scripts/fetch_deps.ps1 -WithQt 无人值守装 Qt（目前手工 aqtinstall 装到 C:\\Qt）",
-      "在一台没装 Qt 的机器上解压发行包并运行（package.ps1 验证的是 PATH 隔离，不是全新机器）"
+      "在一台没装 Qt 的机器上解压发行包并运行（package.ps1 验证的是 PATH 隔离，不是全新机器）；接收方已确认在另一台机器上正常运行一次"
     ]
   }
 }
