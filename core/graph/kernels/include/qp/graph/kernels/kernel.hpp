@@ -340,7 +340,21 @@ struct ClampResult final {
  */
 struct ParamBlock final {
     /// Number of double slots. Sized for the widest scheme the platform ships.
-    static constexpr std::size_t kDoubles = 8;
+    ///
+    /// **Twelve, and the scheme that forced the number is worth recording.** It was eight, which covers every
+    /// operator written against a point-valued state: a step size, a bound, a coefficient or two. The first
+    /// operator that did not fit was a relativistic Boris push reading a **baked volume field**, and the reason
+    /// belongs to the field vocabulary rather than to the push -- `field::FieldValue` describes a lattice's
+    /// **counts** and its element type and says nothing about **where the lattice sits**. An operator that
+    /// interpolates between samples therefore has to be told the grid's origin and spacing, six numbers, and this
+    /// block is where they go: the alternative is a new type in `core/graph/field` carrying physical geometry,
+    /// and that module exists precisely because it has no opinion about physics.
+    ///
+    /// Four scalars and six grid numbers is ten; the block is twelve so the next operator to need one has
+    /// somewhere to put it. The cost of the four extra slots is 32 bytes **per plan operation** -- this block is
+    /// resolved once per plan and then executed thousands of times -- and an operator that had to launder geometry
+    /// through a side channel to avoid those bytes would be paying for them where nobody could see it.
+    static constexpr std::size_t kDoubles = 12;
     /// Number of integer slots (enum choices, flags, counts).
     static constexpr std::size_t kIntegers = 8;
 

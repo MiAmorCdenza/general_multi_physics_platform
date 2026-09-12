@@ -63,6 +63,7 @@
 #include <qp/graph/particles/particle_state.hpp>
 
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 namespace qp::graph::particles {
@@ -115,7 +116,159 @@ inline constexpr std::size_t kSlotNameCount = 3;
 [[nodiscard]] const char* to_string(SlotName name) noexcept;
 
 /**
+ * @brief The bit that stands for one slot, for a plan that has to declare which slots it needs.
+ *
+ * A mask rather than three booleans because the plan carries one word and `prepare` answers one question -- "is
+ * everything this step needs bound?" -- and a mask makes that a single test that cannot forget a slot. The
+ * enumeration order is the bit order, so `slot_bit(SlotName::magnetic)` is a value a plan can be initialised with
+ * at compile time.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        Exactly one bit is set, and it is the bit of `name`
+ * @invariant   Distinct slots give distinct bits
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       particles.executor.a_required_slot_that_is_unbound_is_refused
+ */
+[[nodiscard]] constexpr std::uint32_t slot_bit(SlotName name) noexcept {
+    return 1U << static_cast<unsigned>(name);
+}
+
+/// @brief A plan that requires no field at all -- an operator that only moves what it is given.
+inline constexpr std::uint32_t kNoSlotsRequired = 0;
+
+/**
+ * @brief Where each state buffer sits in the array a kernel is handed.
+ *
+ * ## Why this is one enumeration and not six literals
+ *
+ * A kernel sees a `BatchView`: an array of described buffers with no names on them. Which index holds the
+ * charge-to-mass ratio, and which holds the magnetic field, is therefore a fact that **two** components have to
+ * agree on -- this module, which fills the array, and the operator, which reads it. A literal `4` in both is two
+ * chances to disagree, and the disagreement is invisible: an operator reading the status where it expected a
+ * charge computes a plausible acceleration from a state code.
+ *
+ * So the layout is declared **here**, once, and the operator is expected to name the slots it reads through this
+ * enumeration rather than through arithmetic on `SlotName`'s position. The two halves are checked against each
+ * other by `static_assert` immediately below, because the one thing a rule like this cannot survive is a later
+ * edit to one of them.
+ *
+ * ## Why the fields follow the state instead of getting a channel of their own
+ *
+ * `IBatchAdvancer::advance` is handed a batch and nothing else, and that is deliberate: the contract is one
+ * virtual call per step with no callback into the host per particle, so there is no second argument to pass a
+ * bound field through. Appending the field slots to the batch keeps the contract intact and costs an operator
+ * that reads none of them nothing -- it loops over `count` slots it was told to loop over, which for a plan with
+ * three bound fields is seven instead of four.
+ *
+ * The field slots carry **borrowed, read-only** data: `FieldValue::data` is `const void*`, and an operator that
+ * wrote through it would be writing into the field model's own storage. That is a real hazard and it is stated
+ * rather than enforced, because enforcing it would mean a second type in the batch and the batch is deliberately
+ * one type.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        none
+ * @invariant   `position` to `status` match `ParticleState::Slot` one for one
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       particles.executor.the_batch_layout_is_declared_once
+ */
+enum class BatchSlot : std::uint8_t {
+    /// Positions, three f64 components per particle.
+    position = 0,
+    /// Velocities, three f64 components per particle.
+    velocity = 1,
+    /// Charge-to-mass ratio, one f64 component per particle.
+    charge_mass = 2,
+    /// `Status` as a number, one f64 component per particle.
+    status = 3,
+    /// The magnetic field, a vector lattice in tesla. The first field slot, at `kFieldSlotBase`.
+    magnetic = 4,
+    /// The electric field, a vector lattice in volts per metre.
+    electric = 5,
+    /// The drag coefficient, a scalar lattice in per second.
+    drag = 6,
+};
+
+/// @brief How many slots a batch has: the four state buffers, then one per bindable field.
+inline constexpr std::size_t kBatchSlotCount = ParticleState::kSlotCount + kSlotNameCount;
+
+/// @brief Where the first field slot sits -- immediately after the state.
+inline constexpr std::size_t kFieldSlotBase = ParticleState::kSlotCount;
+
+/// @brief The array index of a batch slot, for indexing a `BatchView`.
+///
+/// @param slot Which slot.
+///
+/// @ownership   pure
+/// @thread      any
+/// @pre         none
+/// @post        The index this slot occupies in `BatchView::in` and `BatchView::out`
+/// @invariant   `slot_index(BatchSlot::position)` is zero and the indices are consecutive
+/// @errors      noexcept
+/// @complexity  O(1)
+/// @nondet      none
+/// @frozen      no
+/// @tests       particles.executor.the_batch_layout_is_declared_once
+[[nodiscard]] constexpr std::size_t slot_index(BatchSlot slot) noexcept {
+    return static_cast<std::size_t>(slot);
+}
+
+/**
+ * @brief The batch index a bound field occupies.
+ *
+ * @param name Which field.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        `kFieldSlotBase + name`
+ * @invariant   The order of `SlotName` is the order of the field slots
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       particles.executor.the_batch_layout_is_declared_once
+ */
+[[nodiscard]] constexpr std::size_t slot_index(SlotName name) noexcept {
+    return kFieldSlotBase + static_cast<std::size_t>(name);
+}
+
+// The two halves of the layout, checked against each other rather than trusted. A later edit that inserted a
+// state slot without moving the field slots would shift every field an operator reads by one, and the result
+// would be a run that integrates a magnetic field as if it were a drag coefficient.
+static_assert(slot_index(BatchSlot::position) == static_cast<std::size_t>(ParticleState::Slot::position));
+static_assert(slot_index(BatchSlot::velocity) == static_cast<std::size_t>(ParticleState::Slot::velocity));
+static_assert(slot_index(BatchSlot::charge_mass) == static_cast<std::size_t>(ParticleState::Slot::charge_mass));
+static_assert(slot_index(BatchSlot::status) == static_cast<std::size_t>(ParticleState::Slot::status));
+static_assert(kFieldSlotBase == ParticleState::kSlotCount);
+static_assert(kBatchSlotCount == 7);
+static_assert(slot_index(SlotName::magnetic) == slot_index(BatchSlot::magnetic));
+static_assert(slot_index(SlotName::drag) == slot_index(BatchSlot::drag));
+static_assert(kBatchSlotCount - kFieldSlotBase == kSlotNameCount);
+
+/**
  * @brief One kernel, prepared, with the fields it reads.
+ *
+ * ## Why a step declares what it needs
+ *
+ * `fields` says what a step **has**; `required_slots` says what it **cannot run without**, and the second is not
+ * derivable from the first. The executor cannot look at a kernel and know that a Boris push is meaningless
+ * without a magnetic field -- `IBatchAdvancer` has no method that answers it, and adding one would put the
+ * particles module's vocabulary inside the kernel contract. What *can* answer it is whoever assembled the plan:
+ * the code that instantiated the kernel, read its documented slot list and wired a field node to it. That code
+ * knows, and `required_slots` is where it says so.
+ *
+ * The value of asking is `PlanRefusal::slot_unbound`, and the reason it is worth a word in the plan is that the
+ * alternative is not a crash. A pusher handed no magnetic field treats it as zero and every particle travels in a
+ * straight line; the user sees a run that finished and a picture that is wrong, and there is no way to tell it
+ * from a field that is genuinely zero everywhere. A refusal at load time names the missing slot instead.
  *
  * @ownership   observes (the kernel and the field data outlive the step)
  * @thread      main (build, prepare) / eval (advance)
@@ -124,7 +277,8 @@ inline constexpr std::size_t kSlotNameCount = 3;
  * @invariant   `param` is the block the kernel was prepared with
  * @errors      noexcept
  * @frozen      no
- * @tests       particles.executor.a_plan_prepares_every_kernel_once
+ * @tests       particles.executor.a_plan_prepares_every_kernel_once,
+ *              particles.executor.a_required_slot_that_is_unbound_is_refused
  */
 struct StepPlan final {
     /// The kernel to advance with. Not owned: a plugin owns its own implementation and the registry borrows it.
@@ -136,6 +290,13 @@ struct StepPlan final {
     /// A `FieldValue` rather than a `FieldValue*`, because the data is not owned and a pointer to it would need a
     /// lifetime rule of its own; a copy is four small integers and a pointer.
     field::FieldValue fields[kSlotNameCount]{};
+    /// Which slots this step cannot run without, as a mask of `slot_bit`s.
+    ///
+    /// Set by whoever assembled the plan, because that is the only code that knows: the executor cannot ask a
+    /// kernel which fields it needs without putting this module's vocabulary into the kernel contract. `prepare`
+    /// refuses the plan with `slot_unbound` when a required slot has no readable binding, so the missing field is
+    /// named while the user is still editing the graph rather than discovered from a straight-line trajectory.
+    std::uint32_t required_slots = kNoSlotsRequired;
 
     /// @brief The binding for one slot. A default-constructed view when it is absent.
     ///
@@ -175,11 +336,15 @@ enum class PlanRefusal : std::uint8_t {
     step_without_kernel = 2,
     /// A kernel refused the parameter block it was prepared with. Reported by the kernel, not by this layer.
     kernel_refused = 3,
-    /// A step binds a field the plan cannot supply -- a magnetic pusher with no magnetic field.
+    /// A step **requires** a field the plan does not bind -- a magnetic pusher with no magnetic field.
     ///
     /// Refused rather than defaulted to zero, and that is the decision worth stating: a pusher run with an absent
     /// field does not move the particles, which a user reads as "the simulation is broken" -- there is no way to
     /// tell it from a field that is genuinely zero everywhere. Naming the missing slot is actionable.
+    ///
+    /// It is the step's own declaration (`StepPlan::required_slots`) that is checked, not a guess: this layer has no
+    /// way to know that a Boris push needs a magnetic field, and inventing one -- a field slot that happens to be
+    /// bound is a field the step may well not read -- would refuse plans that are perfectly fine.
     slot_unbound = 4,
     /// A step needs scratch and the plan cannot provide it. Reported here rather than left to `advance`, which
     /// must not allocate.
@@ -381,12 +546,14 @@ public:
      * @pre         none
      * @post        On `ok`, `prepared()` is true and every kernel has been prepared exactly once
      * @invariant   On failure no kernel has been prepared: a half-prepared plan is not a plan
-     * @errors      Reports a `PlanRefusal`; `empty_plan`, `step_without_kernel`, `kernel_refused`
+     * @errors      Reports a `PlanRefusal`; `empty_plan`, `step_without_kernel`, `slot_unbound`,
+     *              `kernel_refused`
      * @complexity  O(steps)
      * @nondet      none
      * @frozen      no
      * @tests       particles.executor.a_plan_prepares_every_kernel_once,
-     *              particles.executor.an_empty_plan_is_refused
+     *              particles.executor.an_empty_plan_is_refused,
+     *              particles.executor.a_required_slot_that_is_unbound_is_refused
      */
     [[nodiscard]] PlanRefusal prepare();
 
@@ -395,6 +562,12 @@ public:
      *
      * Each step in the plan runs once, in order, and every component written is put through the clamp policy.
      * Scratch is allocated in `prepare`, never here: `advance` must not allocate.
+     *
+     * **The batch a kernel is handed has `kBatchSlotCount` slots**: the four state buffers in
+     * `ParticleState::Slot` order, then the step's bound fields in `SlotName` order. An unbound field is still a
+     * slot and its view is invalid, so a kernel asks `field::is_readable` rather than assuming a shorter array
+     * means an absent field -- the array length is a constant of this module, and a kernel that read it as "how
+     * many fields are bound" would start reading a drag coefficient as a magnetic field.
      *
      * @param ctx The step context. Only `dt` is read by this layer; `step`, `seed`, `rng` and `scratch` are
      *            filled in from the run's own bookkeeping and handed to each kernel, so a kernel that is
@@ -413,6 +586,7 @@ public:
      * @tests       particles.executor.a_step_counts_every_kernel_that_ran,
      *              particles.executor.a_self_inverse_kernel_round_trips,
      *              particles.executor.a_kernel_reads_the_slots_it_was_told_about,
+     *              particles.executor.the_batch_layout_is_declared_once,
      *              particles.executor.an_empty_plan_is_refused
      */
     [[nodiscard]] diag::Result<void> advance(kernels::AdvanceContext& ctx);
@@ -432,12 +606,19 @@ public:
     void reset_report() noexcept { report_ = AdvanceReport{}; }
 
 private:
-    /// @brief Fills `out` with `state`'s four slots, in `ParticleState::Slot` order.
+    /// @brief Fills the state half of `out` from `state`, in `ParticleState::Slot` order.
     ///
     /// The order is the contract between this file and the state: a kernel reads `batch.in[i]` knowing that `i`
     /// is a slot, so the two must agree. There is one function that builds this array and one that reads it,
     /// which is the only reason the agreement is checkable.
-    static void slots_of(ParticleState& state, field::FieldValue (&out)[ParticleState::kSlotCount]) noexcept;
+    static void state_slots_of(ParticleState& state,
+                               field::FieldValue (&out)[kBatchSlotCount]) noexcept;
+
+    /// @brief Fills the field half of `out` from a step's bindings, in `SlotName` order.
+    ///
+    /// An unbound slot is written as a **default-constructed** `FieldValue`, which is not readable: the array
+    /// length never changes, so "absent" has to be said by the view rather than by the count.
+    static void field_slots_of(const StepPlan& step, field::FieldValue (&out)[kBatchSlotCount]) noexcept;
 
     /// @brief Puts every component a kernel wrote through the clamp policy, counting what changed and retiring
     /// any particle whose arithmetic stopped being a number.

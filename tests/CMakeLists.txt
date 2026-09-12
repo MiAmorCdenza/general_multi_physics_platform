@@ -457,13 +457,15 @@ if(QP_BUILD_PLUGINS)
              qp::authoring_document qp::authoring_commands qp::graph_ir qp::graph_structure
              qp::graph_execution qp::units qp::views_model qp::runtime_file)
 
-    # The geomagnetic field. It links nothing but `units`: the cases are arithmetic checked against closed forms
-    # and published values, and a case that also integrated a particle would have two possible causes for a
-    # failure and no way to tell them apart. The sign convention in particular is asserted here rather than
-    # through a trajectory, because a trajectory that drifts the wrong way takes thousands of steps to say so.
+    # The geomagnetic field and the particles in it. It links `units` for the constants the cases are checked
+    # against and the graph modules because five of its cases drive the pusher **through the executor** -- a
+    # `ParticleState`, a `BakedField` bound to a `StepPlan`, and a plan stepped by `ParticleExecutor`. That is the
+    # only shape in which the batch layout is a fact two modules agree on rather than a convention each believes
+    # separately, and it is what found the factor of 2209 in the charge-to-mass conversion: a case that checked the
+    # conversion against itself agreed with it.
     qp_add_test(qp_test_plugins_magnetosphere
         SOURCES unit/plugins/test_magnetosphere.cpp
-        LIBS qp::plugins::magnetosphere qp::units)
+        LIBS qp::plugins::magnetosphere qp::units qp::graph_particles qp::graph_kernels)
 endif()
 
 # The run loop. Qt-free and graph-only: every case drives a stub operator, so it belongs to the loop's

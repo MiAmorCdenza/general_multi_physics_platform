@@ -14,6 +14,12 @@
  *   3. **What a kernel wrote is clamped and counted, and a value that stopped being a number retires its
  *      particle.** C2's guarantee is that a run never explodes; the project's rule is that the platform never
  *      clamps silently. Both are honoured here, at the one place every kernel's output passes through.
+ *   4. **A bound field reaches the kernel, through the batch.** `IBatchAdvancer::advance` takes a batch and
+ *      nothing else -- the contract is one virtual call per step with no per-particle callback -- so the field a
+ *      step reads is appended to the state rather than passed beside it. The array is `kBatchSlotCount` entries
+ *      for **every** step, bound or not, and an unbound slot is an unreadable view rather than a short array:
+ *      absence has to be a property of the data, because a kernel that read the length as "how many fields are
+ *      bound" would read a drag coefficient as a magnetic field the first time somebody wired one up.
  */
 #include <qp/graph/particles/executor.hpp>
 
@@ -74,12 +80,23 @@ ParticleExecutor::ParticleExecutor(ParticleState& state, std::vector<StepPlan> s
                                    pk::ClampPolicy clamp) noexcept
     : state_(&state), steps_(std::move(steps)), clamp_(clamp) {}
 
-void ParticleExecutor::slots_of(ParticleState& state,
-                                field::FieldValue (&out)[ParticleState::kSlotCount]) noexcept {
-    out[0] = state.slot(Slot::position);
-    out[1] = state.slot(Slot::velocity);
-    out[2] = state.slot(Slot::charge_mass);
-    out[3] = state.slot(Slot::status);
+void ParticleExecutor::state_slots_of(ParticleState& state,
+                                     field::FieldValue (&out)[kBatchSlotCount]) noexcept {
+    out[slot_index(BatchSlot::position)] = state.slot(Slot::position);
+    out[slot_index(BatchSlot::velocity)] = state.slot(Slot::velocity);
+    out[slot_index(BatchSlot::charge_mass)] = state.slot(Slot::charge_mass);
+    out[slot_index(BatchSlot::status)] = state.slot(Slot::status);
+}
+
+void ParticleExecutor::field_slots_of(const StepPlan& step,
+                                     field::FieldValue (&out)[kBatchSlotCount]) noexcept {
+    // Every field slot is written, bound or not, so a kernel can index `batch.in[slot_index(SlotName::drag)]`
+    // without first asking how long the array is -- the length is `kBatchSlotCount` for every step of every plan.
+    // Absence is said by the view: a default-constructed `FieldValue` fails `field::is_readable`, which is a
+    // different answer from a field of zeroes and the one a caller needs.
+    for (std::size_t slot = 0; slot < kSlotNameCount; ++slot) {
+        out[kFieldSlotBase + slot] = step.fields[slot];
+    }
 }
 
 PlanRefusal ParticleExecutor::prepare() {
@@ -100,6 +117,13 @@ PlanRefusal ParticleExecutor::prepare() {
     scratch_bytes_ = 0;
     for (const StepPlan& step : steps_) {
         if (step.kernel == nullptr) return PlanRefusal::step_without_kernel;
+        for (std::size_t slot = 0; slot < kSlotNameCount; ++slot) {
+            if ((step.required_slots & slot_bit(static_cast<SlotName>(slot))) == 0) continue;
+            // Required and not bound. Checked here rather than left to the kernel, because the failure this
+            // prevents is not a crash: a pusher with no magnetic field treats it as zero, every particle travels
+            // in a straight line, and the run finishes with a picture that is wrong and nothing that says so.
+            if (!field::is_readable(step.fields[slot])) return PlanRefusal::slot_unbound;
+        }
         if (pk::has_capability(step.kernel->capabilities(), pk::Capability::needs_scratch)) {
             // The interface sizes scratch in bytes and leaves the number to the implementation, which is why the
             // reservation is per particle and generous rather than exact: a kernel that needs more reports it by
@@ -161,15 +185,20 @@ diag::Result<void> ParticleExecutor::advance(pk::AdvanceContext& ctx) {
     for (const StepPlan& step : steps_) {
         const bool in_place = pk::has_capability(step.kernel->capabilities(), pk::Capability::is_in_place);
 
-        field::FieldValue in_slots[ParticleState::kSlotCount]{};
-        field::FieldValue out_slots[ParticleState::kSlotCount]{};
-        slots_of(*state_, in_slots);
+        field::FieldValue in_slots[kBatchSlotCount]{};
+        field::FieldValue out_slots[kBatchSlotCount]{};
+        state_slots_of(*state_, in_slots);
+        field_slots_of(step, in_slots);
         if (in_place) {
             // Aliased on purpose: the kernel declared that it reads and writes the same buffers, and the
             // executor's job is to believe the declaration rather than to protect against it.
-            for (std::size_t i = 0; i < ParticleState::kSlotCount; ++i) out_slots[i] = in_slots[i];
+            for (std::size_t i = 0; i < kBatchSlotCount; ++i) out_slots[i] = in_slots[i];
         } else {
-            slots_of(out_, out_slots);
+            state_slots_of(out_, out_slots);
+            // The field slots are the **same borrowed views** on both sides. A non-in-place kernel reads its
+            // fields from `in` and writes its state to `out`, and there is no second copy of a field model to
+            // write into: the data belongs to whoever baked it and `FieldValue::data` is `const void*`.
+            field_slots_of(step, out_slots);
         }
 
         pk::BatchView batch;
@@ -177,8 +206,10 @@ diag::Result<void> ParticleExecutor::advance(pk::AdvanceContext& ctx) {
         batch.out = out_slots;
         // The number of **slots**, not particles. A batch is an array of described buffers, and the particle
         // count lives inside each buffer's lattice; passing the particle count here would tell the kernel there
-        // are N slots and it would read past the end of a four-element array.
-        batch.count = ParticleState::kSlotCount;
+        // are N slots and it would read past the end of a seven-element array. The count is the same
+        // `kBatchSlotCount` for every step, bound fields or not, so a kernel indexes the field it wants rather
+        // than counting what it was given -- see `field_slots_of` for why absence is a property of the view.
+        batch.count = kBatchSlotCount;
 
         const auto advanced = step.kernel->advance(batch, ctx);
         if (!advanced.has_value()) {
@@ -189,16 +220,17 @@ diag::Result<void> ParticleExecutor::advance(pk::AdvanceContext& ctx) {
         ++report_.kernel_calls;
 
         if (!in_place) {
-            // Copied slot by slot through the byte views, so the copy cannot disagree with `slots_of` about
+            // Copied slot by slot through the byte views, so the copy cannot disagree with `state_slots_of` about
             // which array is which, and so a kernel that wrote a status has it carried forward. `out_` was
-            // resized to this batch's count in `prepare`, so the two descriptions have identical geometry and
-            // the copy is a straight span.
-            field::FieldValue source[ParticleState::kSlotCount]{};
-            slots_of(out_, source);
-            for (std::size_t slot_index = 0; slot_index < ParticleState::kSlotCount; ++slot_index) {
-                const std::size_t bytes = static_cast<std::size_t>(source[slot_index].required_bytes());
+            // resized to this batch's count in `prepare`, so the two descriptions have identical geometry and the
+            // copy is a straight span. Only the **state** slots are copied: the field slots on both sides alias
+            // the field model's own storage, and copying them back would write into it.
+            field::FieldValue source[kBatchSlotCount]{};
+            state_slots_of(out_, source);
+            for (std::size_t state_slot = 0; state_slot < ParticleState::kSlotCount; ++state_slot) {
+                const std::size_t bytes = static_cast<std::size_t>(source[state_slot].required_bytes());
                 if (bytes == 0) continue;
-                std::memcpy(const_cast<void*>(in_slots[slot_index].data), source[slot_index].data, bytes);
+                std::memcpy(const_cast<void*>(in_slots[state_slot].data), source[state_slot].data, bytes);
             }
         }
     }

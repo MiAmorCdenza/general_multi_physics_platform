@@ -26,7 +26,7 @@
  * | magnetic field | `B / B_eq` | the equatorial surface field is 1 |
  * | electric field | `E / (c * B_eq)` | the field that matches the magnetic force at `v = c` |
  * | gravity | `GM / (R_E * c^2)` | the Earth's potential well, in units of `c^2` |
- * | charge per mass | `(q/m) * B_eq * (c / R_E)` | an angular frequency, per normalized time |
+ * | charge per mass | `(q/m) * B_eq * (R_E / c)` | the angle turned per normalized time, at one field unit |
  *
  * ## Why these are `inline const` values rather than `constexpr`
  *
@@ -238,40 +238,59 @@ inline const double kNormalizedGravity =
     kEarthGravityParameterSI / (kEarthRadiusM * kSpeedOfLightSI * kSpeedOfLightSI);
 
 /**
- * @brief A charge-to-mass ratio in normalized units, which is an angular frequency.
+ * @brief A charge-to-mass ratio in normalized units, which is an angular frequency times the time unit.
  *
- * `(q/m) * B_eq / (c / R_E)`: the gyrofrequency a particle of that species has wherever the field is one
- * normalized unit. That it comes out as an **angular frequency** rather than needing a separate conversion is the
- * reason this system is the one to work in, and the division is by the light-crossing time rather than a
- * multiplication by its reciprocal written the other way up -- the first version of this function multiplied by
- * `c / R_E` and was wrong by that factor squared, which is 2200. The assertion that caught it is
- * `magnetosphere.units.the_gyrofrequency_matches_the_textbook`: a proton's value here has to come out near 2.98
- * rad/s, because that is `qB/m` for a proton in the equatorial surface field and a data book prints it.
+ * **The derivation, from the equation of motion, because the first two versions of this function were wrong and
+ * the second one was wrong in a way a test agreed with.**
+ *
+ * The pusher integrates `du/dtau = q_prime * (E_norm + u x B_norm)` with `u = gamma v / c`, `tau = t / T` and
+ * `T = R_E / c`. The physical equation is `d(gamma v)/dt = (q/m)(E + v x B)`. Matching the two term by term, with
+ * `v = c u`, `B = B_eq B_norm`, `E = c B_eq E_norm` and `dt = T dtau`:
+ *
+ *     (c / T) du/dtau = (q/m) c B_eq (E_norm + u x B_norm)
+ *     du/dtau         = (q/m) B_eq T (E_norm + u x B_norm)
+ *
+ * so the conversion is `q_prime = (q/m) * B_eq * T`, and `q_prime` is **dimensionless**: it is the angle a
+ * particle turns through per normalized time where the field is one normalized unit, which is also the physical
+ * gyrofrequency `q B_eq / m` multiplied by the time unit.
+ *
+ * For a proton that is `2845.75 rad/s * 0.021275 s = 60.546`. The two wrong versions, and why each survived:
+ *
+ *   - the first multiplied by `c / R_E` instead of `R_E / c`, which is the same factor of 47 in the wrong
+ *     direction -- the error is 47 squared, 2209;
+ *   - the second was **spelled** as a division by `R_E / c` while still computing `B_eq / (R_E / c)`, which is
+ *     the same 2209 error with a comment claiming it had been fixed. The assertion that was supposed to catch it
+ *     read `q_prime / kNormalizedPerSecond == q B_eq / m`, which is the reciprocal of the conversion, so the test
+ *     agreed with the defect instead of finding it. A test written from the same understanding as the code
+ *     agrees with the code whatever the code does; the check that found this one came from outside both --
+ *     `magnetosphere.boris.a_uniform_field_gives_the_relativistic_gyrofrequency` integrates a proton in a
+ *     uniform field of one unit and measures how far it turns per unit time.
  *
  * @param charge_mass_si The species' charge-to-mass ratio, in coulombs per kilogram.
  *
  * @ownership   pure
  * @thread      any
  * @pre         `charge_mass_si` is finite
- * @post        The species' normalized gyrofrequency scale
+ * @post        The species' normalized charge-to-mass ratio, in radians per normalized time
  * @invariant   The ratio of two species' values equals the ratio of their SI charge-to-mass ratios
- * @errors      noexcept: a product and a division of finite constants, with nothing to report
+ * @invariant   `value * kNormalizedPerSecond == charge_mass_si * kEquatorialSurfaceFieldT`
+ * @errors      noexcept: a product of finite constants, with nothing to report
  * @complexity  O(1)
  * @nondet      none
  * @frozen      no
  * @tests       magnetosphere.units.the_gyrofrequency_matches_the_textbook
  */
 [[nodiscard]] inline double normalized_charge_mass(double charge_mass_si) noexcept {
-    return charge_mass_si * kEquatorialSurfaceFieldT / kLightCrossingTimeS;
+    return charge_mass_si * kEquatorialSurfaceFieldT * kLightCrossingTimeS;
 }
 
-/// @brief A proton's normalized gyrofrequency scale. About 2.97 rad per normalized time.
+/// @brief A proton's normalized charge-to-mass ratio. About 60.55 per normalized time.
 inline const double kProtonNormalizedChargeMass = normalized_charge_mass(kProtonChargeMassSI);
 
-/// @brief An electron's normalized gyrofrequency scale. Negative, 1836 times larger in magnitude.
+/// @brief An electron's normalized charge-to-mass ratio. Negative, 1836 times larger in magnitude.
 inline const double kElectronNormalizedChargeMass = normalized_charge_mass(kElectronChargeMassSI);
 
-/// @brief An alpha particle's normalized gyrofrequency scale. Half a proton's, because `q/m` is half.
+/// @brief An alpha particle's normalized charge-to-mass ratio. Half a proton's, because `q/m` is half.
 inline const double kAlphaNormalizedChargeMass = normalized_charge_mass(kAlphaChargeMassSI);
 
 /**

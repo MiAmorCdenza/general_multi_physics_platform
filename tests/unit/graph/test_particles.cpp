@@ -416,8 +416,9 @@ TEST_CASE("particles.executor.a_kernel_reads_the_slots_it_was_told_about", "[par
     REQUIRE(probe.last_ctx_step == 0);
     REQUIRE(probe.last_ctx_dt == 2.0);
     // And the batch was described as an array of **slots**, not of particles: a count of 2 here would tell the
-    // kernel to read past the end of a four-element array.
-    REQUIRE(probe.last_batch_count == ParticleState::kSlotCount);
+    // kernel to read past the end of the slot array. It is now the full layout -- four state slots plus one per
+    // bindable field, whether or not this plan bound any -- because a kernel indexes the field it wants.
+    REQUIRE(probe.last_batch_count == kBatchSlotCount);
 }
 
 TEST_CASE("particles.executor.a_bound_field_reaches_the_kernel", "[particles]") {
@@ -472,6 +473,159 @@ TEST_CASE("particles.executor.a_bound_field_reaches_the_kernel", "[particles]") 
     REQUIRE(gfield::get_component(drag_view, 1, 0) == 0.25);
     // A scalar slot has no second component, and asking for one is zero rather than a read past the end.
     REQUIRE(gfield::get_component(drag_view, 1, 1) == 0.0);
+}
+
+TEST_CASE("particles.executor.the_batch_layout_is_declared_once", "[particles]") {
+    // The array a kernel is handed has a **fixed** length: four state buffers, then one slot per bindable field,
+    // bound or not. The alternative -- a shorter array meaning "fewer fields are bound" -- is the defect this case
+    // exists to refuse: a kernel that read the length as "how many fields are bound" would read a drag
+    // coefficient as a magnetic field the first time somebody wired one up, and the arithmetic would still look
+    // like physics.
+    //
+    // The layout is a compile-time fact, so the constants are asserted at compile time. A `REQUIRE` on them would
+    // pass just as well and would only be checked when the case runs; `STATIC_REQUIRE` fails the build, which is
+    // where a shifted slot index belongs -- the alternative is a run that integrates the wrong quantity.
+    STATIC_REQUIRE(slot_index(BatchSlot::position) == 0);
+    STATIC_REQUIRE(slot_index(BatchSlot::velocity) == 1);
+    STATIC_REQUIRE(slot_index(BatchSlot::charge_mass) == 2);
+    STATIC_REQUIRE(slot_index(BatchSlot::status) == 3);
+    STATIC_REQUIRE(kFieldSlotBase == 4);
+    STATIC_REQUIRE(kBatchSlotCount == 7);
+    // The two halves of the layout agree: `ParticleState::Slot` names the same four buffers in the same order, and
+    // `SlotName` names the three fields in the same order as the field half of `BatchSlot`.
+    STATIC_REQUIRE(slot_index(BatchSlot::position) == static_cast<std::size_t>(ParticleState::Slot::position));
+    STATIC_REQUIRE(slot_index(BatchSlot::status) == static_cast<std::size_t>(ParticleState::Slot::status));
+    STATIC_REQUIRE(slot_index(SlotName::magnetic) == slot_index(BatchSlot::magnetic));
+    STATIC_REQUIRE(slot_index(SlotName::electric) == slot_index(BatchSlot::electric));
+    STATIC_REQUIRE(slot_index(SlotName::drag) == slot_index(BatchSlot::drag));
+    // And the mask: one bit per slot, distinct, at the position of the enumerator.
+    STATIC_REQUIRE(slot_bit(SlotName::magnetic) == 1U);
+    STATIC_REQUIRE(slot_bit(SlotName::electric) == 2U);
+    STATIC_REQUIRE(slot_bit(SlotName::drag) == 4U);
+    STATIC_REQUIRE((slot_bit(SlotName::magnetic) & slot_bit(SlotName::drag)) == 0U);
+
+    ParticleState state = batch_of(3);
+    const double magnetic[9] = {1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0};
+    const double drag[3] = {0.5, 0.25, 0.125};
+
+    // What a kernel saw, recorded by the kernel. Readability per slot rather than only the count, because
+    // "the array is seven long" and "slot 5 is an absent field" are two different facts and the second is the one
+    // a kernel acts on.
+    bool magnetic_readable = false;
+    bool electric_readable = false;
+    bool drag_readable = false;
+    double magnetic_x = 0.0;
+    double drag_0 = 0.0;
+    std::size_t seen_count = 0;
+
+    StubKernel probe{"probe", kInPlace, [&](const pk::BatchView& batch, pk::AdvanceContext&) {
+        seen_count = batch.count;
+        magnetic_readable = gfield::is_readable(batch.in[slot_index(SlotName::magnetic)]);
+        electric_readable = gfield::is_readable(batch.in[slot_index(SlotName::electric)]);
+        drag_readable = gfield::is_readable(batch.in[slot_index(SlotName::drag)]);
+        magnetic_x = gfield::get_component(batch.in[slot_index(SlotName::magnetic)], 0, 0);
+        drag_0 = gfield::get_component(batch.in[slot_index(SlotName::drag)], 0, 0);
+        return qp::diag::Result<void>{};
+    }};
+
+    std::vector<StepPlan> steps(1);
+    steps[0].kernel = &probe;
+    steps[0].fields[static_cast<std::size_t>(SlotName::magnetic)] = vector_field(magnetic, 3);
+    steps[0].fields[static_cast<std::size_t>(SlotName::drag)] = scalar_field(drag, 3);
+
+    ParticleExecutor executor{state, std::move(steps)};
+    REQUIRE(executor.prepare() == PlanRefusal::ok);
+    pk::AdvanceContext ctx;
+    ctx.dt = 0.01;
+    REQUIRE(executor.advance(ctx).has_value());
+
+    REQUIRE(seen_count == kBatchSlotCount);
+    REQUIRE(magnetic_readable);
+    REQUIRE(drag_readable);
+    // The slot that was **not** bound is still a slot, and it is unreadable rather than zero. That is the whole
+    // point: "no electric field was wired up" and "an electric field of zero" are the same force and different
+    // experiments, and only the view can tell them apart.
+    REQUIRE_FALSE(electric_readable);
+    REQUIRE(magnetic_x == 1.0);
+    REQUIRE(drag_0 == 0.5);
+
+    // And the length does not depend on how many fields are bound: the same plan with nothing bound still hands
+    // the kernel seven slots, so a kernel's index arithmetic is the same in every run.
+    StubKernel bare{"bare", kInPlace, [&](const pk::BatchView& batch, pk::AdvanceContext&) {
+                        seen_count = batch.count;
+                        magnetic_readable = gfield::is_readable(batch.in[slot_index(SlotName::magnetic)]);
+                        return qp::diag::Result<void>{};
+                    }};
+    std::vector<StepPlan> bare_steps(1);
+    bare_steps[0].kernel = &bare;
+    ParticleExecutor bare_executor{state, std::move(bare_steps)};
+    REQUIRE(bare_executor.prepare() == PlanRefusal::ok);
+    REQUIRE(bare_executor.advance(ctx).has_value());
+    REQUIRE(seen_count == kBatchSlotCount);
+    REQUIRE_FALSE(magnetic_readable);
+}
+
+TEST_CASE("particles.executor.a_required_slot_that_is_unbound_is_refused", "[particles]") {
+    // `slot_unbound` is the refusal that a pusher with no magnetic field needs and that nothing could produce
+    // until a step could **declare** what it reads. It is not derivable from the bindings: an unbound slot is a
+    // legitimate state for a kernel that does not read it, and a plan that refused every unbound slot would
+    // refuse every plan that has no electric field -- which is every plan this kit ships.
+    //
+    // The failure it prevents is the quiet one. A Boris push handed no magnetic field treats it as zero, every
+    // particle travels in a straight line, and the run finishes with a picture that is wrong and nothing that says
+    // so. That is indistinguishable from a field that is genuinely zero everywhere.
+    ParticleState state = batch_of(2);
+    const double magnetic[6] = {1.0e-5, 0.0, 0.0, 0.0, 1.0e-5, 0.0};
+    const double drag[2] = {0.5, 0.25};
+
+    StubKernel pusher{"pusher", kInPlace,
+                      [](const pk::BatchView&, pk::AdvanceContext&) { return qp::diag::Result<void>{}; }};
+
+    // Required, not bound: refused, and **before** any kernel was prepared -- a half-prepared plan is not a plan.
+    std::vector<StepPlan> missing(1);
+    missing[0].kernel = &pusher;
+    missing[0].required_slots = slot_bit(SlotName::magnetic);
+    ParticleExecutor unbound{state, std::move(missing)};
+    REQUIRE(unbound.prepare() == PlanRefusal::slot_unbound);
+    REQUIRE_FALSE(unbound.prepared());
+    REQUIRE(pusher.prepares == 0);
+
+    // A description with no data is not a binding either. This is the case a check written as "is the descriptor
+    // consistent" would pass: the lattice is well formed, the pointer is null.
+    std::vector<StepPlan> dangling(1);
+    dangling[0].kernel = &pusher;
+    dangling[0].required_slots = slot_bit(SlotName::magnetic);
+    dangling[0].fields[static_cast<std::size_t>(SlotName::magnetic)] = vector_field(nullptr, 2);
+    ParticleExecutor described_only{state, std::move(dangling)};
+    REQUIRE(described_only.prepare() == PlanRefusal::slot_unbound);
+    REQUIRE(pusher.prepares == 0);
+
+    // A **step with no kernel** is refused first, whatever else the plan is missing: the checks run in the order a
+    // reader would ask them, so the refusal names the first thing that is wrong rather than the last one tested.
+    std::vector<StepPlan> both(1);
+    both[0].required_slots = slot_bit(SlotName::magnetic);
+    ParticleExecutor ambiguous{state, std::move(both)};
+    REQUIRE(ambiguous.prepare() == PlanRefusal::step_without_kernel);
+
+    // Required and bound: the plan comes up, and the kernel is prepared exactly once.
+    std::vector<StepPlan> wired(1);
+    wired[0].kernel = &pusher;
+    wired[0].required_slots = slot_bit(SlotName::magnetic) | slot_bit(SlotName::drag);
+    wired[0].fields[static_cast<std::size_t>(SlotName::magnetic)] = vector_field(magnetic, 2);
+    wired[0].fields[static_cast<std::size_t>(SlotName::drag)] = scalar_field(drag, 2);
+    ParticleExecutor bound{state, std::move(wired)};
+    REQUIRE(bound.prepare() == PlanRefusal::ok);
+    REQUIRE(pusher.prepares == 1);
+
+    // Nothing required and nothing bound: **also** fine. A step that reads no field is not a step missing one, and
+    // this half of the case is what keeps the check from becoming "every slot must be bound".
+    std::vector<StepPlan> plain(1);
+    plain[0].kernel = &pusher;
+    ParticleExecutor bare{state, std::move(plain)};
+    REQUIRE(bare.prepare() == PlanRefusal::ok);
+    REQUIRE(pusher.prepares == 2);
+
+    REQUIRE(std::string{to_string(PlanRefusal::slot_unbound)} == "slot_unbound");
 }
 
 TEST_CASE("particles.executor.a_step_counts_every_kernel_that_ran", "[particles]") {

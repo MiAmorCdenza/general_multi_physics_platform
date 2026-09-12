@@ -14,17 +14,27 @@
 # here yet because each needs an external Fortran expansion, and a dependency that heavy must be pulled by a real
 # experiment rather than by symmetry.
 #
-# **What is in this first cut.** `geomagnetic.hpp` (the constants, each with its source), `units.hpp` (the
-# normalized system, each conversion written as the SI expression it stands for), `geometry.hpp` (three doubles
-# and the cross product, right-handed, with the convention asserted) and `dipole.hpp` / `dipole.cpp` (the field).
-# The node type, the field-domain bake and the Boris kernel follow; they are separate commits because each has a
-# real consumer to satisfy and folding them together would make a failure ambiguous.
+# **What is in this cut.** `geomagnetic.hpp` (the constants, each with its source), `units.hpp` (the normalized
+# system, each conversion written as the SI expression it stands for), `geometry.hpp` (three doubles and the cross
+# product, right-handed, with the convention asserted), `dipole.hpp` / `dipole.cpp` (the field),
+# `baked_field.hpp` / `baked_field.cpp` (the model evaluated once onto a lattice, read back by trilinear
+# interpolation) and `boris.hpp` / `boris.cpp` (the pusher, as a particle-domain kernel). The node type, the
+# field-domain bake and the composition root that binds a field node to a particle slot follow; they are separate
+# commits because each has a real consumer to satisfy and folding them together would make a failure ambiguous.
 #
-# Nothing here includes a Qt header, and nothing here depends on `core/` beyond `units`.
+# **What `boris.cpp` costs in dependencies, and why that is the point.** It links `qp::graph_kernels`,
+# `qp::graph_particles`, `qp::field` and `qp::abi`, because a pusher **is** an `IBatchAdvancer` reading a bound
+# `field::FieldValue` out of the batch the executor builds. The alternative -- a private particle loop with its own
+# field sampling and its own state arrays -- is the parallel implementation this platform exists to not have, and
+# it is exactly what would keep a kit from using the trace, the store or the uncertainty chain.
+#
+# Nothing here includes a Qt header, and nothing here depends on `core/` beyond `units` and the graph.
 #
 # Dependency rule: plugins may depend on core, core may never depend on plugins.
 
 add_library(qp_plugins_magnetosphere STATIC
+    src/baked_field.cpp
+    src/boris.cpp
     src/dipole.cpp)
 
 add_library(qp::plugins::magnetosphere ALIAS qp_plugins_magnetosphere)
@@ -36,9 +46,10 @@ target_include_directories(qp_plugins_magnetosphere
 
 target_compile_features(qp_plugins_magnetosphere PUBLIC cxx_std_20)
 
-# `qp::units` is PUBLIC because the public headers name `units::Dim` through the field declarations that will
-# follow, and because the normalized constants are defined against SI quantities. Nothing else: the dipole's
-# arithmetic is `double` and `std::sqrt`, and the module has no opinion about the graph.
+# `qp::units` is PUBLIC because the public headers name `units::Dim` through the field declarations they use, and
+# because the normalized constants are defined against SI quantities. The graph modules are PUBLIC for the same
+# reason: `boris.hpp` derives from `IBatchAdvancer` and names `field::FieldValue` and `BatchSlot` in its own
+# signatures, so anyone using this library needs their headers.
 target_link_libraries(qp_plugins_magnetosphere
-    PUBLIC qp::units qp::diag
+    PUBLIC qp::units qp::diag qp::abi qp::field qp::graph_kernels qp::graph_particles
     PRIVATE qp_warnings qp_sanitize)
