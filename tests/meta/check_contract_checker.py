@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import pathlib
 import sys
+import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -146,6 +148,45 @@ def main() -> int:
     else:
         print(f"  [OK  ] --only / --exclude 互为补集（model {len(model_ids)} + "
               f"其余 {len(complement)} = {len(everything)}）")
+
+    # -- A name is a name, not a prefix of one -------------------------------
+    #
+    # The case above is the property; this is the mechanism, asserted on a **fixture** rather than on whatever
+    # the real tree happens to contain. The failure it pins arrived with `tests/unit/plugins/test_models.cpp`:
+    # `--only model` began selecting it, because the old matcher asked `"model" in "models"`. Two partitions then
+    # claimed the same cases and each reported the other's as orphans -- so the symptom was in a gate that had
+    # not changed, and the cause was in the selector.
+    #
+    # It is tested here, on a temporary tree, for the reason the whole self-test exists: a property that only
+    # holds because of which directories happen to exist today is a property that stops holding the next time
+    # somebody adds one, and the next person to see the failure will be looking at the wrong file.
+    with tempfile.TemporaryDirectory() as tmp:
+        fixture = pathlib.Path(tmp) / "tests"
+        (fixture / "model").mkdir(parents=True)
+        (fixture / "unit" / "plugins").mkdir(parents=True)
+        (fixture / "model" / "test_exact.cpp").write_text(
+            'TEST_CASE("fixture.exact_model_case")\n', encoding="utf-8")
+        (fixture / "unit" / "plugins" / "test_models.cpp").write_text(
+            'TEST_CASE("fixture.plural_models_case")\n', encoding="utf-8")
+
+        exact = cc.collect_test_ids(fixture, None, {"model"})
+        fragment = cc.collect_test_ids(fixture, None, {"unit/plugins"})
+        plural_dir = cc.collect_test_ids(fixture, None, {"plugins"})
+
+        if exact != {"fixture.exact_model_case"}:
+            failures.append(f"--only model 在夹具里选到了 {sorted(exact)}，期望恰好是 model/ 下的那一个——"
+                            "裸词是一个名字，不是另一个名字的前缀"
+                            "（旧写法 `term in rel` 会在这里把 test_models.cpp 一起选走）")
+            print("  [FAIL] --only model 把 models 也选了进来")
+        elif fragment != {"fixture.plural_models_case"}:
+            failures.append(f"--only unit/plugins 在夹具里选到了 {sorted(fragment)}——带分隔符的词是**片段**，"
+                            "子串匹配是它的定义")
+            print("  [FAIL] --only 的路径片段写法失效")
+        elif plural_dir != {"fixture.plural_models_case"}:
+            failures.append(f"--only plugins 在夹具里选到了 {sorted(plural_dir)}，期望是 unit/plugins/ 下那一个")
+            print("  [FAIL] --only 的目录名写法失效")
+        else:
+            print("  [OK  ] 裸词按名字精确匹配，路径片段仍按子串匹配")
 
     if failures:
         print("\n门禁自检失败：", file=sys.stderr)

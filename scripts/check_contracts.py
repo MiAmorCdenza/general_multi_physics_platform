@@ -369,19 +369,40 @@ def parse_header(path: Path, skip_trivial: bool = True,
 def _path_matches(path_parts: tuple[str, ...], rel: str, terms: set[str]) -> bool:
     """Whether a test file is selected by any of `terms`.
 
-    Both filters use the same spelling: a term matches either a directory name
-    anywhere in the path (`views`) or a path fragment relative to the tests root
-    (`unit/views`).
+    Both filters use the same spelling: a term matches either a directory **name** anywhere in the path
+    (`views`) or a path fragment relative to the tests root (`unit/views`).
 
-    An earlier version compared `exclude` terms against both the absolute path parts
-    and the relative path while comparing `only` terms against the relative path
-    alone. So `--exclude tests/model` worked (the absolute parts contained it) and
-    `--only tests/model` silently matched nothing -- the gate then reported every id
-    as unreferenced, which looks like a catastrophic regression rather than a filter
-    that selected an empty set. Two spellings for one concept, one of which was not
-    the documented one.
+    An earlier version compared `exclude` terms against both the absolute path parts and the relative path
+    while comparing `only` terms against the relative path alone. So `--exclude tests/model` worked (the
+    absolute parts contained it) and `--only tests/model` silently matched nothing -- the gate then reported
+    every id as unreferenced, which looks like a catastrophic regression rather than a filter that selected an
+    empty set. Two spellings for one concept, one of which was not the documented one.
+
+    **A second version matched a directory name with `term in path_parts` -- a substring test on each
+    component -- and that is what this docstring's next paragraph is about.** Adding
+    `tests/unit/plugins/test_models.cpp` made `--only model` match it, because `"model"` occurs inside
+    `"models"`. The consequence was not a wrong answer from one gate: the plugin partition and the model
+    partition then claimed the same nine cases, and each reported the other's legitimate cases as orphans. Only
+    the self-test noticed, and it noticed as "two disjoint scopes intersect" -- which is exactly the class of
+    failure the `--only` flag was added to end, arriving from the other side.
+
+    So a component matches **as a whole name**: `model` selects a directory called `model` and not one called
+    `models`, while `unit/views` still selects by path fragment. A fragment is a deliberate substring and stays
+    one; a name is a name.
     """
-    return any(term in path_parts or term in rel for term in terms)
+    for term in terms:
+        if "/" in term:
+            # A term with separators is a **fragment** (`unit/views`) and is deliberately a substring of the
+            # relative path.
+            if term in rel:
+                return True
+            continue
+        # A bare term is a **name**: a directory or file called exactly that. The first version of this branch
+        # checked `term in rel` as well, and `"model" in "unit/plugins/test_models.cpp"` is true -- which is how
+        # a term for the model partition selected the models plugin's tests.
+        if term in path_parts:
+            return True
+    return False
 
 
 def collect_test_ids(tests_dir: Path, exclude: set[str] | None = None,

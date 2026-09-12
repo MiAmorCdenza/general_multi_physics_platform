@@ -36,4 +36,9 @@ if(QP_BUILD_PLUGINS)
     # functions over `runtime/store`'s types, and the `FitResult` it produces is the one `store` has always
     # declared. See its CMakeLists for why it is not a registry of algorithms.
     add_subdirectory(analysis)
+
+    # The physics models: a damped oscillator, a pendulum without the small-angle approximation, and a
+    # projectile with linear drag. They are `models/` and not more entries in `mechanics/` because what they own
+    # is a **node type and its parameters**, which is a different kind of contribution from an integrator.
+    add_subdirectory(models)
 endif()

@@ -412,6 +412,12 @@ if(QP_BUILD_PLUGINS)
     qp_add_test(qp_test_plugins_analysis
         SOURCES unit/plugins/test_analysis.cpp
         LIBS qp::plugins::analysis qp::runtime_store qp::diag)
+
+    # The physics models and their binder. It links the host because two cases are about registration and the
+    # port/parameter wiring rather than about a trajectory.
+    qp_add_test(qp_test_plugins_models
+        SOURCES unit/plugins/test_models.cpp
+        LIBS qp::plugins::models qp::host qp::graph_execution qp::graph_ir qp::ports)
 endif()
 
 # The run loop. Qt-free and graph-only: every case drives a stub operator, so it belongs to the loop's
