@@ -438,20 +438,38 @@ TEST_CASE("models.the_driven_oscillator_finds_its_resonance", "[models]") {
         REQUIRE(measured < at_resonance);
     }
 
-    // **The static limit, recorded rather than claimed.** At zero drive frequency the push is constant, so the
-    // response should be the static deflection `F / w0^2` = 0.01. The model produces **half** that, and the two
-    // facts asserted here are the measurement and that it is a bounded, reproducible number -- not the formula.
+    // **The static limit**, measured with the instrument that fits it. At zero drive frequency the push is
+    // constant, so the response is `F / w0^2` = 0.01 plus a decaying transient.
     //
-    // The likely cause is the instrument rather than the model, and it is worth writing down for whoever looks
-    // next: at `wd = 0` the response is a **constant offset**, so its peak-to-peak is the leftover transient
-    // ripple rather than the deflection, and `measure_amplitude` -- half the peak-to-peak -- is the wrong
-    // instrument for that point on the curve. A windowed **mean** would be the right one, and finding that out
-    // properly is a change to the test rather than to the model. Asserting 0.01 would assert something this round
-    // could not explain, and a test whose expected value came from a textbook the model disagrees with is a test
-    // that gets "fixed" by widening a tolerance.
-    const double static_response = measure_amplitude(0.0);
-    REQUIRE(static_response > 0.0);
-    REQUIRE(static_response < 0.02);
+    // The **windowed mean** is the right measurement, and that is a fact rather than a convenience: the response
+    // is `x_steady + transient`, the transient decays as `exp(-gamma t / 2)` and is gone by the window, and the
+    // mean of `cos(wd t)` over a whole number of periods is zero -- so the mean of the window is the steady
+    // response's own mean, which for `wd = 0` is exactly the static deflection. The previous round measured the
+    // peak-to-peak here and got half the right answer, which is what a peak-to-peak returns for a **constant**
+    // offset: the leftover ripple rather than the deflection. The model was never wrong; the instrument was.
+    const auto measure_mean = [&](double drive) {
+        auto model = make_driven_oscillator(omega0, gamma, force, drive);
+        REQUIRE(model != nullptr);
+        ex::StateView state = state_of(kDrivenComponents);
+        const double dt = 1.0e-4;
+        const auto steps = static_cast<std::size_t>(std::llround(60.0 / dt));
+        const auto from = static_cast<std::size_t>(static_cast<double>(steps) * 0.9);
+        double total = 0.0;
+        std::size_t counted = 0;
+        for (std::size_t i = 0; i < steps; ++i) {
+            REQUIRE(model->step(state, dt).has_value());
+            if (i < from) continue;
+            total += state.at(0, 0);
+            ++counted;
+        }
+        REQUIRE(counted > 0);
+        return total / static_cast<double>(counted);
+    };
+
+    const double static_response = measure_mean(0.0);
+    const double expected_static = force / (omega0 * omega0);
+    INFO("static response " << static_response << " expected " << expected_static);
+    REQUIRE(std::abs(static_response - expected_static) / expected_static < 5.0e-3);
 
     // The clock really advances, which is what makes the whole thing work: after a run, component 2 holds the
     // elapsed time. Asserted because a model that ignored `t' = 1` would still produce a plausible-looking
