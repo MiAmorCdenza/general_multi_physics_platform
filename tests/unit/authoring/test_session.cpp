@@ -322,3 +322,86 @@ TEST_CASE("authoring.session.empty_history_is_an_error", "[authoring]") {
     REQUIRE_FALSE(session.can_redo());
     REQUIRE_FALSE(session.redo().has_value());
 }
+
+// ===========================================================================
+// Opening a document: the graph is replaced, not edited
+// ===========================================================================
+
+TEST_CASE("authoring.session.replacing_the_graph_resets_the_history", "[authoring]") {
+    // The property that makes opening a document safe. An undo entry holds node ids and an inverse
+    // operation written for a graph that no longer exists, and a fresh graph **reuses** those ids -- so an
+    // entry that survived the swap would apply the previous document's edits to the new one. Nothing
+    // would fail visibly: the ids match, so it would just happen.
+    Session session;
+    RecordingListener listener;
+    (void)session.add_listener(listener);
+
+    const NodeId old_node = add_node(session, "spring");
+    REQUIRE(session.graph().node_count() == 1);
+    REQUIRE(session.can_undo());
+
+    // A second document: a different graph, with its own node in the slot the first one used.
+    Graph replacement;
+    const auto fresh = replacement.add_node("mass");
+    REQUIRE(fresh.has_value());
+    REQUIRE(fresh.value().index == old_node.index);   // the same handle index, deliberately
+
+    session.replace_graph(std::move(replacement));
+
+    REQUIRE(session.graph().node_count() == 1);
+    REQUIRE(session.graph().find_node(fresh.value()) != nullptr);
+    REQUIRE(session.graph().find_node(fresh.value())->type_name == "mass");
+
+    // The collision, asserted rather than assumed away, because it is the reason the history has to go: a
+    // fresh graph **reuses slot indices and generations**, so the handle that named the previous
+    // document's "spring" now names this document's "mass". `has_node` cannot tell the two apart -- it
+    // answers "this handle is live in this graph", which is true and useless here -- so nothing may
+    // survive a document load by handle. Views rebuild on `reset`; the undo stack is discarded.
+    REQUIRE(fresh.value() == old_node);
+    REQUIRE(session.graph().has_node(old_node));
+    REQUIRE(session.graph().find_node(old_node)->type_name == "mass");
+
+    // Nothing to undo, and undoing anyway is refused rather than applying the previous document's edit to
+    // the node that now answers to that handle.
+    REQUIRE_FALSE(session.can_undo());
+    REQUIRE_FALSE(session.can_redo());
+    REQUIRE_FALSE(session.undo().has_value());
+    REQUIRE(session.graph().find_node(fresh.value())->type_name == "mass");
+
+    // The new document is editable in the ordinary way: the bus still points at the session's graph.
+    REQUIRE(session.apply(SetParam{fresh.value(), 2, qp::ports::Value{1.5}}).has_value());
+    REQUIRE(session.can_undo());
+}
+
+TEST_CASE("authoring.session.replacing_the_graph_notifies_reset_once", "[authoring]") {
+    // Views rebuild on `reset` and patch on everything else, so the kind is not decoration: a document
+    // load reported as `node` would leave every view showing the previous document's nodes, and the
+    // window's own status line would keep counting them.
+    Session session;
+    RecordingListener listener;
+    (void)session.add_listener(listener);
+
+    (void)add_node(session, "spring");
+    (void)add_node(session, "mass");
+    const std::size_t before = listener.count();
+    const std::uint64_t sequence_before = session.sequence();
+
+    Graph replacement;
+    (void)replacement.add_node("incline");
+    session.replace_graph(std::move(replacement));
+
+    // Exactly one change, of kind `reset`, with no node attached: a graph-wide event.
+    REQUIRE(listener.count() == before + 1);
+    REQUIRE(listener.last_kind() == ChangeKind::reset);
+    REQUIRE_FALSE(listener.changes.back().node.valid());
+    // The version and the sequence move forward, because a view compares them to drop duplicates: a
+    // reload that kept the old version would look like nothing had happened.
+    REQUIRE(listener.changes.back().version == session.graph().version());
+    REQUIRE(listener.changes.back().sequence == sequence_before + 1);
+    REQUIRE(session.sequence() == sequence_before + 1);
+
+    // A listener that reads the graph during the notification sees the new document, not the old one with
+    // the announcement in flight.
+    REQUIRE(session.graph().node_count() == 1);
+    REQUIRE(listener.changes.back().version != 0);
+}

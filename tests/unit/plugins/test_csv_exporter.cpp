@@ -22,6 +22,8 @@
 #include <qp/plugins/csv/csv_exporter.hpp>
 
 #include <qp/runtime/io.hpp>
+
+#include <support/temp_dir.hpp>
 #include <qp/runtime/run/run.hpp>
 #include <qp/runtime/trace/trace.hpp>
 #include <qp/units/dimensions.hpp>
@@ -38,6 +40,7 @@
 #include <vector>
 
 using namespace qp::plugins::csv;
+using qp::test::TempDir;
 
 namespace {
 
@@ -115,32 +118,6 @@ namespace rt = qp::runtime;
     return rows;
 }
 
-/// @brief A directory under the system temp directory that removes itself.
-///
-/// The same shape the diagnostics tests use. A test that wrote into the build directory would leave
-/// files behind on failure, and one that wrote into the repository would be caught by the encoding gate.
-class TempDir final {
-public:
-    TempDir() {
-        dir_ = std::filesystem::temp_directory_path() /
-               ("qp_csv_" + std::to_string(static_cast<unsigned long long>(
-                                 std::chrono::steady_clock::now().time_since_epoch().count())));
-        std::filesystem::create_directories(dir_);
-    }
-    ~TempDir() {
-        std::error_code ignored;
-        std::filesystem::remove_all(dir_, ignored);
-    }
-    TempDir(const TempDir&) = delete;
-    TempDir& operator=(const TempDir&) = delete;
-
-    [[nodiscard]] std::string file(std::string_view name) const {
-        return (dir_ / name).string();
-    }
-
-private:
-    std::filesystem::path dir_{};
-};
 
 /// @brief The whole file as bytes.
 [[nodiscard]] std::string read_file(const std::string& path) {
@@ -360,7 +337,7 @@ TEST_CASE("csv.export.writes_a_file_a_reader_can_open", "[csv][export]") {
     const TempDir dir;
     CsvExporter exporter;
     const rt::Trace trace = sample_trace();
-    const std::string path = dir.file("trace.csv");
+    const std::string path = dir.path("trace.csv");
 
     rt::ExportRequest request;
     request.trace = &trace;
@@ -394,11 +371,11 @@ TEST_CASE("csv.export.refuses_a_destination_it_cannot_write", "[csv][export]") {
 
     rt::ExportRequest request;
     request.trace = &trace;
-    request.path = dir.file("no_such_directory") + "/trace.csv";
+    request.path = dir.path("no_such_directory") + "/trace.csv";
     REQUIRE(exporter.write(request) == rt::ExportRefusal::could_not_write);
 
     // A path that names an existing directory rather than a file.
-    request.path = dir.file(".");
+    request.path = dir.path(".");
     REQUIRE(exporter.write(request) == rt::ExportRefusal::could_not_write);
 
     // An empty path: no file is named, so nothing is written rather than something surprising.
@@ -407,7 +384,7 @@ TEST_CASE("csv.export.refuses_a_destination_it_cannot_write", "[csv][export]") {
 
     // A refusal before the filesystem is touched: a null trace never reaches a path.
     request.trace = nullptr;
-    request.path = dir.file("never.csv");
+    request.path = dir.path("never.csv");
     REQUIRE(exporter.write(request) == rt::ExportRefusal::nothing_to_write);
     REQUIRE_FALSE(std::filesystem::exists(request.path));
 }

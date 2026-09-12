@@ -39,8 +39,17 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <QApplication>
+#include <QAction>
+#include <QMenu>
+#include <QMenuBar>
 
 #include <qp/graph/mutate/command.hpp>
+#if defined(QP_HAS_QPJSON_FORMAT)
+#include <qp/plugins/csv/csv_exporter.hpp>
+#include <qp/plugins/qpjson/qpjson_format.hpp>
+#include <qp/views/model/export_controller.hpp>
+#endif
+#include <qp/views/model/document_controller.hpp>
 #include <qp/views/model/measurement_model.hpp>
 #include <qp/views/model/type_catalog.hpp>
 
@@ -53,7 +62,9 @@
 #include "node_graph_view.hpp"
 #include "property_panel.hpp"
 
+#include <filesystem>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace {
@@ -216,6 +227,92 @@ TEST_CASE("qt.views.editor_window.shares_one_session", "[views][qt]") {
     // catalog does not know would draw as a bare rectangle and refuse every edit.
     REQUIRE_FALSE(window.add_node("no.such.type").valid());
     REQUIRE(window.session().graph().node_count() == 4);
+}
+
+TEST_CASE("qt.views.editor_window.file_menu_follows_the_document", "[views][qt]") {
+    // What a window can be held to, given that a file dialog is modal and cannot be driven from a test: the
+    // **wiring**, and the two pieces of state a user reads without opening a menu -- the caption and the
+    // modified marker.
+    //
+    // The behaviour behind the menu (what a save writes, what a failed open leaves alone) lives in
+    // `views::model::DocumentController` and is asserted without Qt in `tests/model/`. That split is
+    // deliberate: a test that clicked through a dialog would be testing the dialog. The handlers
+    // themselves are one line each -- ask for a path, then call the method below -- so what is left to
+    // assert here is that the menu exists, that a format being mounted enables it, and that the caption
+    // follows the document.
+#if defined(QP_HAS_QPJSON_FORMAT)
+    qp::plugins::qpjson::QpJsonFormat format;
+    qp::views::model::mount_document_format(&format);
+    // The export format too, because the Export action is greyed out when nothing is registered -- and a
+    // greyed-out entry is the correct behaviour, not something to assert as enabled.
+    qp::plugins::csv::CsvExporter exporter;
+    REQUIRE(qp::views::model::mount_export_format(&exporter).has_value());
+#else
+    // Without a format plugin there is nothing to save with, and the case would assert a menu that is
+    // correctly greyed out. Skipped explicitly rather than compiled into a lie.
+    SKIP("this build has no document format plugin");
+#endif
+
+    qp::views::EditorWindow window;
+    window.seed_demo_graph();
+
+    QMenu* file_menu = nullptr;
+    for (QAction* action : window.menuBar()->actions()) {
+        if (action->menu() != nullptr && action->text().contains(QStringLiteral("File"))) {
+            file_menu = action->menu();
+        }
+    }
+    REQUIRE(file_menu != nullptr);
+
+    QStringList texts;
+    for (QAction* action : file_menu->actions()) {
+        if (action->isSeparator()) continue;
+        texts << action->text();
+    }
+    const QString joined = texts.join(QStringLiteral("|"));
+    REQUIRE(joined.contains(QStringLiteral("New")));
+    REQUIRE(joined.contains(QStringLiteral("Open")));
+    REQUIRE(joined.contains(QStringLiteral("Save")));
+    REQUIRE(joined.contains(QStringLiteral("Export")));
+    // A format is mounted in this process, so none of them is greyed out.
+    for (QAction* action : file_menu->actions()) {
+        if (action->isSeparator()) continue;
+        REQUIRE(action->isEnabled());
+    }
+
+    // The modified marker follows the session: the demo graph was just built, so the document is dirty and
+    // the caption carries Qt's placeholder.
+    REQUIRE(window.isWindowModified());
+    REQUIRE(window.windowTitle().contains(QStringLiteral("- qp")));
+
+    // Saving through the same method the Save action calls clears it, and the caption follows -- asserted
+    // through the window rather than through the controller, because the wiring between them is the part
+    // this file can check.
+    const std::string path = (std::filesystem::temp_directory_path() / "qp_caption_test.qpd").string();
+    REQUIRE(window.save_document(path));
+    REQUIRE_FALSE(window.isWindowModified());
+    REQUIRE(window.windowTitle().contains(QStringLiteral("qp_caption_test.qpd")));
+
+    // Opening it back is the same path the Open action runs after the dialog, and the caption follows the
+    // document's own title rather than the file name.
+    REQUIRE(window.open_document(path));
+    REQUIRE_FALSE(window.isWindowModified());
+
+    // A file whose extension belongs to no mounted format is refused by name rather than handed to the
+    // wrong reader.
+    REQUIRE_FALSE(window.open_document(path + ".unknown"));
+
+    // The export action takes the other path out of the window: the measurement session's trace, written
+    // through the registered format. Asserted through the window rather than the controller, because the
+    // wiring -- which session, which format, and the pre-flight before either -- is what this case covers.
+    window.seed_demo_measurement();
+    const std::string csv = (std::filesystem::temp_directory_path() / "qp_caption_test.csv").string();
+    REQUIRE(window.export_document(csv));
+    REQUIRE(std::filesystem::exists(csv));
+
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+    std::filesystem::remove(csv, ignored);
 }
 
 TEST_CASE("qt.views.shell.links_core_state", "[views][qt]") {

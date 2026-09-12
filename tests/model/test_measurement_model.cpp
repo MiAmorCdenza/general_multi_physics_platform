@@ -57,15 +57,25 @@ private:
 
 
 
-/// @brief An exporter that declares it keeps uncertainty and writes nothing.
+/// @brief An exporter that **declares** the capabilities it was constructed with, and writes nothing.
 ///
-/// Defined here rather than reused from the io tests because this file needs the *declared*
-/// capabilities only -- the question under test is whether the model asks the exporter
-/// rather than guessing.
+/// Defined here rather than reused from the io tests because this file needs the *declared* capabilities
+/// only -- the question under test is whether the model asks the exporter rather than guessing.
+///
+/// The declaration is built in the constructor, and that is a correction: the first version stored the two
+/// arguments in members and never copied them into the description, so `keeps` and `drops` were the same
+/// format and the case below passed by comparing one answer with itself. A fixture whose parameters are
+/// ignored cannot distinguish the two branches it exists to distinguish.
 class DeclaringExporter final : public rt::IExporter {
 public:
-    DeclaringExporter(bool keeps_uncertainty, bool multi_dataset)
-        : keeps_uncertainty_(keeps_uncertainty), multi_dataset_(multi_dataset) {}
+    DeclaringExporter(bool keeps_uncertainty, bool multi_dataset) {
+        desc_.name = keeps_uncertainty ? "test.keeps" : "test.drops";
+        desc_.label = desc_.name;
+        desc_.extensions = {keeps_uncertainty ? "keeps" : "drops"};
+        desc_.capabilities.keeps_uncertainty = keeps_uncertainty;
+        desc_.capabilities.multi_dataset = multi_dataset;
+        desc_.capabilities.is_text = true;
+    }
 
     [[nodiscard]] const rt::FormatDesc& format() const noexcept override { return desc_; }
     [[nodiscard]] rt::ExportRefusal write(const rt::ExportRequest&) noexcept override {
@@ -75,8 +85,6 @@ public:
 
 private:
     rt::FormatDesc desc_{};
-    bool keeps_uncertainty_ = false;
-    bool multi_dataset_ = false;
 };
 
 }  // namespace
@@ -323,6 +331,43 @@ TEST_CASE("measurement.model.reset_trace_starts_a_new_recording", "[measurement]
     REQUIRE(m.trace().size() == 1);
 }
 
+TEST_CASE("measurement.model.export_request_carries_the_policy", "[measurement][model]") {
+    // The request is the **question**, and two callers ask it: the panel's readiness check and a real
+    // export. If they built their own, one could require the uncertainty and the other need not, and the
+    // user's experience would be an export button that offers what the exporter then refuses -- which is
+    // exactly what `export_readiness` delegating to `check_export` was for, one step earlier.
+    Session session;
+    MeasurementModel& m = session.model();
+    REQUIRE(m.add_channel("x", qp::units::dims::length).has_value());
+    REQUIRE(m.add_sample(0.0, std::vector<double>{1.0}, 0.05).has_value());
+
+    const DeclaringExporter keeps{true, false};
+    const DeclaringExporter drops{false, false};
+
+    // Nothing quantified yet: the uncertainty is **not** required, so a bare-numbers format is allowed.
+    // Requiring it here would refuse every format for a session that never measured an error, which is a
+    // rule nobody could act on.
+    const rt::ExportRequest plain = m.export_request("out.csv");
+    REQUIRE(plain.trace == &m.trace());
+    REQUIRE(plain.path == "out.csv");
+    REQUIRE_FALSE(plain.require_uncertainty);
+    REQUIRE(m.export_readiness(drops) == rt::ExportRefusal::ok);
+
+    // One quantified reading changes the policy: from here on the export insists, and a format that cannot
+    // keep it is refused before anything is written.
+    m.add_reading(1.0, rt::UncertaintyKind::standard, 0.05);
+    const rt::ExportRequest evidence = m.export_request("out.csv");
+    REQUIRE(evidence.require_uncertainty);
+    REQUIRE(m.export_readiness(drops) == rt::ExportRefusal::uncertainty_not_supported);
+    REQUIRE(m.export_readiness(keeps) == rt::ExportRefusal::ok);
+
+    // And the two answers are the same answer, because they are the same request: asserted against
+    // `check_export` directly rather than against a literal, so a future change that built a second request
+    // somewhere would fail here rather than in a user's file.
+    REQUIRE(m.export_readiness(drops) == rt::check_export(drops, m.export_request("anything.csv")));
+    REQUIRE(m.export_readiness(keeps) == rt::check_export(keeps, m.export_request("anything.csv")));
+}
+
 TEST_CASE("measurement.model.export_refusal_matches_the_exporter", "[measurement][model]") {
     // The panel must not form a second opinion about what a format can carry. If it did,
     // an export could pass the panel's check and fail the exporter's, and the user's
@@ -346,4 +391,10 @@ TEST_CASE("measurement.model.export_refusal_matches_the_exporter", "[measurement
 
     REQUIRE(m.export_readiness(keeps) == rt::check_export(keeps, request));
     REQUIRE(m.export_readiness(drops) == rt::check_export(drops, request));
+
+    // And the two formats really are two answers, so the comparison above is not one answer compared with
+    // itself: a format that cannot keep the uncertainty is refused when the request requires it, and the
+    // one that can is not.
+    REQUIRE(m.export_readiness(keeps) == rt::ExportRefusal::ok);
+    REQUIRE(m.export_readiness(drops) == rt::ExportRefusal::uncertainty_not_supported);
 }

@@ -621,6 +621,47 @@ TEST_CASE("graph.mutate.failed_undo_keeps_history", "[graph][mutate]") {
     REQUIRE_FALSE(r.value());
 }
 
+// ===========================================================================
+// Replacing the graph underneath the bus
+// ===========================================================================
+
+TEST_CASE("graph.mutate.forgetting_history_leaves_the_graph", "[graph][mutate]") {
+    // The bus owns the graph *and* the history, so it is also the object that has to be told when the
+    // graph is swapped. What is asserted here is the narrow half -- the history empties and the graph is
+    // untouched -- because the reason the two must move together is the session's business and is asserted
+    // there (`authoring.session.replacing_the_graph_resets_the_history`).
+    Fixture f;
+    const NodeId first = f.add("spring", "n1");
+    f.connect_nodes(first, 1, f.add("mass", "n2"), 1);
+
+    const std::size_t nodes = f.graph.node_count();
+    const std::size_t edges = f.graph.edge_count();
+    const auto version = f.graph.version();
+    REQUIRE(f.bus.can_undo());
+    REQUIRE(f.bus.history().undo_size() > 0);
+
+    f.bus.forget_history();
+
+    REQUIRE_FALSE(f.bus.can_undo());
+    REQUIRE_FALSE(f.bus.can_redo());
+    REQUIRE(f.bus.history().undo_size() == 0);
+    REQUIRE(f.bus.history().redo_size() == 0);
+
+    // Untouched: no node, edge or version moved, so a caller can forget the history without the graph
+    // appearing to have changed.
+    REQUIRE(f.graph.node_count() == nodes);
+    REQUIRE(f.graph.edge_count() == edges);
+    REQUIRE(f.graph.version() == version);
+    REQUIRE(f.graph.find_node(first) != nullptr);
+
+    // And the bus is still usable: the next edit is recorded against the graph as it stands now.
+    (void)f.add("incline", "n3");
+    REQUIRE(f.bus.can_undo());
+    REQUIRE(f.bus.history().undo_size() > 0);
+    REQUIRE(f.bus.undo());
+    REQUIRE(f.graph.node_count() == nodes);
+}
+
 TEST_CASE("graph.mutate.long_session_stress", "[graph][mutate]") {
     // A long session: apply and undo in turn, and finally undo everything away.
     // The value of this case is that "stack and graph always correspond" survives many round trips.

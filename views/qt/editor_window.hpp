@@ -30,6 +30,7 @@
  * @errors      noexcept
  * @frozen      no
  * @tests       qt.views.editor_window.shares_one_session,
+ *              qt.views.editor_window.file_menu_follows_the_document,
  *              qt.views.measurement.one_ledger_per_session,
  *              qt.views.measurement.fresh_window_is_empty
  */
@@ -43,6 +44,7 @@
 #include <qp/authoring/portui/port_ui.hpp>
 #include <qp/runtime/run/run.hpp>
 #include <qp/views/model/confidence_model.hpp>
+#include <qp/views/model/document_controller.hpp>
 #include <qp/views/model/run_controller.hpp>
 #include <qp/views/model/measurement_model.hpp>
 #include <qp/views/model/type_catalog.hpp>
@@ -50,6 +52,7 @@
 
 #include <memory>
 
+class QAction;
 class QLabel;
 
 namespace qp::views {
@@ -148,6 +151,41 @@ public:
     /// and hide the rule.
     void seed_demo_measurement();
 
+    /// @brief Starts a new, empty document.
+    void file_new();
+    /// @brief Saves to the document's own path, or asks for one when it has none.
+    void file_save();
+    /// @brief Asks for a path and a format, then saves.
+    void file_save_as();
+    /// @brief Asks for a file and opens it.
+    void file_open();
+    /// @brief Exports the measurement session's trace, asking the format first.
+    ///
+    /// The pre-flight runs **before** the dialog: a format that cannot keep this session's uncertainties
+    /// is refused in the status line rather than after the user has chosen a file name.
+    void file_export();
+
+    /// @brief The document controller: what a save writes and what an open installs.
+    [[nodiscard]] qp::views::model::DocumentController& document_controller() noexcept {
+        return document_controller_;
+    }
+
+    /// @brief Starts a new document without asking anything. The menu's New action calls this.
+    void new_document();
+
+    /// @brief Saves to `path` without asking anything. Returns whether it worked.
+    ///
+    /// Separate from the menu handler on purpose, and the separation is what makes the wiring testable: a
+    /// modal file dialog cannot be driven from a test, but everything after it can. The handler's only job
+    /// is to ask for a path and hand it here.
+    bool save_document(const std::string& path);
+
+    /// @brief Opens `path` without asking anything, choosing the format by the file's extension.
+    bool open_document(const std::string& path);
+
+    /// @brief Exports the trace to `path` without asking anything, after the pre-flight.
+    bool export_document(const std::string& path);
+
 private:
     class StatusBridge;
 
@@ -159,9 +197,19 @@ private:
     void on_node_selected(qp::graph::NodeId node);
     /// @brief Reports a refused mutation in the status line.
     void on_mutation_failed(const QString& reason);
+    /// @brief Reports a document operation's outcome, and updates the caption.
+    void report_document(const qp::views::model::DocumentReport& report);
+    /// @brief Sets the caption from the document's title and path, and the modified marker.
+    void refresh_caption();
+    /// @brief Builds the File menu's actions and shortcuts.
+    void build_file_menu();
 
     qp::authoring::Session session_{};
-    qp::authoring::Document document_{};
+    // The document and the file menu's behaviour. It owns the `Document` -- the canvas borrows it from
+    // here -- and registers itself as a session listener, because the dirty flag has to follow every edit
+    // rather than the ones this window happens to start.
+    qp::views::model::DocumentController document_controller_{
+        session_, qp::views::model::document_formats()};
     TypeCatalog catalog_{};
     qp::authoring::PortUiRegistry port_ui_{};
     qp::authoring::Registry capabilities_{};
@@ -188,6 +236,13 @@ private:
     // which would make the plugin split a claim rather than a property.
     std::unique_ptr<qp::views::model::RunController> run_controller_{};
     QAction* run_action_ = nullptr;
+
+    // The File menu's actions, kept so a test can invoke the same path the menu does.
+    QAction* new_action_ = nullptr;
+    QAction* open_action_ = nullptr;
+    QAction* save_action_ = nullptr;
+    QAction* save_as_action_ = nullptr;
+    QAction* export_action_ = nullptr;
 
     /// @brief Whether the run's clamp count has been pushed into the confidence model yet.
     ///

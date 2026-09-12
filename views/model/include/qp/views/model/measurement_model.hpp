@@ -434,6 +434,34 @@ public:
     [[nodiscard]] qp::runtime::ExportRefusal export_readiness(
         const qp::runtime::IExporter& format) const;
 
+    /**
+     * @brief The request an export of this session would run, ready for `check_export` or an exporter.
+     *
+     * The **policy** an export carries lives here, in one place, and the reason is the same one that made
+     * `export_readiness` delegate: a caller that assembled its own request could require something the
+     * panel did not, and the two answers would differ for the same session. The policy is:
+     *
+     *   - the trace is this session's, borrowed for the duration of the call and not retained;
+     *   - the uncertainty is **required exactly when the session has quantified any**. A user who entered
+     *     an uncertainty and then exported to a format that drops it would lose the distinction the panel
+     *     exists to show; a user who quantified nothing has nothing to lose, and refusing every format for
+     *     them would be a rule nobody could act on.
+     *
+     * @param path Where the export would go. Not read by this function; carried so the request is complete.
+     *
+     * @ownership   observes `path` for the call; the returned request borrows this model's trace
+     * @thread      ui
+     * @pre         none
+     * @post        `trace` is this session's trace and `require_uncertainty` is the policy above
+     * @invariant   `export_readiness(format)` equals `check_export(format, export_request(path))`
+     * @errors      May allocate (the path is copied); allocation failure terminates
+     * @complexity  O(path)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.export_request_carries_the_policy
+     */
+    [[nodiscard]] qp::runtime::ExportRequest export_request(std::string path) const;
+
 private:
     qp::runtime::RunLedger& ledger_;
     qp::runtime::Dataset dataset_;

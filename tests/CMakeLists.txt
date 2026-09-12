@@ -563,6 +563,9 @@ qp_add_test(qp_test_runtime_trace
 qp_add_test(qp_test_runtime_io
     SOURCES unit/runtime/test_io.cpp
     LIBS qp::runtime_io)
+qp_add_test(qp_test_runtime_file
+    SOURCES unit/runtime/test_file.cpp
+    LIBS qp::runtime_file)
 
 # The Qt-FREE half of the view layer. It is listed here, in the ordinary suite,
 # precisely because it does not need Qt: that is what lets the properties panel's
@@ -603,6 +606,22 @@ if(TARGET qp::views_model AND TARGET qp::plugins::mechanics)
         SOURCES model/test_run_controller.cpp
         LIBS qp::views_model qp::plugins::mechanics qp::graph_execution qp::authoring_commands
              qp::graph_mutate)
+
+    # The file menu's behaviour: new, save, open. It saves and reopens through the real
+    # JSON format, so this is the case that proves a document survives the trip -- and the
+    # one that proves a *failed* open leaves the session alone.
+    qp_add_test(qp_test_document_controller
+        SOURCES model/test_document_controller.cpp
+        LIBS qp::views_model qp::plugins::qpjson qp::authoring_persist qp::authoring_commands
+             qp::runtime_file)
+
+    # Exporting the panel's trace. The export path is where the platform's central rule -- an uncertainty
+    # that was measured must survive to the report -- is easiest to lose silently, so the two cases that
+    # matter are a format that keeps it and a format that cannot.
+    qp_add_test(qp_test_export_controller
+        SOURCES model/test_export_controller.cpp
+        LIBS qp::views_model qp::plugins::csv qp::runtime_io qp::runtime_file qp::runtime_store
+             qp::runtime_trace)
 endif()
 
 # The Qt half of the view layer is tested only when Qt is in the build. Guarded
@@ -630,6 +649,15 @@ if(QP_BUILD_VIEWS)
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/views/qt)
     target_link_libraries(qp_test_views_qt PRIVATE qp::views Catch2::Catch2)
+
+    # The Qt-side cases cover the window's **wiring**, and the file menu's wiring ends in a format: the case
+    # that saves and reopens a document needs the real one, because a stub would only prove that the window
+    # can call a stub. Guarded on the target rather than on a variable, like the model test: with plugins off
+    # there is nothing to link and the case is not compiled, which is the honest outcome.
+    if(TARGET qp::plugins::qpjson)
+        target_link_libraries(qp_test_views_qt PRIVATE qp::plugins::qpjson qp::plugins::csv)
+        target_compile_definitions(qp_test_views_qt PRIVATE QP_HAS_QPJSON_FORMAT)
+    endif()
 
     add_test(NAME qp_test_views_qt.all COMMAND qp_test_views_qt)
     set_tests_properties(qp_test_views_qt.all PROPERTIES LABELS "views;qt;aggregate")

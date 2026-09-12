@@ -261,6 +261,33 @@ public:
     [[nodiscard]] bool can_redo() const noexcept { return undo_.can_redo(); }
     [[nodiscard]] const UndoStack& history() const noexcept { return undo_; }
 
+    /**
+     * @brief Discards the whole undo history, leaving the graph alone.
+     *
+     * For the one caller that replaces the graph wholesale -- opening a document. An undo entry holds
+     * node ids and an inverse operation for a graph that **no longer exists**, and the ids are exactly
+     * the kind that a fresh graph reuses: running such an entry would apply the previous document's edits
+     * to the current one. That is not undo, it is corruption with a plausible name, and the ids make it
+     * silent.
+     *
+     * The symmetry is deliberate: the bus owns the graph *and* the history, so it is also the object
+     * that must be told when the graph underneath it is swapped. A caller that could replace the graph
+     * without this would have to reach into the stack itself, and the invariant "the undo stack matches
+     * the graph state" would become a verbal agreement.
+     *
+     * @ownership   pure (touches the history only)
+     * @thread      main
+     * @pre         none
+     * @post        `can_undo()` and `can_redo()` are both false, and `history().undo_size() == 0`
+     * @invariant   The graph and its version are untouched
+     * @errors      noexcept
+     * @complexity  O(entries)
+     * @nondet      none
+     * @frozen      no
+     * @tests       graph.mutate.forgetting_history_leaves_the_graph
+     */
+    void forget_history() noexcept { undo_.clear(); }
+
     /// @brief Read-only access to the owned graph. **Mutation must go through apply().**
     ///
     /// A non-const accessor is deliberately not provided: it would reduce the "all mutation

@@ -23,5 +23,5 @@ target_include_directories(qp_plugins_csv
 target_compile_features(qp_plugins_csv PUBLIC cxx_std_20)
 
 target_link_libraries(qp_plugins_csv
-    PUBLIC qp::runtime_io qp::runtime_trace qp::runtime_store qp::units
+    PUBLIC qp::runtime_io qp::runtime_file qp::runtime_trace qp::runtime_store qp::units
     PRIVATE qp_warnings qp_sanitize)

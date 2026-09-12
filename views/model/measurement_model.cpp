@@ -154,16 +154,24 @@ std::vector<std::string> MeasurementModel::gaps() const {
     return out;
 }
 
+store::ExportRequest MeasurementModel::export_request(std::string path) const {
+    store::ExportRequest request;
+    request.trace = &trace_;
+    request.path = std::move(path);
+    // The policy, in one place. See the contract: requiring the uncertainty exactly when the session has
+    // quantified any is what makes "this format cannot keep your error bars" answerable without refusing
+    // every format for a session that never measured an error.
+    request.require_uncertainty = dataset_.quantified_count() > 0;
+    return request;
+}
+
 store::ExportRefusal MeasurementModel::export_readiness(const store::IExporter& format) const {
     // Delegated, not re-derived. If the panel computed this itself then a format could pass
     // the panel's check and fail the exporter's, and the user's experience would be an
     // export button that raises an error dialog -- the exact outcome the io module's
-    // pre-flight check exists to prevent.
-    store::ExportRequest request;
-    request.trace = &trace_;
-    request.path = "unused";
-    request.require_uncertainty = dataset_.quantified_count() > 0;
-    return store::check_export(format, request);
+    // pre-flight check exists to prevent. The request comes from `export_request`, so this
+    // answer and the one a real export receives are the same question asked once, not two.
+    return store::check_export(format, export_request("unused"));
 }
 
 }  // namespace qp::views::model

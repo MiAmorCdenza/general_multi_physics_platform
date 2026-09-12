@@ -95,6 +95,11 @@ ALLOWED: dict[str, set[str]] = {
     # table listed store and abi, which covers writing a single frozen dataset
     # but not the run that produced it.
     "io": {"units", "diag", "abi", "store", "trace"},
+    # file sits below the format contracts rather than inside one of them: a trace
+    # exporter and the document persistence contract both move bytes to and from a
+    # path, and either hosting the helper would make the other depend on a module
+    # whose subject is something else. Its dependencies are the standard library.
+    "file": {"units", "diag"},
     # L3 view services
     "document": {"units", "diag", "ir", "abi"},
     # capability needs plugin, not ports: it negotiates what a plugin may

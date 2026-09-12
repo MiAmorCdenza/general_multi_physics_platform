@@ -288,6 +288,44 @@ public:
     [[nodiscard]] std::uint64_t sequence() const noexcept { return sequence_; }
 
     /**
+     * @brief Installs a different graph: a document was opened, or a new one started.
+     *
+     * The only mutation that does not go through `apply()`, and `ChangeKind` is where that was decided
+     * long before this function existed: `reset` means "the structure changed wholesale -- views should
+     * rebuild rather than patch". Opening a document is exactly that. Replaying a loaded document as
+     * commands instead would produce one undo entry per node, one notification per node, and an
+     * intermediate graph after each one -- a half-imported document that every listener would read, and
+     * would be right to act on.
+     *
+     * The undo history is **discarded**, not extended: undoing across a document boundary would apply
+     * the previous document's edits to the current graph, using ids the new graph reuses. "Undo the
+     * open" is not an edit anybody wants, and a menu item offering it would be worse than one greyed out.
+     *
+     * Nothing is validated about the incoming graph: a document that a format loaded is a document, and
+     * a caller that wants it checked asks `graph/validate` before calling. Refusing an *unstable* graph
+     * here would be wrong in particular -- a saved mid-edit document legitimately holds a pending node,
+     * and refusing it would make such a document unopenable.
+     *
+     * @param graph The graph to install, **moved from**: a loaded document owns one already, and copying
+     *              it would give two graphs whose handles both claim to be valid.
+     *
+     * @ownership   owns (takes the graph)
+     * @thread      main
+     * @pre         none
+     * @post        `graph()` is the graph that was passed, and `can_undo()`/`can_redo()` are false
+     * @post        Every listener received exactly one change, of kind `reset`
+     * @invariant   Handles into the previous graph are invalid afterwards; `has_node` says so, which is
+     *              why `reset` tells views to rebuild rather than patch
+     * @errors      noexcept (the move does not throw, and notification calls `noexcept` handlers)
+     * @complexity  O(nodes + edges) for the move
+     * @nondet      none
+     * @frozen      no
+     * @tests       authoring.session.replacing_the_graph_resets_the_history,
+     *              authoring.session.replacing_the_graph_notifies_reset_once
+     */
+    void replace_graph(graph::Graph&& graph) noexcept;
+
+    /**
      * @brief Registers a listener. Returns an invalid id when the list is full.
      *
      * @ownership   observes

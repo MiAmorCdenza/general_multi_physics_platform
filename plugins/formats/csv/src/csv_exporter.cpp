@@ -10,13 +10,12 @@
  */
 #include <qp/plugins/csv/csv_exporter.hpp>
 
+#include <qp/runtime/file/file.hpp>
 #include <qp/units/unit_symbol.hpp>
 
 #include <charconv>
 #include <cmath>
 #include <cstddef>
-#include <filesystem>
-#include <fstream>
 #include <string>
 #include <system_error>
 
@@ -149,22 +148,6 @@ void render(const rt::Trace& trace, std::string& out) {
     return false;
 }
 
-/// @brief The destination as a filesystem path.
-///
-/// The conversion is explicit because a path handed to this exporter is UTF-8 -- it comes from a file
-/// dialog in a program that speaks UTF-8, and a student's directory is likely to have a name that is not
-/// ASCII. Constructing the path from the UTF-8 bytes is what makes the stream open the file the user
-/// chose; passing the bytes through as a narrow string would let the C runtime read them in the process
-/// code page and open something else, or nothing.
-[[nodiscard]] std::filesystem::path to_path(const std::string& utf8) {
-#if defined(__cpp_char8_t)
-    const auto* begin = reinterpret_cast<const char8_t*>(utf8.data());
-    return std::filesystem::path{std::u8string{begin, begin + utf8.size()}};
-#else
-    return std::filesystem::path{utf8};
-#endif
-}
-
 }  // namespace
 
 const rt::FormatDesc& CsvExporter::format() const noexcept {
@@ -221,14 +204,13 @@ rt::ExportRefusal CsvExporter::write(const rt::ExportRequest& request) noexcept 
     const rt::ExportRefusal rendered = to_text(*request.trace, text);
     if (rendered != rt::ExportRefusal::ok) return rendered;
 
-    std::ofstream file{to_path(request.path), std::ios::binary | std::ios::trunc};
-    if (!file) return rt::ExportRefusal::could_not_write;
-    file.write(text.data(), static_cast<std::streamsize>(text.size()));
-    file.flush();
-    // Checked after the flush: a disk that filled up mid-write reports the failure here, and an exporter
-    // that returned success would leave the user with a truncated table they believe is complete.
-    if (!file) return rt::ExportRefusal::could_not_write;
-    return rt::ExportRefusal::ok;
+    // The bytes reach the disk through `runtime/file`, which is the one place that knows how a UTF-8 path
+    // crosses into the platform's own open call -- the conversion a trace exporter has no business
+    // reimplementing, and the reason that module exists. The outcome is translated rather than returned:
+    // `ExportRefusal` is this interface's vocabulary, and a caller reading a refusal should not have to
+    // know about a second enum to understand a failed export.
+    const rt::FileOutcome written = rt::write_whole_file(request.path, text);
+    return written == rt::FileOutcome::ok ? rt::ExportRefusal::ok : rt::ExportRefusal::could_not_write;
 }
 
 }  // namespace qp::plugins::csv

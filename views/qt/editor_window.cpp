@@ -6,9 +6,13 @@
 
 #include "node_graph_view.hpp"
 #include <QAction>
+#include <QFileDialog>
+#include <QMenu>
+#include <QMenuBar>
 #include <QToolBar>
 
 #include <qp/views/model/execution_binders.hpp>
+#include <qp/views/model/export_controller.hpp>
 
 #include "confidence_panel.hpp"
 #include "measurement_panel.hpp"
@@ -28,6 +32,7 @@
 #include <QTimer>
 #include <QWidget>
 
+#include <algorithm>
 #include <string>
 
 namespace qp::views {
@@ -66,7 +71,6 @@ private:
 
 EditorWindow::EditorWindow(QWidget* parent) : QMainWindow(parent) {
     setWindowTitle(QStringLiteral("qp -- experiment editor"));
-
     // The built-in demonstrators, so the palette and the panel have something to
     // resolve. A real build loads these from plugins; the shell registers them
     // directly, which is the only thing the shell is allowed to shortcut.
@@ -76,7 +80,7 @@ EditorWindow::EditorWindow(QWidget* parent) : QMainWindow(parent) {
         // status line will name the missing types once it is built.
     }
 
-    canvas_ = new NodeGraphView(session_, catalog_, document_, this);
+    canvas_ = new NodeGraphView(session_, catalog_, document_controller_.document(), this);
     properties_ = new PropertyPanel(session_, catalog_, port_ui_, this);
     // Without a minimum the splitter collapses this panel to nothing when the
     // other two want more room -- and the first screenshot of this window showed
@@ -171,6 +175,8 @@ EditorWindow::EditorWindow(QWidget* parent) : QMainWindow(parent) {
     run_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
     connect(run_action_, &QAction::triggered, this, &EditorWindow::run_once);
 
+    build_file_menu();
+
     status_ = new QLabel(this);
     statusBar()->addWidget(status_);
 
@@ -190,6 +196,246 @@ EditorWindow::EditorWindow(QWidget* parent) : QMainWindow(parent) {
 
     refresh_status();
     resize(1280, 720);
+}
+
+void EditorWindow::build_file_menu() {
+    // A File menu rather than more toolbar buttons: the window's toolbar is about the *experiment* (run
+    // it, watch it), and saving is about the document. Mixing the two is how a toolbar becomes a list.
+    QMenu* file = menuBar()->addMenu(tr("&File"));
+
+    new_action_ = file->addAction(tr("&New"));
+    new_action_->setShortcut(QKeySequence::New);
+    connect(new_action_, &QAction::triggered, this, &EditorWindow::file_new);
+
+    open_action_ = file->addAction(tr("&Open..."));
+    open_action_->setShortcut(QKeySequence::Open);
+    connect(open_action_, &QAction::triggered, this, &EditorWindow::file_open);
+
+    save_action_ = file->addAction(tr("&Save"));
+    save_action_->setShortcut(QKeySequence::Save);
+    connect(save_action_, &QAction::triggered, this, &EditorWindow::file_save);
+
+    save_as_action_ = file->addAction(tr("Save &As..."));
+    save_as_action_->setShortcut(QKeySequence::SaveAs);
+    connect(save_as_action_, &QAction::triggered, this, &EditorWindow::file_save_as);
+
+    file->addSeparator();
+    export_action_ = file->addAction(tr("&Export trace..."));
+    export_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+E")));
+    export_action_->setToolTip(tr("Write the measurement session's trace as a table"));
+    connect(export_action_, &QAction::triggered, this, &EditorWindow::file_export);
+
+    // Greyed out rather than hidden when nothing is mounted: a menu entry that disappears teaches the
+    // user nothing, and one that is present but unavailable says "this build has no format for that".
+    const bool has_format = document_controller_.default_format() != nullptr;
+    save_action_->setEnabled(has_format);
+    save_as_action_->setEnabled(has_format);
+    export_action_->setEnabled(!qp::views::model::export_formats().all().empty());
+}
+
+void EditorWindow::report_document(const qp::views::model::DocumentReport& report) {
+    status_->setText(QString::fromStdString(report.message));
+    refresh_caption();
+}
+
+void EditorWindow::refresh_caption() {
+    const qp::authoring::Document& document = document_controller_.document();
+
+    // The title is what the user called it; the path is where it lives; the marker is Qt's `[*]`, which
+    // `setWindowModified` fills in. Both halves matter: a document with a title but no path has never been
+    // saved, and one with a path but no title is a file the user opened.
+    std::string shown = document.title();
+    if (shown.empty()) {
+        shown = document.is_untitled() ? "untitled" : document.source_path();
+    }
+    QString caption = QString::fromStdString(shown) + QStringLiteral("[*] -- qp");
+    setWindowTitle(caption);
+    setWindowModified(document_controller_.is_dirty());
+}
+
+void EditorWindow::file_new() {
+    new_document();
+}
+
+void EditorWindow::new_document() {
+    report_document(document_controller_.new_document());
+    next_node_index_ = 1;
+    refresh_status();
+}
+
+bool EditorWindow::save_document(const std::string& path) {
+    qp::authoring::IDocumentFormat* format = document_controller_.default_format();
+    if (format == nullptr) {
+        status_->setText(tr("no document format is available in this build"));
+        return false;
+    }
+    const qp::views::model::DocumentReport report = document_controller_.save(*format, path);
+    report_document(report);
+    return report.ok;
+}
+
+bool EditorWindow::open_document(const std::string& path) {
+    // The format is chosen by the file's own extension rather than by a dialog's filter: a user who typed a
+    // name the dialog did not suggest still gets the format that name belongs to, and a file whose extension
+    // belongs to no mounted format is refused by name instead of being handed to the wrong reader.
+    const std::size_t dot = path.find_last_of('.');
+    const std::string extension = dot == std::string::npos ? std::string{} : path.substr(dot + 1);
+
+    qp::authoring::IDocumentFormat* selected = nullptr;
+    for (qp::authoring::IDocumentFormat* candidate : document_controller_.formats()) {
+        if (candidate == nullptr) continue;
+        const std::vector<std::string>& extensions = candidate->format().extensions;
+        if (std::find(extensions.begin(), extensions.end(), extension) != extensions.end()) {
+            selected = candidate;
+            break;
+        }
+    }
+    if (selected == nullptr) {
+        status_->setText(
+            tr("no mounted document format reads \"%1\"").arg(QString::fromStdString(extension)));
+        return false;
+    }
+
+    const qp::views::model::DocumentReport report = document_controller_.open(*selected, path);
+    report_document(report);
+    refresh_status();
+
+    // The readings belong to the experiment that produced them, not to the file that was just opened, so a
+    // freshly opened document starts from an empty measurement session rather than showing another
+    // experiment's numbers beside its graph. The run identity goes with it: those samples were not this
+    // document's, and a trace labelled with somebody else's run is worse than an empty one.
+    if (report.ok) {
+        measurements_.reset_trace(qp::runtime::RunId{});
+        next_node_index_ = static_cast<int>(report.nodes) + 1;
+    }
+    return report.ok;
+}
+
+bool EditorWindow::export_document(const std::string& path) {
+    const std::vector<qp::runtime::IExporter*> formats = qp::views::model::export_formats().all();
+    if (formats.empty() || formats.front() == nullptr) {
+        status_->setText(tr("no export format is available in this build"));
+        return false;
+    }
+    qp::runtime::IExporter* format = formats.front();
+
+    // The pre-flight, before the path was any use. The menu handler calls this only after the dialog, so a
+    // caller that already knows where to write gets the same answer the dialog path would have given.
+    const qp::runtime::ExportRefusal ready = measurements_.export_readiness(*format);
+    if (ready != qp::runtime::ExportRefusal::ok) {
+        status_->setText(QString::fromStdString(qp::views::model::describe_export_refusal(ready)));
+        return false;
+    }
+
+    const qp::views::model::ExportReport report =
+        qp::views::model::export_trace(measurements_, *format, path);
+    status_->setText(QString::fromStdString(report.message));
+    return report.ok;
+}
+
+void EditorWindow::file_save() {
+    // A document that has never been written needs a path, and asking for one is Save As. Doing it here
+    // rather than refusing keeps Ctrl+S doing what a user expects the first time they press it.
+    if (document_controller_.is_untitled() || document_controller_.default_format() == nullptr) {
+        file_save_as();
+        return;
+    }
+    (void)save_document(document_controller_.document().source_path());
+}
+
+void EditorWindow::file_save_as() {
+    qp::authoring::IDocumentFormat* format = document_controller_.default_format();
+    if (format == nullptr) {
+        status_->setText(tr("no document format is available in this build"));
+        return;
+    }
+
+    // The filter lists every mounted format, so a build with two of them offers both and a build with one
+    // offers one. The chosen filter decides which format writes; with a single format the mapping is exact,
+    // and with several the first extension of the matching entry is what the dialog appends.
+    QStringList filters;
+    for (qp::authoring::IDocumentFormat* candidate : document_controller_.formats()) {
+        if (candidate == nullptr) continue;
+        const qp::authoring::DocumentFormatDesc& desc = candidate->format();
+        QStringList patterns;
+        for (const std::string& extension : desc.extensions) {
+            patterns << QStringLiteral("*.") + QString::fromStdString(extension);
+        }
+        filters << QString::fromStdString(desc.label) + QStringLiteral(" (") +
+                       patterns.join(QStringLiteral(" ")) + QStringLiteral(")");
+    }
+    QString chosen = filters.isEmpty() ? QString{} : filters.first();
+
+    const QString path = QFileDialog::getSaveFileName(
+        this, tr("Save document"),
+        QString::fromStdString(document_controller_.document().source_path()), filters.join(";;"),
+        &chosen);
+
+    if (path.isEmpty()) {
+        status_->setText(tr("save cancelled"));
+        return;
+    }
+    (void)save_document(path.toStdString());
+}
+
+void EditorWindow::file_open() {
+    if (document_controller_.formats().empty()) {
+        status_->setText(tr("no document format is available in this build"));
+        return;
+    }
+
+    QStringList filters;
+    for (qp::authoring::IDocumentFormat* candidate : document_controller_.formats()) {
+        if (candidate == nullptr) continue;
+        const qp::authoring::DocumentFormatDesc& desc = candidate->format();
+        QStringList patterns;
+        for (const std::string& extension : desc.extensions) {
+            patterns << QStringLiteral("*.") + QString::fromStdString(extension);
+        }
+        filters << QString::fromStdString(desc.label) + QStringLiteral(" (") +
+                       patterns.join(QStringLiteral(" ")) + QStringLiteral(")");
+    }
+
+    const QString path = QFileDialog::getOpenFileName(
+        this, tr("Open document"), QString{}, filters.join(";;"));
+    if (path.isEmpty()) {
+        status_->setText(tr("open cancelled"));
+        return;
+    }
+    (void)open_document(path.toStdString());
+}
+
+void EditorWindow::file_export() {
+    // The panel's own trace, the registered formats, and -- first -- the answer to "can this format keep
+    // what this session has". Asking before the dialog is the point: a user who picks a file name and only
+    // then learns that the error bars were dropped has already lost them.
+    const std::vector<qp::runtime::IExporter*> formats = qp::views::model::export_formats().all();
+    if (formats.empty() || formats.front() == nullptr) {
+        status_->setText(tr("no export format is available in this build"));
+        return;
+    }
+    qp::runtime::IExporter* format = formats.front();
+
+    const qp::runtime::ExportRefusal ready = measurements_.export_readiness(*format);
+    if (ready != qp::runtime::ExportRefusal::ok) {
+        status_->setText(QString::fromStdString(qp::views::model::describe_export_refusal(ready)));
+        return;
+    }
+
+    const qp::runtime::FormatDesc& desc = format->format();
+    QStringList patterns;
+    for (const std::string& extension : desc.extensions) {
+        patterns << QStringLiteral("*.") + QString::fromStdString(extension);
+    }
+    const QString filter = QString::fromStdString(desc.label) + QStringLiteral(" (") +
+                           patterns.join(QStringLiteral(" ")) + QStringLiteral(")");
+
+    const QString path = QFileDialog::getSaveFileName(this, tr("Export trace"), QString{}, filter);
+    if (path.isEmpty()) {
+        status_->setText(tr("export cancelled"));
+        return;
+    }
+    (void)export_document(path.toStdString());
 }
 
 void EditorWindow::seed_demo() {
@@ -342,6 +588,12 @@ void EditorWindow::refresh_status() {
                          .arg(session_.can_undo() ? "yes" : "no")
                          .arg(ledger_.size())
                          .arg(QString::fromStdString(gaps)));
+
+    // The caption carries the same state in the place a user looks when the window is not focused, and the
+    // modified marker is Qt's `[*]`, filled in by `setWindowModified`. It is updated from here because this
+    // is the one function every change passes through, so the marker cannot go stale behind an edit the
+    // window did not start.
+    refresh_caption();
 }
 
 void EditorWindow::build_palette() {

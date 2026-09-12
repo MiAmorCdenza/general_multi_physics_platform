@@ -155,4 +155,14 @@ void Session::notify(ChangeKind kind, graph::NodeId node) {
     }
 }
 
+void Session::replace_graph(graph::Graph&& graph) noexcept {
+    // The move first, so a listener that reads `graph()` while the notification is in flight sees the new
+    // document rather than the old one with a `reset` already announced.
+    graph_ = std::move(graph);
+    // The history described the graph that is gone. See the contract: running one of its entries against
+    // this graph would apply the previous document's edits to the current one, using ids this graph reuses.
+    bus_.forget_history();
+    notify(ChangeKind::reset, graph::NodeId{});
+}
+
 }  // namespace qp::authoring

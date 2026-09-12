@@ -104,7 +104,14 @@ target_link_libraries(qp_shell PRIVATE qp::views)
 # The application is where plugin knowledge belongs, and the macro is how it knows whether there is
 # any. Defined here rather than in a header so the window cannot accidentally depend on it: `views`
 # must build with plugins absent, and a macro it could see would invite exactly that.
+#
+# Three mounts, because the application is the only place allowed to know which plugins exist: the
+# operators a run needs, the format a document is saved as, and the format a trace is exported as. The
+# window consults three lists it did not fill.
 if(QP_BUILD_PLUGINS)
     target_compile_definitions(qp_shell PRIVATE QP_HAS_MECHANICS_PLUGIN)
     target_link_libraries(qp_shell PRIVATE qp::plugins::mechanics)
+
+    target_compile_definitions(qp_shell PRIVATE QP_HAS_FORMAT_PLUGINS)
+    target_link_libraries(qp_shell PRIVATE qp::plugins::qpjson qp::plugins::csv)
 endif()

@@ -18,10 +18,17 @@
  */
 #include "editor_window.hpp"
 
+#include <qp/views/model/document_controller.hpp>
 #include <qp/views/model/execution_binders.hpp>
+#include <qp/views/model/export_controller.hpp>
 
 #if defined(QP_HAS_MECHANICS_PLUGIN)
 #include <qp/plugins/mechanics/mechanics_binder.hpp>
+#endif
+
+#if defined(QP_HAS_FORMAT_PLUGINS)
+#include <qp/plugins/csv/csv_exporter.hpp>
+#include <qp/plugins/qpjson/qpjson_format.hpp>
 #endif
 
 #include <QApplication>
@@ -29,13 +36,27 @@
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     // The one place that knows which plugins exist. Mounting happens before the window is built, because
-    // the window's run controller captures the list during construction.
+    // the window's controllers capture their lists during construction.
     //
     // Guarded by `QP_BUILD_PLUGINS`: with plugins off there is nothing to mount, and the Run action then
     // reports that no node has an operator -- which is the accurate description of that build.
 #if defined(QP_HAS_MECHANICS_PLUGIN)
     qp::plugins::mechanics::MechanicsBinder mechanics;
     qp::views::model::mount_execution_binder(&mechanics);
+#endif
+
+    // The formats. Both live here rather than in a header, so they outlive the window and its controllers;
+    // a format mounted from a temporary would leave the window holding a dangling pointer the first time a
+    // user pressed Save.
+#if defined(QP_HAS_FORMAT_PLUGINS)
+    qp::plugins::qpjson::QpJsonFormat document_format;
+    qp::views::model::mount_document_format(&document_format);
+
+    qp::plugins::csv::CsvExporter trace_exporter;
+    // Registered, not asserted: a duplicate or an unnamed format is refused by the registry, which is where
+    // that rule belongs. Here the only answer available is to carry on -- one format failing to register
+    // must not stop the window from opening.
+    (void)qp::views::model::mount_export_format(&trace_exporter);
 #endif
 
     qp::views::EditorWindow window;
