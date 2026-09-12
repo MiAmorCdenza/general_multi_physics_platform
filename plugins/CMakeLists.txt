@@ -31,4 +31,9 @@ if(QP_BUILD_PLUGINS)
     # splits content by what a thing **is**: a caliper is not a rigid-body model, and the one interface they
     # share is `runtime/instrument`'s, which no other content implements.
     add_subdirectory(instruments)
+
+    # Regression and uncertainty propagation. It has no interface of its own -- it is a library of pure
+    # functions over `runtime/store`'s types, and the `FitResult` it produces is the one `store` has always
+    # declared. See its CMakeLists for why it is not a registry of algorithms.
+    add_subdirectory(analysis)
 endif()

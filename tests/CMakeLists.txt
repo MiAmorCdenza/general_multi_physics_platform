@@ -406,6 +406,12 @@ if(QP_BUILD_PLUGINS)
     qp_add_test(qp_test_plugins_instruments
         SOURCES unit/plugins/test_instruments.cpp
         LIBS qp::plugins::instruments qp::host qp::runtime_instrument qp::units)
+
+    # Regression and uncertainty propagation. It links no plugin host and no Qt: a fit is pure arithmetic over
+    # `runtime/store`'s types, and the cases are the numbers a student can check with a calculator.
+    qp_add_test(qp_test_plugins_analysis
+        SOURCES unit/plugins/test_analysis.cpp
+        LIBS qp::plugins::analysis qp::runtime_store qp::diag)
 endif()
 
 # The run loop. Qt-free and graph-only: every case drives a stub operator, so it belongs to the loop's
