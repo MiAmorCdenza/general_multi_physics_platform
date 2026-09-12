@@ -10,5 +10,6 @@
 # to work is not a format.
 
 if(QP_BUILD_PLUGINS)
+    add_subdirectory(csv)
     add_subdirectory(qpjson)
 endif()

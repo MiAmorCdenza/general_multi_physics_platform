@@ -304,7 +304,7 @@ L0 是本项目唯一不可插件化的部分，也是接口面必须最小的�
 | `kernels/` | Boris、蛙跳、RK4、Verlet 的具体实现 |
 | `instruments/` | 具体仪器（含误差模型） |
 | `analysis/` | 回归、不确定度传播、卡方、残差分析 |
-| `formats/` | 具体格式：`qpjson/`（文档，JSON 文本）；后续 `csv/`（迹导出）等 |
+| `formats/` | 具体格式，一个目录一个：`qpjson/`（文档，JSON 文本，实现 `authoring/persist`）、`csv/`（迹导出，实现 `runtime/io`） |
 | `views_items/` | 场线、粒子、拖尾等渲染项（三来源：内置 / 用户热扫描 / 节点内联） |
 | `experiments/` | L1 教师层 YAML 实验描述 |
 | `examples/` | 示例图库 |

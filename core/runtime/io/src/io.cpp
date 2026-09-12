@@ -20,15 +20,6 @@ namespace {
     return out;
 }
 
-/// @brief Whether `extensions` already contains `extension`, ignoring case.
-[[nodiscard]] bool contains_extension(const std::vector<std::string>& extensions,
-                                      std::string_view extension) {
-    const std::string want = lowered(extension);
-    return std::any_of(extensions.begin(), extensions.end(), [&want](const std::string& e) {
-        return lowered(e) == want;
-    });
-}
-
 }  // namespace
 
 diag::Result<void> FormatRegistry::add(IExporter* exporter) noexcept {

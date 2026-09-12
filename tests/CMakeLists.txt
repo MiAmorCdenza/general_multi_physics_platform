@@ -389,6 +389,14 @@ if(QP_BUILD_PLUGINS)
     qp_add_test(qp_test_plugins_qpjson
         SOURCES unit/plugins/test_qpjson_format.cpp
         LIBS qp::plugins::qpjson qp::authoring_persist qp::authoring_document qp::graph_structure)
+
+    # The first real export format. It writes files, so its cases use a temporary directory
+    # that removes itself -- and one of them asserts the refusal `ExportRefusal` was missing
+    # until a format existed that could fail to write.
+    qp_add_test(qp_test_plugins_csv
+        SOURCES unit/plugins/test_csv_exporter.cpp
+        LIBS qp::plugins::csv qp::runtime_io qp::runtime_trace qp::runtime_store qp::runtime_run
+             qp::units)
 endif()
 
 # The run loop. Qt-free and graph-only: every case drives a stub operator, so it belongs to the loop's

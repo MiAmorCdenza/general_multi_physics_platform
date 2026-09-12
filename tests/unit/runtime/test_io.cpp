@@ -125,8 +125,13 @@ TEST_CASE("io.refusal_names_are_stable", "[io]") {
                    "nothing_to_write");
     STATIC_REQUIRE(std::string_view(to_string(ExportRefusal::shape_mismatch)) ==
                    "shape_mismatch");
+    STATIC_REQUIRE(std::string_view(to_string(ExportRefusal::could_not_write)) ==
+                   "could_not_write");
     // ok is the zero value, so a default-constructed refusal means "proceed".
     STATIC_REQUIRE(static_cast<std::uint8_t>(ExportRefusal::ok) == 0);
+    // The tags are frozen: an existing code keeps its number, so a log line from last term still means
+    // what it meant. A new reason is appended rather than inserted.
+    STATIC_REQUIRE(static_cast<std::uint8_t>(ExportRefusal::could_not_write) == 5);
 }
 
 // ===========================================================================

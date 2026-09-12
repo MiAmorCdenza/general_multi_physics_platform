@@ -121,7 +121,8 @@ struct FormatDesc final {
  * @post        none
  * @invariant   One code per distinct reason
  * @errors      noexcept
- * @frozen      yes
+ * @frozen      yes -- the **tags** are frozen; the set may gain a reason, because the alternative is a
+ *              writer that cannot report a full disk and has to report success instead
  * @tests       io.export.refuses_a_format_that_cannot_carry_uncertainty
  */
 enum class ExportRefusal : std::uint8_t {
@@ -134,6 +135,15 @@ enum class ExportRefusal : std::uint8_t {
     nothing_to_write = 3,
     /// The trace and the dataset disagree about how many channels there are.
     shape_mismatch = 4,
+    /// The destination could not be written: a directory that does not exist, no permission, no space.
+    ///
+    /// Reported by the writer rather than by the pre-flight, and the distinction is the point of having
+    /// it: the pre-flight answers "may this export proceed", which is knowable before touching the
+    /// filesystem, while this answers "did it", which only the write knows. Found by writing the first
+    /// real exporter -- until then there was no code for the most ordinary failure an exporter has, and
+    /// the choice was between reporting success on a failed write and reusing a code that means
+    /// something else.
+    could_not_write = 5,
 };
 
 /// @brief Stable short name of a refusal, for a message or a log line.
@@ -144,6 +154,7 @@ enum class ExportRefusal : std::uint8_t {
         case ExportRefusal::uncertainty_not_supported: return "uncertainty_not_supported";
         case ExportRefusal::nothing_to_write: return "nothing_to_write";
         case ExportRefusal::shape_mismatch: return "shape_mismatch";
+        case ExportRefusal::could_not_write: return "could_not_write";
     }
     return "unknown";
 }
