@@ -42,6 +42,7 @@
 #include <qp/authoring/document/document.hpp>
 #include <qp/authoring/portui/port_ui.hpp>
 #include <qp/runtime/run/run.hpp>
+#include <qp/views/model/confidence_model.hpp>
 #include <qp/views/model/measurement_model.hpp>
 #include <qp/views/model/type_catalog.hpp>
 #include <qp/views/model/demo_library.hpp>
@@ -52,6 +53,7 @@ class QLabel;
 
 namespace qp::views {
 
+class ConfidencePanel;
 class MeasurementPanel;
 class NodeGraphView;
 class PropertyPanel;
@@ -89,6 +91,12 @@ public:
     [[nodiscard]] qp::views::model::MeasurementModel& measurements() noexcept {
         return measurements_;
     }
+
+    /// @brief The confidence model over the measurement session's trace.
+    ///
+    /// Exposed so a test can assert the panel shows **this** model's values rather than its own
+    /// arithmetic, which is the property most likely to rot in a thin rendering layer.
+    [[nodiscard]] qp::views::model::ConfidenceModel& confidence() noexcept { return confidence_; }
 
     /// @brief The session's run ledger.
     ///
@@ -159,6 +167,19 @@ private:
     NodeGraphView* canvas_ = nullptr;
     PropertyPanel* properties_ = nullptr;
     MeasurementPanel* measurements_panel_ = nullptr;
+    // One confidence model per window, over the measurement session's trace. It borrows the trace
+    // for the same reason the measurement model borrows the run ledger: a report about a **copy** of
+    // the data is a report about something else, and this session has already paid for that lesson
+    // once with two run ledgers.
+    qp::views::model::ConfidenceModel confidence_{measurements_.trace()};
+    ConfidencePanel* confidence_panel_ = nullptr;
+
+    /// @brief Whether the run's clamp count has been pushed into the confidence model yet.
+    ///
+    /// The count belongs to the operator rather than to the trace, so it arrives after a run rather
+    /// than during one. Tracked here so the seed can note it exactly once without the window having
+    /// to ask an operator it does not own.
+    bool clamps_noted_ = false;
     QLabel* status_ = nullptr;
     std::unique_ptr<StatusBridge> status_bridge_;
     int next_node_index_ = 1;

@@ -5,6 +5,7 @@
 #include "editor_window.hpp"
 
 #include "node_graph_view.hpp"
+#include "confidence_panel.hpp"
 #include "measurement_panel.hpp"
 #include "property_panel.hpp"
 
@@ -133,6 +134,17 @@ EditorWindow::EditorWindow(QWidget* parent) : QMainWindow(parent) {
     // with no uncertainty visible -- which is precisely the artefact being replaced.
     dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
     addDockWidget(Qt::RightDockWidgetArea, dock);
+
+    confidence_panel_ = new ConfidencePanel(confidence_, this);
+    auto* confidence_dock = new QDockWidget(tr("Confidence"), this);
+    confidence_dock->setWidget(confidence_panel_);
+    confidence_dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
+    // Stacked below the measurement dock rather than floated elsewhere. The two are read together:
+    // the readings say what was measured, and this says whether the numbers behind them can be
+    // trusted. Putting them in different corners is how a user reads one and not the other.
+    addDockWidget(Qt::RightDockWidgetArea, confidence_dock);
+    splitDockWidget(dock, confidence_dock, Qt::Vertical);
+
     // An explicit width, applied after the first layout pass. A table of readings has no opinion
     // about how wide it should be, and letting `sizeHint` decide is how the dock took 420 of the
     // window's 1280 while the canvas had 185 and could not show the graph it was drawing.
@@ -304,14 +316,37 @@ void EditorWindow::seed_demo_measurement() {
     measurements_.add_reading(0.0238, UncertaintyKind::standard, 0.0005);
     measurements_.add_reading(0.0243, UncertaintyKind::unknown);
 
-    // A short trace as well, so the time axis is exercised rather than merely present. A
-    // decaying oscillation at the scale's resolution: the shape a student would recognise,
-    // and the reason a sample carries an uncertain value rather than a bare double.
+    // A short trace, so the time axis is exercised rather than merely present.
+    //
+    // **Two channels, and the velocity is not optional.** The confidence panel's energy diagnostic
+    // needs a position and a velocity: a quadratic potential is `0.5 w^2 x^2 + 0.5 v^2`, and with
+    // only the first the panel reports "energy drift cannot be measured: the trace is missing
+    // velocity". That is the honest answer and it was the demo's answer until this channel was
+    // added -- which meant the demo showed C8's **refusal** path and never its diagnostic.
+    //
+    // The velocity is the analytic derivative of the position rather than a second independent
+    // series, so the two channels describe one motion. The functions are
+    //
+    //     x(t) = A e^{-g t} cos(w t)
+    //     v(t) = A e^{-g t} (-g cos(w t) - w sin(w t))
+    //
+    // with `A = 0.02`, `g = 0.8`, `w = 12`. The amplitude decays by construction, so the total
+    // energy decays too, and the panel's note names the mechanism: this **model** has damping. That
+    // is deliberately not the RK4 dissipation case -- the two are different findings, and the note
+    // distinguishes them ("a property of the integrator and not of the model unless the model has
+    // damping"). A demo whose energy were perfectly conserved would show the panel agreeing and
+    // never show it disagreeing, which is the less useful half.
     (void)measurements_.add_channel("displacement", qp::units::dims::length);
+    (void)measurements_.add_channel("velocity", qp::units::dims::velocity);
+    constexpr double kAmplitude = 0.02;
+    constexpr double kDecay = 0.8;
+    constexpr double kOmega = 12.0;
     for (int i = 0; i < 200; ++i) {
         const double t = 0.01 * static_cast<double>(i);
-        const double x = 0.02 * std::exp(-0.8 * t) * std::cos(12.0 * t);
-        (void)measurements_.add_sample(t, std::vector<double>{x}, 0.0005);
+        const double envelope = kAmplitude * std::exp(-kDecay * t);
+        const double x = envelope * std::cos(kOmega * t);
+        const double v = envelope * (-kDecay * std::cos(kOmega * t) - kOmega * std::sin(kOmega * t));
+        (void)measurements_.add_sample(t, std::vector<double>{x, v}, 0.0005);
     }
 
     // No run is recorded here. `seed_demo_graph` already recorded one, and a second record
@@ -324,6 +359,19 @@ void EditorWindow::seed_demo_measurement() {
     // window's is the one it already started.
 
     measurements_panel_->refresh();
+
+    // Declare the frequency the energy diagnostic should assume, and refresh the panel.
+    //
+    // The seed's trace is a decaying oscillation rather than a solution of the RK4 operator, so
+    // there is no operator whose `clamps_fired()` could be read -- and inventing a count would make
+    // the panel assert something about a run that did not happen. `note_clamps` is therefore left
+    // at its zero default, which is the truth here: nothing was clamped because nothing integrated.
+    // The demo's own frequency, so the energy figure is computed for the potential the data came
+    // from. Declaring a different value would produce a drift that is an artefact of the mismatch,
+    // and the panel would be reporting its own input as a finding about the run.
+    confidence_.set_omega(kOmega);
+    clamps_noted_ = true;
+    confidence_panel_->refresh();
 }
 
 }  // namespace qp::views

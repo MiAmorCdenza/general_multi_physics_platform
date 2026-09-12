@@ -22,7 +22,8 @@ add_library(qp_views_model STATIC
     type_catalog.cpp
     demo_library.cpp
     editor_choice.cpp
-    measurement_model.cpp)
+    measurement_model.cpp
+    confidence_model.cpp)
 
 add_library(qp::views_model ALIAS qp_views_model)
 

@@ -45,6 +45,10 @@
 #include <qp/views/model/type_catalog.hpp>
 
 #include "editor_window.hpp"
+#include <QString>
+#include <QStringList>
+
+#include "confidence_panel.hpp"
 #include "measurement_panel.hpp"
 #include "node_graph_view.hpp"
 #include "property_panel.hpp"
@@ -526,6 +530,97 @@ TEST_CASE("qt.views.measurement.fresh_window_is_empty", "[views][qt]") {
     REQUIRE_FALSE(window.measurements().trace().empty());
 }
 
+
+TEST_CASE("qt.views.confidence.shows_the_models_notes", "[views][qt]") {
+    // The panel must show the model's diagnostics and its notes **as the model words them**. The
+    // model is asserted by the ordinary suite on both compilers; re-wording a warning here would
+    // put the tested text and the displayed text in different places, and the displayed one is the
+    // one a student reads.
+    qp::views::EditorWindow window;
+    window.seed_demo();
+
+    auto* panel = window.findChild<qp::views::ConfidencePanel *>();
+    REQUIRE(panel != nullptr);
+
+    // The rows are present, which is what "visible" means for C8.
+    REQUIRE_FALSE(panel->row_text(QStringLiteral("energy drift")).isEmpty());
+    REQUIRE_FALSE(panel->row_text(QStringLiteral("clamped values")).isEmpty());
+
+    // Zero clamped values is rendered as `0`, not as the unavailable text: the count is never
+    // absent, and the difference between "the clamp never fired" and "this run was not asked" is
+    // the distinction the whole feature rests on.
+    REQUIRE(panel->row_text(QStringLiteral("clamped values")) == QStringLiteral("0"));
+
+    // The note list matches the model exactly, one line each, verbatim.
+    const std::vector<std::string> notes = window.confidence().notes();
+    const QStringList shown = panel->note_lines();
+    REQUIRE(shown.size() == static_cast<int>(notes.size()));
+    for (std::size_t i = 0; i < notes.size(); ++i) {
+        REQUIRE(shown[static_cast<int>(i)] ==
+                QStringLiteral("- ") + QString::fromStdString(notes[i]));
+    }
+}
+
+TEST_CASE("qt.views.confidence.energy_drift_is_shown", "[views][qt]") {
+    // The positive half of the pair, and the one that makes C8's requirement concrete: with both
+    // channels present the panel shows a **number**, not "not measurable".
+    //
+    // The unit-level case in the ordinary suite already establishes that the model computes a
+    // correct drift. What this pins is that the panel displays it -- the rendering layer's failure
+    // mode is showing the refusal text for a run the model could answer, which no model-level test
+    // can see.
+    qp::views::EditorWindow window;
+    window.seed_demo();
+
+    auto* panel = window.findChild<qp::views::ConfidencePanel *>();
+    REQUIRE(panel != nullptr);
+
+    const QString drift = panel->row_text(QStringLiteral("energy drift"));
+    REQUIRE_FALSE(drift.isEmpty());
+    REQUIRE(drift != qp::views::ConfidencePanel::unavailable_text());
+
+    // The demo's amplitude decays by construction, so the total energy falls. The sign is asserted
+    // because it is the difference between "the model has damping" and "the method gains energy".
+    bool is_number = false;
+    const double value = drift.toDouble(&is_number);
+    REQUIRE(is_number);
+    REQUIRE(value < 0.0);
+
+    // And with the frequency declared, the panel does not warn about assuming one.
+    for (const QString& note : panel->note_lines()) {
+        REQUIRE_FALSE(note.contains(QStringLiteral("assumes omega")));
+    }
+
+    // The note names the mechanism rather than only the fact.
+    bool names_mechanism = false;
+    for (const QString& note : panel->note_lines()) {
+        if (note.contains(QStringLiteral("property of the integrator"))) names_mechanism = true;
+    }
+    REQUIRE(names_mechanism);
+}
+TEST_CASE("qt.views.confidence.unmeasurable_is_not_zero", "[views][qt]") {
+    // The negative fixture for the panel's central claim.
+    //
+    // A model whose trace carries only a position cannot report an energy drift, and the panel must
+    // say *not measurable* rather than `0`. A zero would read as "no drift was found", which is a
+    // claim about a quantity that was never computed -- and it is exactly the confusion C8 exists to
+    // prevent, arriving from the other side.
+    qp::runtime::RunLedger ledger;
+    qp::views::model::MeasurementModel measurements{ledger, "length", qp::units::dims::length};
+    REQUIRE(measurements.add_channel("displacement", qp::units::dims::length).has_value());
+    REQUIRE(measurements.add_sample(0.0, std::vector<double>{1.0}).has_value());
+    REQUIRE(measurements.add_sample(1.0, std::vector<double>{0.5}).has_value());
+
+    qp::views::model::ConfidenceModel confidence{measurements.trace()};
+    qp::views::ConfidencePanel panel{confidence};
+
+    const QString shown = panel.row_text(QStringLiteral("energy drift"));
+    REQUIRE(shown == qp::views::ConfidencePanel::unavailable_text());
+    REQUIRE(shown != QStringLiteral("0"));
+
+    // And the model explains which channel is missing rather than only that something is.
+    REQUIRE_FALSE(panel.note_lines().isEmpty());
+}
 
 int main(int argc, char** argv) {
     // A QApplication is required before any QWidget exists. Building it in main

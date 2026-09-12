@@ -534,7 +534,8 @@ if(TARGET qp::views_model)
     qp_add_test(qp_test_views_model
         SOURCES model/test_views_model.cpp
                 model/test_measurement_model.cpp
-        LIBS qp::views_model qp::runtime_io qp::runtime_store qp::runtime_trace qp::runtime_run)
+                model/test_confidence_model.cpp
+        LIBS qp::views_model qp::runtime_io qp::runtime_store qp::runtime_trace qp::runtime_run qp::plugins::mechanics)
 endif()
 
 # The Qt half of the view layer is tested only when Qt is in the build. Guarded
