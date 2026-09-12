@@ -430,7 +430,11 @@ def main(argv: list[str] | None = None) -> int:
     repo_root = Path(__file__).resolve().parent.parent
 
     parser = argparse.ArgumentParser(description="契约完备性门禁")
-    parser.add_argument("--headers", default=str(repo_root / "core"), help="头文件根目录")
+    parser.add_argument("--headers", action="append", default=None,
+                        help="头文件根目录（可重复）。"
+                             "某一层的头文件可能分布在多个目录里——视图层同时有 views/qt 与 "
+                             "views/include——只给一个目录的调用看不见另一个目录里声明的契约，"
+                             "于是把那边认领的用例报成孤儿：一条指向错误文件的失败信息。")
     parser.add_argument("--tests", default=str(repo_root / "tests"), help="测试根目录")
     parser.add_argument("--quiet", action="store_true", help="仅输出违规")
     parser.add_argument("--root", default=str(repo_root), help="用于相对路径显示的仓库根")
@@ -453,13 +457,14 @@ def main(argv: list[str] | None = None) -> int:
                              "一条指错方向的失败信息，比一条漏报更容易让人删掉门禁。")
     args = parser.parse_args(argv)
 
-    headers_root = Path(args.headers)
+    header_roots = [Path(p) for p in (args.headers or [str(repo_root / "core")])]
     tests_root = Path(args.tests)
     repo_root = Path(args.root).resolve()
 
-    if not headers_root.is_dir():
-        print(f"错误：头文件目录不存在 {headers_root}", file=sys.stderr)
-        return 1
+    for root in header_roots:
+        if not root.is_dir():
+            print(f"错误：头文件目录不存在 {root}", file=sys.stderr)
+            return 1
     if not tests_root.is_dir():
         print(f"错误：测试目录不存在 {tests_root}", file=sys.stderr)
         return 1
@@ -469,10 +474,11 @@ def main(argv: list[str] | None = None) -> int:
     all_contracts: list[FunctionContract] = []
     referenced: set[str] = set()
 
-    for path in sorted(headers_root.rglob("*.hpp")):
-        contracts, viols = parse_header(path)
-        all_contracts.extend(contracts)
-        violations.extend(viols)
+    for root in header_roots:
+        for path in sorted(root.rglob("*.hpp")):
+            contracts, viols = parse_header(path)
+            all_contracts.extend(contracts)
+            violations.extend(viols)
 
     # A test file may also carry a module-level contract block (declaring the contract surface it
     # covers). Its cases are not re-reported as orphans, because filing cases is exactly its purpose.
@@ -522,8 +528,12 @@ def main(argv: list[str] | None = None) -> int:
     exempted = sum(1 for c in all_contracts
                    if c.exempt_reason is not None and not c.tags)
     bare_operators = sum(1 for c in all_contracts if c.exempt_reason and c.exempt_reason.startswith("短体"))
-    if not args.quiet:
-        print(f"契约检查：{headers_root} 下 {len(all_contracts)} 个契约"
+    # Computed before the branch, not inside it. Scoping this assignment to the non-quiet
+    # branch made every `--quiet` invocation raise UnboundLocalError on the line below -- a
+    # crash inside the gate, reported to the caller as a gate failure, which is the worst
+    # possible presentation of a bug in the checker: it looks like the code under test.
+    scope = ", ".join(str(r) for r in header_roots)
+    print(f"契约检查：{scope} 下 {len(all_contracts)} 个契约"
               f"（其中 {bare_operators} 个短体运算符无契约注释、"
               f"{exempted} 个整体豁免），"
               f"{tests_root} 下 {len(declared_tests)} 个测试用例")

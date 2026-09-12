@@ -371,28 +371,79 @@ void NodeGraphView::rebuild() {
 
     scene_->setSceneRect(scene_->itemsBoundingRect().adjusted(-48.0, -48.0, 48.0, 48.0));
 
-    // Frame what was just built. A QGraphicsView left at its default transform
-    // shows the scene's top-left corner, so a graph whose nodes start at (48, 48)
-    // appears pinned to the bottom-right of the viewport rather than centred --
-    // which is what the screenshots of this window showed.
+    // Frame what was just built, and do it by **fitting** rather than by centring.
     //
-    // The guard is `!framed_ && !empty`, not just `!framed_`: the constructor
-    // rebuilds once with an empty graph, and setting the flag there consumed the
-    // one chance to frame. The result was a view that never centred on anything.
+    // History, because the difference matters and the naive version looks right:
+    //
+    //   1. A `QGraphicsView` left at its default transform shows the scene's top-left corner,
+    //      so nodes starting at (48, 48) appeared pinned to one side of the viewport.
+    //   2. `centerOn` fixed that and introduced a worse problem. It scrolls a viewport over the
+    //      scene at the current scale, so a graph **wider than the viewport is clipped wherever
+    //      you centre it**. `default_position` lays nodes out in rows of four, 168 units apart,
+    //      which is wider than this canvas on a 1280-wide window -- so the running shell showed
+    //      one node of three while its own status line reported "nodes 3 | edges 2". The scene
+    //      held all three; the view could not show them.
+    //
+    // `fitInView` with `KeepAspectRatio` shows the whole graph, scaling down only when it must.
+    // It is also what makes the view's contents deterministic, which is what let a screenshot
+    // turn "looks a bit off" into a finding rather than a matter of opinion.
+    //
+    // The `1.0` upper bound in the clamp: a graph of two nodes should not be blown up into two
+    // enormous boxes, and `fitInView` will happily scale up forever to fill the viewport.
+    //
+    // The guard is `!framed_ && !empty`, not just `!framed_`: the constructor rebuilds once with
+    // an empty graph, and setting the flag there consumed the one chance to frame. The result
+    // was a view that never framed anything.
     if (!framed_ && !scene_->itemsBoundingRect().isEmpty()) {
-        // Deferred to the next event-loop turn rather than done here. `centerOn`
-        // scrolls relative to the *viewport* size, and during the constructor the
-        // viewport has not been laid out yet -- its size is still the default, so
-        // the scroll lands in the wrong place and the graph stays pinned to the
-        // bottom of the window. That is what the first three screenshots showed.
+        // Deferred to the next event-loop turn. The viewport has not been laid out yet during
+        // the constructor -- its size is still the default -- and `fitInView` computes its scale
+        // from that size, so fitting here would choose a scale for a viewport that does not
+        // exist and never revisit it.
         pending_frame_ = true;
         QTimer::singleShot(0, this, [this] {
             if (!pending_frame_) return;
-            centerOn(scene_->itemsBoundingRect().center());
             pending_frame_ = false;
             framed_ = true;
+            frame_graph();
         });
     }
+}
+
+void NodeGraphView::frame_graph() {
+    const QRectF bounds = scene_->itemsBoundingRect();
+    if (bounds.isEmpty() || viewport()->width() <= 0 || viewport()->height() <= 0) return;
+
+    // Margin so the outermost nodes are not flush against the edge, which reads as clipped even
+    // when it is not.
+    const QRectF padded = bounds.adjusted(-24.0, -24.0, 24.0, 24.0);
+    fitInView(padded, Qt::KeepAspectRatio);
+
+    // Never magnify past 1:1. `fitInView` scales up to fill, so without this clamp a small graph
+    // would be drawn larger than its authored size -- and a node editor that changes how large a
+    // node is depending on how many nodes exist is a node editor whose layout cannot be
+    // reasoned about.
+    if (transform().m11() > 1.0) {
+        resetTransform();
+        centerOn(bounds.center());
+    }
+}
+
+bool NodeGraphView::all_nodes_are_visible() const noexcept {
+    // The visible area in scene coordinates. `mapToScene` on the viewport rect is the whole
+    // computation: comparing against the viewport's *rect* would compare a scene-space position
+    // with a widget-space rectangle, which is true for a view at the origin and false for every
+    // scrolled view -- the one case that matters.
+    const QRectF visible = mapToScene(viewport()->rect()).boundingRect();
+
+    for (const QGraphicsItem* item : scene_->items()) {
+        if (dynamic_cast<const NodeItem*>(item) == nullptr) continue;
+        const QRectF box = item->sceneBoundingRect();
+        // `contains` rather than `intersects`: a node half off the edge is not visible in the
+        // sense this reports. The defect this exists for showed a node whose right half was
+        // present and whose left half, with its input port, was not.
+        if (!visible.contains(box)) return false;
+    }
+    return true;
 }
 
 int NodeGraphView::node_item_count() const noexcept {

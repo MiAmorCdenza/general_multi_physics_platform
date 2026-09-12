@@ -29,7 +29,9 @@
  * @invariant   Both panels reference the same Session instance
  * @errors      noexcept
  * @frozen      no
- * @tests       qt.views.editor_window.shares_one_session
+ * @tests       qt.views.editor_window.shares_one_session,
+ *              qt.views.measurement.one_ledger_per_session,
+ *              qt.views.measurement.fresh_window_is_empty
  */
 #pragma once
 
@@ -40,6 +42,7 @@
 #include <qp/authoring/document/document.hpp>
 #include <qp/authoring/portui/port_ui.hpp>
 #include <qp/runtime/run/run.hpp>
+#include <qp/views/model/measurement_model.hpp>
 #include <qp/views/model/type_catalog.hpp>
 #include <qp/views/model/demo_library.hpp>
 
@@ -49,6 +52,7 @@ class QLabel;
 
 namespace qp::views {
 
+class MeasurementPanel;
 class NodeGraphView;
 class PropertyPanel;
 
@@ -77,6 +81,22 @@ public:
     /// @brief The catalog the palette and the panel resolve types against.
     [[nodiscard]] TypeCatalog& catalog() noexcept { return catalog_; }
 
+    /// @brief The measurement session this window reports on.
+    ///
+    /// Exposed so a test can drive it, for the same reason `session()` is: the window's job
+    /// is to hold **one** of each thing, and a test that reached through the widgets to find
+    /// them would be testing the layout rather than the ownership.
+    [[nodiscard]] qp::views::model::MeasurementModel& measurements() noexcept {
+        return measurements_;
+    }
+
+    /// @brief The session's run ledger.
+    ///
+    /// Exposed so a test can assert that the measurement session **borrows this one** rather
+    /// than holding a second. The window had two ledgers once, and the status line and the
+    /// measurement panel then disagreed on screen about how many runs the session had.
+    [[nodiscard]] qp::runtime::RunLedger& ledger() noexcept { return ledger_; }
+
     /// @brief Adds a node of `type_name` through the session, and selects it.
     ///
     /// Returns the new node's id, or an invalid id when the type is unknown or the
@@ -85,8 +105,32 @@ public:
     /// produce an edit the canvas is never told about.
     [[nodiscard]] qp::graph::NodeId add_node(const std::string& type_name);
 
-    /// @brief Seeds the window with a small graph so it is not empty on start.
+    /// @brief Seeds the window with a small graph and a matching measurement session.
+    ///
+    /// **Not called by the constructor.** A window that filled itself in would have decided
+    /// something on the caller's behalf, and `tests/unit/views/test_views_qt.cpp` asserts a
+    /// fresh window is empty -- which is the documented behaviour, not an incidental count. The
+    /// application calls this; a test constructs a window and chooses.
+    ///
+    /// The order inside is load-bearing: the graph first, because seeding the graph is what
+    /// records the run, and the measurement session's trace belongs to that run. The reverse
+    /// leaves the panel reporting "no run recorded" while the status line reports the run's
+    /// gaps -- two panels disagreeing about one session, which is the failure this whole window
+    /// is built to avoid.
+    void seed_demo();
+
+    /// @brief Records the demonstrator graph through the session.
     void seed_demo_graph();
+
+    /// @brief Records a few readings so the measurement panel is not empty on start.
+    ///
+    /// A repeat measurement of one length with a deliberately **mixed** provenance: two
+    /// readings carry a quantified uncertainty and one does not. That mix is what makes the
+    /// panel's central honesty visible on first launch -- the combined uncertainty is
+    /// reported, and the gap list says that one reading contributed nothing to it. A
+    /// demonstration where every reading was quantified would show the arithmetic working
+    /// and hide the rule.
+    void seed_demo_measurement();
 
 private:
     class StatusBridge;
@@ -106,9 +150,15 @@ private:
     qp::authoring::PortUiRegistry port_ui_{};
     qp::authoring::Registry capabilities_{};
     qp::runtime::RunLedger ledger_{};
+    // One measurement session per window, measuring a length by default. The quantity is a
+    // construction parameter rather than a field the user sets later because the dataset's
+    // dimension is fixed at construction -- a session that could change dimension mid-way
+    // would allow a mean over metres and seconds.
+    qp::views::model::MeasurementModel measurements_{ledger_, "length", qp::units::dims::length};
 
     NodeGraphView* canvas_ = nullptr;
     PropertyPanel* properties_ = nullptr;
+    MeasurementPanel* measurements_panel_ = nullptr;
     QLabel* status_ = nullptr;
     std::unique_ptr<StatusBridge> status_bridge_;
     int next_node_index_ = 1;

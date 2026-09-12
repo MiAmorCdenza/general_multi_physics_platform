@@ -119,6 +119,59 @@ public:
     [[nodiscard]] static const char* view_id() noexcept { return kGraphViewId; }
 
     /**
+    /**
+     * @brief Scales and centres the view so the whole graph is visible.
+     *
+     * ## Why this exists, and why centring was not enough
+     *
+     * `centerOn` scrolls a viewport over the scene at the current scale, so a graph **wider than
+     * the viewport is clipped wherever you centre it**. `default_position` lays nodes out in rows
+     * of four, 168 units apart, which is wider than this canvas on a 1280-wide window -- and the
+     * running shell therefore showed one node of three while its own status line reported
+     * "nodes 3 | edges 2". The scene held all three; the view could not show them.
+     *
+     * `fitInView` with `KeepAspectRatio` shows the whole graph. It is also what makes the view's
+     * contents deterministic, which is what turned "the screenshot looks a bit off" into a
+     * finding instead of a matter of opinion.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         the scene exists and the viewport has a size
+     * @post        The whole scene rect is inside the viewport, at no more than 1:1
+     * @invariant   Never magnifies past 1:1, so a node's size does not depend on how many exist
+     * @errors      May allocate; allocation failure terminates
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.canvas.whole_graph_is_visible
+     */
+    void frame_graph();
+
+    /**
+     * @brief Whether every node item lies inside the viewport.
+     *
+     * A genuine query rather than a test hook: "can the user see the graph" is a question a
+     * window manager, a screenshot check, or a future zoom-to-fit button all need to ask, and
+     * deriving it from pixel inspection is how a viewport bug survives a green suite.
+     *
+     * The comparison is against `viewport()->rect()` mapped into scene coordinates, so a node
+     * that is scrolled out of view is reported as not visible even though it exists.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         the scene and viewport exist
+     * @post        True exactly when every NodeItem's bounding rect intersects the visible area
+     * @invariant   An empty graph reports true, vacuously
+     * @errors      noexcept
+     * @complexity  O(nodes)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.canvas.whole_graph_is_visible,
+     *              qt.views.canvas.unframed_view_reports_clipped
+     */
+    [[nodiscard]] bool all_nodes_are_visible() const noexcept;
+
+    /**
      * @brief Rebuilds every item from the session's graph.
      *
      * Called on construction and after every change notification. It is a full
@@ -131,7 +184,7 @@ public:
      * @pre         the scene exists
      * @post        One NodeItem per graph node, one edge per graph edge
      * @invariant   items_match_graph() holds afterwards
-     * @errors      noexcept
+     * @errors      May allocate; allocation failure terminates
      * @complexity  O(nodes + edges)
      * @nondet      none
      * @frozen      no

@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "章程 C2 的钳制策略落地（kernels 声明 + 三算子遵守并计数）；双编译器 532-533 全绿",
+  "updated": "GUI 成为可用的实验工具：测量面板接通测量→记录→不确定度→报告闭环；双编译器 538-539 全绿",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -13,7 +13,7 @@
     "contract_completeness": {
       "tool": "scripts/check_contracts.py",
       "state": "passing",
-      "detail": "两次调用，用例集合互不相交，且**互补关系是被自检钉住的**。`gate.contracts` 扫 core/（301 契约，含 runtime run/store/trace/io 与 reflect），`gate.contracts.views` 扫 views/model（7 契约）。views 那道门禁原本用**排除式**清单列出所有其它模块目录，于是新增 core/reflect 时它漏列了：门禁把 reflect 的用例认成自己该管的，找不到 views/model 里的引用，于是报出**reflect 的孤儿**——一条指向无关模块的失败信息，读起来就是 reflect 坏了。改成 `--only model` 正面声明管辖范围：明天新增的模块默认不在范围内，除非有人显式写进去。`--exclude` 与 `--only` 必须**同一种拼写**——第一版 `--only` 只比对相对路径而 `--exclude` 还比对绝对路径，于是 `--only tests/model` 静默匹配 0 个用例，门禁报出 12 处『units 的用例无人引用』。两个方向现在都由 tests/meta/check_contract_checker.py 用真实测试树验证互为补集，无匹配时返回空集而不是全集（否则一处拼写错误会让门禁去检查整棵树）。"
+      "detail": "**四个分区**，用例集合互不相交：`gate.contracts`（core，318 契约）、`gate.contracts.views`（views/model，19 契约）、`gate.contracts.views_qt`（views/qt + views/include，15 契约）、`gate.contracts.plugins`（plugins，21 契约）。views_qt 是本阶段新增的：测量面板的 `@tests` 落在 Qt 头文件里，而那道分区此前无人认领，一个新用例被改名或删掉时全套门禁仍然全绿。为此 `--headers` 改为可重复——视图层的头文件分布在 views/qt 与 views/include 两处，只给一个目录的调用看不见另一个目录里声明的契约，于是把那边认领的用例报成孤儿（`qt.views.shell.links_core_state` 就真的这样被误报过）。拼写不对称也一并修掉：`--only` 原先只比对相对路径而 `--exclude` 还比对绝对路径，于是 `--only tests/model` 静默匹配 0 个用例并报出 12 处无关孤儿。"
     },
     "gate_self_test": {
       "tool": "tests/meta/check_contract_checker.py",
@@ -73,7 +73,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 533,
+    "ctest_registered": 539,
     "compilers_green": [
       "gcc-15.2.0-i686",
       "msvc-19.51-x64"
@@ -222,7 +222,7 @@
       "path": "views",
       "layer": "consumer",
       "state": "implemented",
-      "note": "Qt 界面层，分两半，切分本身就是让这一层可测的关键。**views/model 是 Qt 无关的**：可枚举的节点类型目录、内置演示类型库、以及「哪个控件编辑这个端口」的判定规则。全是 core 类型上的普通 C++，因此由普通 Catch2 套件在**两个编译器**上覆盖——包括根本链不了 Qt 的 GCC 构建。**views/qt 才需要工具包**：画布与控件。判定规则刻意放在 Qt 无关的一半：它是最容易悄悄出错的地方（端口没声明范围却给了有界控件会静默拒掉合法值；文本类型给了数字框会在用户原来的路径处显示 0），而写在 QWidget 里的规则只能靠 Qt 测试夹具和事件循环去测。已实现：节点编辑器（QGraphicsScene，**渲染 Session 且自身不持图**——每次变更从 session.graph() 重建；位置写进 document 的 graph 槽位，因为坐标不是图的属性）、属性面板（无任何按类型分支，控件由端口的 connectable/has_range/choice 与 portui 描述决定）、以及把它们接在同一个 Session 上的 EditorWindow。Edges/nodes/status 全部读自 core，`reproducibility gaps` 直接来自 runtime/run。实测：qp_shell.exe 在 MSVC x64 + Qt 6.8.3 下启动并渲染（三节点两连线、属性面板、真实状态栏）。尚未做：搜索/对齐/撤销按钮等编辑便利功能；Qt Charts 按 ADR-0006 明确不用。"
+      "note": "Qt 界面层，分两半，切分本身就是让这一层可测的关键。**views/model 是 Qt 无关的**：节点类型目录、演示类型库、「哪个控件编辑这个端口」的判定规则，本阶段又加上**测量会话模型**。全是 core 类型上的普通 C++，因此由普通 Catch2 套件在**两个编译器**上覆盖——包括根本链不了 Qt 的 GCC 构建。**views/qt 才需要工具包**：画布、控件、以及本阶段新增的测量面板。本阶段的核心工作：让闭环可见。差异化卖点是「测量→记录→不确定度→报告」，而能被写错的部分是算术与簿记，不是布局，所以新增 views/model/measurement_model.hpp：它拥有一个 Dataset（读数）与一个 Trace（时间轴），并**借用**会话的 RunLedger（运行身份）。它守的一条规则是「**未知的不确定度不是零不确定度**」——三态（unknown/exact/standard）是分开的，把 unknown 折进 exact 是本模块可用的简化里破坏力最大的一种：它把「我们没测误差」变成「没有误差」，此后每次传播都产出一个自信的错数。因此 ReportLine 的每个统计量都是 optional：没有读数就没有均值，没有量化过不确定度就没有合成不确定度，而界面显示「combined unknown」而不是省略——省略的项读起来就是零。gaps() 用**能照着做的话**说出缺什么，面板逐字渲染它而不是改写。导出的可用性判定**委托**给 io 模块自己的 check_export，不形成第二意见，否则面板会提供一个随后失败的导出。**截图发现三处真实缺陷**（本阶段最有价值的部分）：（1）**两个 RunLedger**——窗口一个、测量模型一个，于是状态栏读一个、面板的缺口列表读另一个：状态栏写「reproducibility gaps: parameters, plugin versions」，三厘米外的面板写「no run recorded」。两者各自为真而这一对毫无用处——运行账本是**本次会话**发生过什么的记录，两份就是两段历史，正是 authoring 层存在的理由（一个会话、一张图、一条撤销栈）在上一层重现，所以修法是**借用**而不是同步。（2）**画布只画出一个节点**，而窗口自己的状态栏写着「nodes 3 | edges 2」：场景里三个都在、模型层每条断言都通过，而 centerOn 是在当前缩放比下把视口滚过场景，**比视口宽的图无论居中到哪里都会被裁掉**，default_position 又把节点排成每行四个、间距 168 单位，在 1280 宽窗口的画布上就是比视口宽。改为 fitInView + KeepAspectRatio，并补上 all_nodes_are_visible() 与它的**反例夹具**（未 framing 的画布必须报 false）——只有正例的谓词，一个恒返回 true 的实现也能通过。（3）**布局算术**——setSizes({200,680,340}) 要 1320 逻辑像素，而中央区域在右侧停靠面板占去 420 后只剩约 860，Qt 按**比例**而非绝对值兑现，于是每个面板只拿到请求的三分之二，画布（唯一真正需要宽度的面板）损失最大。修法是请求得比可用空间少。尚未做：搜索/对齐/撤销按钮等编辑便利功能；绘图（ADR-0006 明确不用 Qt Charts，改用 QCustomPlot(MIT) 或 QWT(LGPL)）。"
     },
     {
       "path": "plugins",

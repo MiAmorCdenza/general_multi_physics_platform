@@ -21,7 +21,8 @@
 add_library(qp_views_model STATIC
     type_catalog.cpp
     demo_library.cpp
-    editor_choice.cpp)
+    editor_choice.cpp
+    measurement_model.cpp)
 
 add_library(qp::views_model ALIAS qp_views_model)
 
@@ -31,6 +32,13 @@ target_include_directories(qp_views_model
         $<INSTALL_INTERFACE:include>)
 
 target_compile_features(qp_views_model PUBLIC cxx_std_20)
+
+# `runtime_store`, `runtime_trace`, `runtime_run` and `runtime_io` are here because the
+# measurement session is a view of them: readings live in a Dataset, the time axis in a
+# Trace, provenance in a RunLedger, and the export pre-flight is the io module's own check
+# rather than a second opinion about it. None of that needs Qt, which is the point -- the
+# arithmetic that can be wrong is asserted on both compilers.
 target_link_libraries(qp_views_model
     PUBLIC qp::graph_ir qp::ports qp::units qp::authoring_portui
+           qp::runtime_store qp::runtime_trace qp::runtime_run qp::runtime_io
     PRIVATE qp_warnings qp_sanitize)

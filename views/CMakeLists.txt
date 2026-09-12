@@ -65,6 +65,8 @@ add_library(qp_views STATIC
     qt/node_graph_view.hpp
     qt/property_panel.cpp
     qt/property_panel.hpp
+    qt/measurement_panel.cpp
+    qt/measurement_panel.hpp
     qt/editor_window.cpp
     qt/editor_window.hpp
     src/hello_view.cpp

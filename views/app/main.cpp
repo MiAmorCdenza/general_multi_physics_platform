@@ -23,7 +23,10 @@
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
     qp::views::EditorWindow window;
-    window.seed_demo_graph();
+    // The application decides to seed itself; the window does not. One call, so the graph and
+    // the measurement session cannot be seeded in the wrong order by a caller that only
+    // remembered one of them.
+    window.seed_demo();
     window.show();
     return QApplication::exec();
 }

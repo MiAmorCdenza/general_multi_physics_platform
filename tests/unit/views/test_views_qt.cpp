@@ -41,13 +41,16 @@
 #include <QApplication>
 
 #include <qp/graph/mutate/command.hpp>
+#include <qp/views/model/measurement_model.hpp>
 #include <qp/views/model/type_catalog.hpp>
 
 #include "editor_window.hpp"
+#include "measurement_panel.hpp"
 #include "node_graph_view.hpp"
 #include "property_panel.hpp"
 
 #include <string>
+#include <vector>
 
 namespace {
 
@@ -326,6 +329,203 @@ TEST_CASE("qt.views.properties.edit_goes_through_session", "[views][qt]") {
     const auto refused = session.apply(bad);
     REQUIRE_FALSE(refused.has_value());
 }
+
+namespace {
+
+/// @brief A ledger owned for the lifetime of the cases that need a borrowed one.
+///
+/// `MeasurementModel` borrows its ledger rather than owning it -- that is the fix for the window
+/// having two -- so a case that builds a model directly must own a ledger that outlives it.
+qp::runtime::RunLedger& window_ledger_for_test() {
+    static qp::runtime::RunLedger ledger;
+    return ledger;
+}
+
+/// @brief A measurement model over that ledger, for the panel cases.
+qp::views::model::MeasurementModel& window_measurements_for_test() {
+    static qp::views::model::MeasurementModel model{window_ledger_for_test(), "length",
+                                                   qp::units::dims::length};
+    return model;
+}
+
+}  // namespace
+TEST_CASE("qt.views.measurement.gaps_are_shown_verbatim", "[views][qt]") {
+    // The panel must render the model's gaps **as the model words them**. Re-wording them in the
+    // panel would mean two places decide what a gap says, and the one that is tested -- the
+    // model's, which the ordinary suite asserts on both compilers -- would be the one nobody
+    // reads. A student reading "uncertainty: N/A" learns something different from "no reading
+    // carries a quantified uncertainty, so the Type A and combined uncertainties are unknown
+    // rather than zero", and only the second one tells them what to go and do.
+    qp::views::model::MeasurementModel& model = window_measurements_for_test();
+    qp::views::MeasurementPanel panel(model);
+
+    // One line per gap, each prefixed with a dash and otherwise untouched.
+    const std::vector<std::string> gaps = model.gaps();
+    const QStringList shown = panel.gap_lines();
+    REQUIRE(shown.size() == static_cast<int>(gaps.size()));
+    for (std::size_t i = 0; i < gaps.size(); ++i) {
+        const QString expected = QStringLiteral("- ") + QString::fromStdString(gaps[i]);
+        REQUIRE(shown[static_cast<int>(i)] == expected);
+    }
+
+    // And an empty session shows exactly one gap -- that it is empty -- rather than a row of
+    // zeros. A zero mean over no readings is the fabrication this assertion exists to prevent.
+    REQUIRE(shown.size() == 1);
+    REQUIRE(shown[0].contains(QStringLiteral("no readings")));
+
+    // A reading makes the summary show a mean, and the panel shows the model's number.
+    model.add_reading(1.0, qp::runtime::UncertaintyKind::standard, 0.1);
+    model.add_reading(1.2, qp::runtime::UncertaintyKind::standard, 0.1);
+    panel.refresh();
+    const auto mean = model.report_line().mean;
+    REQUIRE(mean.has_value());
+    REQUIRE(panel.summary_text().contains(QString::number(mean.value(), 'g', 6)));
+
+    // With no quantified reading the combined figure is spelled out as unknown rather than
+    // omitted, because an omitted term reads as a term of zero.
+    qp::views::model::MeasurementModel plain_model{window_ledger_for_test(),
+                                                   "plain", qp::units::Dim{}};
+    qp::views::MeasurementPanel plain_panel(plain_model);
+    plain_model.add_reading(5.0);
+    plain_model.add_reading(5.1);
+    plain_panel.refresh();
+    REQUIRE(plain_panel.summary_text().contains(QStringLiteral("combined unknown")));
+}
+
+TEST_CASE("qt.views.canvas.unframed_view_reports_clipped", "[views][qt]") {
+    // The negative fixture for `all_nodes_are_visible`.
+    //
+    // Without this, an implementation that returned `true` unconditionally would pass the case
+    // above -- and that is not a hypothetical: the defect being guarded against was a view that
+    // *could not* show the graph while every model-level check said everything was fine. A
+    // predicate that agrees with the model is exactly the one that cannot see it.
+    //
+    // The setup is deterministic rather than a contrived scroll: a canvas that has never been
+    // framed sits at the default transform with its viewport at the scene origin, and a graph
+    // whose nodes start at (48, 48) and run past x = 600 cannot fit in a viewport narrower than
+    // that. No window manager, no timing, no pixel inspection.
+    qp::views::EditorWindow window;
+    window.seed_demo();
+    window.resize(1280, 720);
+
+    auto* canvas = window.findChild<qp::views::NodeGraphView*>();
+    REQUIRE(canvas != nullptr);
+
+    // The model is fine, which is the point: the two assertions below disagree, and only one of
+    // them is about what the user can see.
+    REQUIRE(canvas->items_match_graph());
+    REQUIRE(canvas->node_item_count() == 3);
+
+    // A view that has never been framed reports the graph as clipped. Note this is asserted
+    // **before** showing the window, so the deferred framing in `rebuild` has not run.
+    REQUIRE_FALSE(canvas->all_nodes_are_visible());
+
+    // And framing it -- which is what `rebuild` does once the viewport has a size -- makes the
+    // same predicate agree. Same object, same graph, different answer: the predicate measures the
+    // view rather than restating the model.
+    //
+    // The **viewport** is resized explicitly, not just the widget. `frame_graph` computes its
+    // scale from `viewport()->size()`, and a widget that has never been shown keeps a viewport of
+    // default size -- which is exactly why `rebuild` defers its framing to the next event-loop
+    // turn. Driving the viewport directly is what makes this case deterministic without a window
+    // manager, and without that the positive half silently does nothing while the negative half
+    // still passes.
+    canvas->resize(900, 600);
+    canvas->viewport()->resize(880, 560);
+    canvas->frame_graph();
+    REQUIRE(canvas->all_nodes_are_visible());
+}
+
+TEST_CASE("qt.views.canvas.whole_graph_is_visible", "[views][qt]") {
+    // The assertion that would have caught the framing defect directly.
+    //
+    // The running shell showed **one** node of three while its own status line reported
+    // "nodes 3 | edges 2". The scene held all three -- every model-level assertion in this file
+    // passed -- and the viewport could not show them, because `centerOn` scrolls a viewport over
+    // the scene at the current scale and the graph is wider than the canvas. Nothing about the
+    // model was wrong, which is exactly why no model-level test could see it.
+    //
+    // So this asserts the property that was actually violated: **every node is inside the
+    // visible area** after framing. It is a property of the view, which is why it belongs in the
+    // Qt suite rather than the ordinary one.
+    qp::views::EditorWindow window;
+    window.seed_demo();
+    window.resize(1280, 720);
+    window.show();
+
+    auto* canvas = window.findChild<qp::views::NodeGraphView*>();
+    REQUIRE(canvas != nullptr);
+
+    // Layout first: `fitInView` computes its scale from the viewport size, so a view that has
+    // not been laid out cannot answer this question. The window is shown and the event loop is
+    // given a turn, which is what the deferred framing in `rebuild` waits for.
+    QCoreApplication::processEvents();
+
+    // The model and the canvas agree, which is the claim the canvas exists to keep.
+    REQUIRE(canvas->items_match_graph());
+    REQUIRE(canvas->node_item_count() == 3);
+    REQUIRE(canvas->edge_item_count() == 2);
+
+    // And every node is inside the viewport. This is the assertion the screenshot replaced.
+    REQUIRE(canvas->all_nodes_are_visible());
+
+    window.close();
+}
+
+TEST_CASE("qt.views.measurement.one_ledger_per_session", "[views][qt]") {
+    // The defect this pins was found by looking at a screenshot of the running window.
+    //
+    // `MeasurementModel` used to own its own `RunLedger` while `EditorWindow` owned another, so
+    // the status line read one and the measurement panel's gap list read the other. The status
+    // line said "reproducibility gaps: parameters, plugin versions" and the panel, three
+    // centimetres to the right, said "no run recorded". Both were true about their own object
+    // and the pair was useless: a run ledger is the record of what happened in this session,
+    // and two of them means the session has two histories.
+    //
+    // It is the same two-sources-of-truth failure the `authoring` layer exists to prevent --
+    // one session, one graph, one undo stack -- reappearing one layer up, which is why the fix
+    // was to borrow rather than to synchronise. The assertion is on the **identity**, because
+    // an equality check would pass for a copy that happened to match.
+    qp::views::EditorWindow window;
+    REQUIRE(&window.measurements().ledger() == &window.ledger());
+
+    // A fresh window has no run, so both surfaces say so together.
+    REQUIRE(window.ledger().size() == 0);
+
+    window.seed_demo();
+
+    // After seeding, both see the same single run. One, not two: an earlier version of the seed
+    // recorded a run in each ledger, so the window's history was two entries long and its gap
+    // report described whichever happened to be second.
+    REQUIRE(window.ledger().size() == 1);
+    REQUIRE(window.measurements().ledger().size() == 1);
+
+    // And the run is the one the trace belongs to, which is the fact the ordering inside
+    // `seed_demo` exists to establish. The panel's gap list is the observable consequence: it
+    // must not claim there is no run while the ledger holds one.
+    const std::vector<std::string> gaps = window.measurements().gaps();
+    for (const std::string& g : gaps) {
+        REQUIRE(g.find("no run recorded") == std::string::npos);
+    }
+}
+
+TEST_CASE("qt.views.measurement.fresh_window_is_empty", "[views][qt]") {
+    // The same contract the graph half already had, asserted for the measurement half because
+    // the same mistake is available here: a constructor that seeds is a constructor that has
+    // decided something on the caller's behalf.
+    qp::views::EditorWindow window;
+    REQUIRE(window.session().graph().node_count() == 0);
+    REQUIRE(window.measurements().dataset().empty());
+    REQUIRE(window.measurements().trace().empty());
+    REQUIRE(window.measurements().ledger().size() == 0);
+
+    // The seed is opt-in, and it fills all three.
+    window.seed_demo();
+    REQUIRE(window.session().graph().node_count() == 3);
+    REQUIRE_FALSE(window.measurements().dataset().empty());
+    REQUIRE_FALSE(window.measurements().trace().empty());
+}
+
 
 int main(int argc, char** argv) {
     // A QApplication is required before any QWidget exists. Building it in main

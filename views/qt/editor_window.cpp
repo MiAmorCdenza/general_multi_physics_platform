@@ -5,12 +5,14 @@
 #include "editor_window.hpp"
 
 #include "node_graph_view.hpp"
+#include "measurement_panel.hpp"
 #include "property_panel.hpp"
 
 #include <qp/graph/mutate/command.hpp>
 
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QDockWidget>
 #include <QListWidget>
 #include <QSplitter>
 #include <QStatusBar>
@@ -22,6 +24,17 @@
 #include <string>
 
 namespace qp::views {
+namespace {
+
+/// @brief Initial width of the measurement dock, in logical pixels.
+///
+/// Wide enough for the readings table's four columns at QFont's default size, and no wider: the
+/// canvas is the panel that cannot do its job without width, and a dock that takes more than it
+/// needs takes it from the canvas.
+constexpr int kDockWidth = 320;
+
+}  // namespace
+
 namespace {
 
 /// @brief An error code as text, for the status line.
@@ -91,18 +104,41 @@ EditorWindow::EditorWindow(QWidget* parent) : QMainWindow(parent) {
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
     splitter->setStretchFactor(2, 0);
-    // Explicit widths, applied once the window has been laid out. `setSizes`
-    // called during construction is immediately overwritten when the splitter is
-    // first resized to fit the window, which is how the property panel ended up
-    // with no width at all -- and a panel that is not visible reads as a missing
-    // feature rather than as a layout problem.
-    QTimer::singleShot(0, this, [splitter] { splitter->setSizes({200, 680, 340}); });
+    // Explicit widths, applied once the window has been laid out. `setSizes` called during
+    // construction is immediately overwritten when the splitter is first resized to fit the
+    // window, which is how the property panel ended up with no width at all -- and a panel that
+    // is not visible reads as a missing feature rather than as a layout problem.
+    //
+    // The numbers are chosen to **fit**, and that is a correction rather than a preference. The
+    // previous request was `{200, 680, 340}`: 1320 logical pixels. The central widget is about
+    // 860 of the window's 1280 once the right-side measurement dock takes its share, and Qt
+    // honours a splitter's ratios rather than its absolute sizes -- so every panel came out at
+    // roughly two thirds of what it asked for. The canvas, which is the one panel that needs
+    // width, lost the most: it was left a narrow strip, and `fitInView` then shrank three nodes
+    // until their labels could not be read. Asking for less than is available is the fix;
+    // asking for more and being scaled is the bug.
+    QTimer::singleShot(0, this, [splitter] { splitter->setSizes({170, 430, 260}); });
 
     auto* central = new QWidget(this);
     auto* layout = new QVBoxLayout(central);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(splitter);
     setCentralWidget(central);
+
+    measurements_panel_ = new MeasurementPanel(measurements_, this);
+    auto* dock = new QDockWidget(tr("Measurement"), this);
+    dock->setWidget(measurements_panel_);
+    // Not closable and not floatable. The panel is the reporting half of the loop the
+    // platform exists for, and a window that can hide it can present a measurement session
+    // with no uncertainty visible -- which is precisely the artefact being replaced.
+    dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
+    addDockWidget(Qt::RightDockWidgetArea, dock);
+    // An explicit width, applied after the first layout pass. A table of readings has no opinion
+    // about how wide it should be, and letting `sizeHint` decide is how the dock took 420 of the
+    // window's 1280 while the canvas had 185 and could not show the graph it was drawing.
+    QTimer::singleShot(0, this, [this, dock] {
+        resizeDocks({dock}, {kDockWidth}, Qt::Horizontal);
+    });
 
     status_ = new QLabel(this);
     statusBar()->addWidget(status_);
@@ -123,6 +159,13 @@ EditorWindow::EditorWindow(QWidget* parent) : QMainWindow(parent) {
 
     refresh_status();
     resize(1280, 720);
+}
+
+void EditorWindow::seed_demo() {
+    // Order is the whole content of this function. See the header.
+    seed_demo_graph();
+    seed_demo_measurement();
+    refresh_status();
 }
 
 EditorWindow::~EditorWindow() = default;
@@ -179,6 +222,23 @@ void EditorWindow::seed_demo_graph() {
     connect_ports(model, scope);
 
     // A run, so the status line reports something real rather than a placeholder.
+    //
+    // ## This record is deliberately incomplete, and that is the honest choice
+    //
+    // The window pins what it genuinely knows: the seed, the graph version, the toolchain, the
+    // optimisation level and the time. It does **not** pin the parameter set or the plugin
+    // versions, because it has neither -- this build loads no plugins, and no parameter set has
+    // been chosen to record.
+    //
+    // The alternative is to write plausible values into the empty fields so the status line
+    // reads "reproducibility gaps: none". That would be a lie of exactly the kind the run ledger
+    // exists to prevent. A record that **claims** reproducibility while missing its inputs is
+    // worse than one that admits the gap: the first sends a student hunting for the discrepancy
+    // inside their own physics, while the second tells them to re-run on the same machine.
+    //
+    // So the gap list is a to-do list for whoever deploys this, not a defect. A build with
+    // plugins loaded drops `plugin_versions` from it; a course that pins its compiler drops
+    // `toolchain`. Nothing here should be made to disappear by editing this function.
     qp::runtime::RunSpec spec;
     spec.seed = 20260911;
     spec.graph_version = session_.graph().version();
@@ -230,6 +290,40 @@ void EditorWindow::build_palette() {
     // Reserved for when the palette becomes a view of its own; the constructor
     // currently fills it inline. Present so the intent is recorded rather than the
     // filling being scattered.
+}
+
+void EditorWindow::seed_demo_measurement() {
+    namespace rt = qp::runtime;
+    using rt::UncertaintyKind;
+
+    // A repeat measurement of one length, in metres. The two quantified readings carry the
+    // scale's resolution as their uncertainty; the third is a reading whose error nobody
+    // worked out -- the normal state of a lab notebook, and the case the panel must not
+    // round to zero.
+    measurements_.add_reading(0.0241, UncertaintyKind::standard, 0.0005);
+    measurements_.add_reading(0.0238, UncertaintyKind::standard, 0.0005);
+    measurements_.add_reading(0.0243, UncertaintyKind::unknown);
+
+    // A short trace as well, so the time axis is exercised rather than merely present. A
+    // decaying oscillation at the scale's resolution: the shape a student would recognise,
+    // and the reason a sample carries an uncertain value rather than a bare double.
+    (void)measurements_.add_channel("displacement", qp::units::dims::length);
+    for (int i = 0; i < 200; ++i) {
+        const double t = 0.01 * static_cast<double>(i);
+        const double x = 0.02 * std::exp(-0.8 * t) * std::cos(12.0 * t);
+        (void)measurements_.add_sample(t, std::vector<double>{x}, 0.0005);
+    }
+
+    // No run is recorded here. `seed_demo_graph` already recorded one, and a second record
+    // describing nothing would make the ledger's own report describe neither -- its counts
+    // and its gap list are about **the last run**, so a second record means the run being
+    // described is whichever happened to be second.
+    //
+    // The trace above therefore belongs to the run `seed_demo_graph` opened. That is the
+    // honest arrangement rather than a shortcut: a trace is the record of one run, and this
+    // window's is the one it already started.
+
+    measurements_panel_->refresh();
 }
 
 }  // namespace qp::views

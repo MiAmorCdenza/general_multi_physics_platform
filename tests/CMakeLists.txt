@@ -74,12 +74,37 @@ if(Python3_Interpreter_FOUND)
                 ${CMAKE_SOURCE_DIR}/scripts/check_contracts.py
                 --headers ${CMAKE_SOURCE_DIR}/views/model
                 --tests   ${CMAKE_SOURCE_DIR}/tests
-                --exclude unit/views
                 --only    model
                 --quiet)
     set_tests_properties(gate.contracts.views PROPERTIES
         LABELS "gate"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+    # The Qt half of the view layer, as a fourth partition.
+    #
+    # Registered **unconditionally**, like the plugin gate and unlike the Qt test target: a
+    # header that exists in the source tree but is not compiled in this configuration is exactly
+    # the one whose contract drifts, and checking its comments costs nothing while compiling it
+    # costs a toolkit. Without this, the measurement panel's `@tests` ids are claimed by nobody
+    # and the `gaps_are_shown_verbatim` case could be renamed or deleted with the gate still
+    # green.
+    #
+    # `--only unit/views` is what makes it a partition rather than an overlap: test ownership is
+    # judged globally, so this invocation must see exactly the Qt-side cases and the other three
+    # must not.
+    if(EXISTS ${CMAKE_SOURCE_DIR}/views/qt)
+        add_test(NAME gate.contracts.views_qt
+            COMMAND ${Python3_EXECUTABLE}
+                    ${CMAKE_SOURCE_DIR}/scripts/check_contracts.py
+                    --headers ${CMAKE_SOURCE_DIR}/views/qt
+                    --headers ${CMAKE_SOURCE_DIR}/views/include
+                    --tests   ${CMAKE_SOURCE_DIR}/tests
+                    --only    unit/views
+                    --quiet)
+        set_tests_properties(gate.contracts.views_qt PROPERTIES
+            LABELS "gate"
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+    endif()
 
     # The third partition: plugin content.
     #
@@ -499,7 +524,8 @@ qp_add_test(qp_test_runtime_io
 if(TARGET qp::views_model)
     qp_add_test(qp_test_views_model
         SOURCES model/test_views_model.cpp
-        LIBS qp::views_model)
+                model/test_measurement_model.cpp
+        LIBS qp::views_model qp::runtime_io qp::runtime_store qp::runtime_trace qp::runtime_run)
 endif()
 
 # The Qt half of the view layer is tested only when Qt is in the build. Guarded

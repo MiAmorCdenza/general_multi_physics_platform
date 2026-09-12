@@ -1,0 +1,416 @@
+/**
+ * @file measurement_model.hpp
+ * @brief The closed loop as a **model**: readings in, uncertainty and a report out.
+ *
+ * ## Why this is not written in the QWidget
+ *
+ * The differentiation the whole platform rests on is "measure, record, quantify the
+ * uncertainty, report it", and the part of that which can be **wrong** is arithmetic and
+ * bookkeeping, not layout. A rule like "a series with no quantified uncertainty cannot
+ * claim a standard error" is the kind of thing that is quietly wrong for a year if it lives
+ * inside a Qt slot, because testing it costs a QApplication and an event loop and so nobody
+ * does.
+ *
+ * So this file is ordinary C++ over `runtime/store`, `runtime/trace` and `runtime/run`, and
+ * it is asserted by the ordinary Catch2 suite on **both** compilers -- including the GCC
+ * build, which cannot link Qt at all. `views/qt/measurement_panel` is then thin: it renders
+ * what this says and calls the methods below.
+ *
+ * ## The one rule this model enforces
+ *
+ * **Unknown uncertainty is not zero uncertainty.** `store::UncertaintyKind` has three
+ * states because a real lab has three: `unknown` (nobody quantified the error), `exact` (a
+ * counted or defined quantity, where u = 0 is a true statement), and `standard` (a
+ * quantified standard uncertainty). Collapsing `unknown` into `exact` is the most damaging
+ * simplification available: it turns "we did not measure the error" into "there is no
+ * error", and every propagation afterwards produces a confidently wrong number.
+ *
+ * So a standard error is reported only when the readings actually carry uncertainty, and
+ * when they do not, the model **says so** rather than printing a plausible figure. The
+ * report's gaps section exists for the same reason: a report that claims reproducibility
+ * while the run ledger is missing its toolchain sends the student looking for the
+ * discrepancy in their own physics.
+ *
+ * @ownership   owns
+ * @thread      ui (a view calls in; nothing here spawns a thread)
+ * @pre         none
+ * @post        none
+ * @invariant   `dataset()` and `trace()` are the only sources of the reported numbers
+ * @errors      See each declaration
+ * @complexity  --
+ * @nondet      none
+ * @frozen      no
+ * @tests       measurement.model.add_and_retake, measurement.model.unknown_is_not_zero,
+ *              measurement.model.report_names_its_gaps
+ */
+#pragma once
+
+#include <qp/runtime/io/io.hpp>
+#include <qp/runtime/run/run.hpp>
+#include <qp/runtime/store/store.hpp>
+#include <qp/runtime/trace/trace.hpp>
+
+#include <cstddef>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace qp::views::model {
+
+/**
+ * @brief What the report says about one quantity, with the gaps left visible.
+ *
+ * A struct rather than a formatted string because the panel needs the parts: a table of
+ * numbers and a list of warnings are different widgets, and a caller that had to parse a
+ * sentence to find out whether the uncertainty was known would be a caller that eventually
+ * guesses wrong.
+ *
+ * @ownership   owns
+ * @thread      ui
+ * @pre         none
+ * @post        none
+ * @invariant   A field is empty exactly when the corresponding quantity is unknown
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       measurement.model.unknown_is_not_zero, measurement.model.report_names_its_gaps
+ */
+struct ReportLine final {
+    /// What was measured, as the dataset names it.
+    std::string quantity{};
+    /// Number of readings, rejected ones excluded.
+    std::size_t count = 0;
+    /// Number of readings whose uncertainty was rejected as unusable, if any.
+    std::size_t rejected = 0;
+    /// How many of the live readings carry a **quantified** uncertainty.
+    std::size_t quantified = 0;
+    /// The mean, absent when there are no live readings.
+    std::optional<double> mean{};
+    /// The sample standard deviation, absent when fewer than two readings are live.
+    std::optional<double> sample_stddev{};
+    /// The standard error of the mean, absent when fewer than two readings are live.
+    std::optional<double> standard_error{};
+    /// The combined standard uncertainty from the readings' own uncertainties, absent when
+    /// **none** of them carry one. Its absence is the difference between "we did not
+    /// measure the error" and "the error is zero".
+    std::optional<double> combined_uncertainty{};
+};
+
+/**
+ * @brief The measurement session: one dataset, one trace, one run ledger.
+ *
+ * @ownership   owns
+ * @thread      ui
+ * @pre         none
+ * @post        none
+ * @invariant   The dataset's dimension is fixed at construction and never changes
+ * @errors      See each declaration
+ * @frozen      no
+ * @tests       measurement.model.add_and_retake
+ */
+class MeasurementModel final {
+public:
+    /**
+     * @brief A session measuring one quantity.
+     *
+     * @param quantity Human-readable name, shown as the table's caption.
+     * @param dim      The dimension every reading must have. Fixed here rather than per
+     *                 reading so that a series cannot mix metres with seconds, which is the
+     *                 mistake a hand-kept spreadsheet makes and no one notices until the
+     *                 mean is meaningless.
+     *
+     * @param ledger   The session's run ledger, **borrowed**, not copied.
+     *
+     *                 An earlier version owned its own, and the window then had two: the status
+     *                 line read one and this model's gap list the other, so the two disagreed
+     *                 on screen about how many runs the session had. That is the
+     *                 two-sources-of-truth failure the `authoring` layer exists to prevent,
+     *                 one layer up, and borrowing is the fix -- the ledger is the window's and
+     *                 this model is a view of it.
+     * @param run      The run these readings belong to, when one has been started. A trace is
+     *                 the record of *one* run, so it cannot exist without an identity: samples
+     *                 with no run attached are the artefact the platform exists to replace,
+     *                 because a number in a report cannot then be traced to the configuration
+     *                 that produced it.
+     *
+     * @ownership   observes `ledger`
+     * @thread      ui
+     * @pre         `ledger` outlives this model
+     * @post        `dataset().name() == quantity` and the dataset is empty
+     * @invariant   The dimension never changes afterwards
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.add_and_retake
+     */
+    explicit MeasurementModel(qp::runtime::RunLedger& ledger, std::string quantity,
+                              qp::units::Dim dim = {}, qp::runtime::RunId run = {});
+
+    /// @brief The readings, in the order they were taken.
+    ///
+    /// @ownership   borrows from this object
+    /// @thread      ui
+    /// @pre         none
+    /// @post        none
+    /// @invariant   Returned reference is stable until the next mutation
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       measurement.model.add_and_retake
+    [[nodiscard]] const qp::runtime::Dataset& dataset() const noexcept { return dataset_; }
+
+    /// @brief The time series recorded alongside the readings.
+    ///
+    /// @ownership   borrows from this object
+    /// @thread      ui
+    /// @pre         none
+    /// @post        none
+    /// @invariant   Returned reference is stable until the next mutation
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       measurement.model.trace_is_separate_from_readings
+    [[nodiscard]] const qp::runtime::Trace& trace() const noexcept { return trace_; }
+
+    /// @brief The runs recorded in this session, for the reproducibility line.
+    ///
+    /// @ownership   borrows from this object
+    /// @thread      ui
+    /// @pre         none
+    /// @post        none
+    /// @invariant   Returned reference is stable until the next mutation
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       measurement.model.report_names_its_gaps
+    [[nodiscard]] const qp::runtime::RunLedger& ledger() const noexcept { return ledger_; }
+
+    /**
+     * @brief Records one reading.
+     *
+     * @param value  The measured value, in the dataset's dimension.
+     * @param kind   How its uncertainty is known. `unknown` is a first-class answer and is
+     *               **not** the same as `exact`.
+     * @param u      The standard uncertainty. Ignored unless `kind` is `standard`, because
+     *               storing it otherwise would put a number in a field that means "we
+     *               quantified this".
+     *
+     * @ownership   value
+     * @thread      ui
+     * @pre         none
+     * @post        The dataset grows by one live reading
+     * @invariant   The reading's dimension is the dataset's, whatever the caller passed
+     * @errors      noexcept
+     * @complexity  O(1) amortized
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.add_and_retake
+     */
+    void add_reading(double value,
+                     qp::runtime::UncertaintyKind kind = qp::runtime::UncertaintyKind::unknown,
+                     double u = 0.0);
+
+    /**
+     * @brief Marks a reading as rejected, or reports that it could not be.
+     *
+     * Rejection is not deletion, and the distinction is the reason `Dataset` has the
+     * operation at all: a reading that was taken and then discarded for a stated reason is
+     * part of the record, and a student who can make one vanish has a way to reach the
+     * answer they expected. The count stays visible in the report either way.
+     *
+     * @param index Index into `dataset().readings()`.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         none
+     * @post        On success the reading is excluded from every statistic
+     * @invariant   The reading remains in the dataset, marked
+     * @errors      Returns `out_of_range` for an index past the end
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.add_and_retake
+     */
+    [[nodiscard]] diag::Result<void> reject(std::size_t index);
+
+    /**
+     * @brief Puts a rejected reading back.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         none
+     * @post        On success the reading counts again
+     * @invariant   Restoring a live reading succeeds and changes nothing
+     * @errors      Returns `out_of_range` for an index past the end
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.add_and_retake
+     */
+    [[nodiscard]] diag::Result<void> restore(std::size_t index);
+
+    /**
+     * @brief Appends one sample to the trace.
+     *
+     * @param t      Simulation or wall time of the sample, non-decreasing.
+     * @param values One **uncertain** value per registered channel.
+     *
+     * A sample carries `UncertainValue` rather than `double` because the time axis is a
+     * measurement too: a sampled signal has an error bar, and a trace of bare doubles would
+     * make the platform's central claim false for every number it plots. That the trace
+     * module depends on `store` for the type is the same decision one layer up.
+     *
+     * @ownership   value
+     * @thread      ui
+     * @pre         `values.size()` equals the trace's channel count
+     * @post        On success the trace grows by one sample
+     * @invariant   An out-of-order time is refused rather than reordered, because
+     *              reordering would renumber the samples already recorded
+     * @errors      Propagates the trace's refusal codes; may allocate,
+     *              and allocation failure terminates
+     * @complexity  O(channels)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.trace_is_separate_from_readings
+     */
+    [[nodiscard]] diag::Result<void> add_sample(double t,
+                                                std::vector<qp::runtime::UncertainValue> values);
+
+    /// @brief Appends one sample whose channels are all plain measured values.
+    ///
+    /// A convenience for the common case -- a simulation step producing one number per
+    /// channel, with no per-channel uncertainty -- built on the overload above rather than
+    /// a second code path.
+    ///
+    /// @ownership   copies
+    /// @thread      ui
+    /// @pre         `values.size()` equals the trace's channel count
+    /// @post        Equivalent to `add_sample(t, ...)` with each value marked measured
+    /// @invariant   Identical refusal codes to the overload above
+    /// @errors      Propagates the trace's refusal codes
+    /// @complexity  O(channels)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       measurement.model.trace_is_separate_from_readings
+    [[nodiscard]] diag::Result<void> add_sample(double t, const std::vector<double>& values,
+                                                double uncertainty = 0.0);
+
+    /**
+     * @brief Declares a trace channel. Call before the first sample.
+     *
+     * @ownership   value
+     * @thread      ui
+     * @pre         none
+     * @post        On success the channel exists and later samples must supply its value
+     * @invariant   Names are unique within the trace
+     * @errors      Propagates the trace's refusal codes; may allocate,
+     *              and allocation failure terminates
+     * @complexity  O(1) amortized
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.trace_is_separate_from_readings
+     */
+    [[nodiscard]] diag::Result<std::size_t> add_channel(std::string name, qp::units::Dim dim);
+
+    /// @brief Starts a run in the ledger and returns its id.
+    ///
+    /// Goes through `RunLedger::begin` rather than accepting a finished `RunRecord` for two
+    /// reasons. The ledger issues the id, and a caller that supplied its own could collide
+    /// with one already issued. And a run is **started** before it produces anything: the
+    /// samples that follow belong to it, and the model needs the id at that moment to give
+    /// its trace an identity.
+    ///
+    /// @ownership   copies
+    /// @thread      ui
+    /// @pre         none
+    /// @post        The returned id is greater than every previously issued one
+    /// @invariant   The record is stored as given; this model never edits a run's claims
+    /// @errors      noexcept
+    /// @complexity  O(spec)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       measurement.model.report_names_its_gaps
+    qp::runtime::RunId begin_run(qp::runtime::RunSpec spec);
+
+    /**
+     * @brief Summarises the current dataset.
+     *
+     * Total, and it never throws: a session with no readings produces a line whose optional
+     * fields are all empty, which the panel renders as an empty row rather than as zeros.
+     * A zero mean over no readings is a fabrication, and it is the one a rushed
+     * implementation produces.
+     *
+     * @ownership   owns the result
+     * @thread      ui
+     * @pre         none
+     * @post        `line.count == dataset().valid_count()`
+     * @invariant   `line.combined_uncertainty` has a value only when `line.quantified > 0`
+     * @errors      May allocate; allocation failure terminates, as elsewhere in this project
+     * @complexity  O(n) in the reading count
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.unknown_is_not_zero
+     */
+    [[nodiscard]] ReportLine report_line() const;
+
+    /**
+     * @brief The gaps a reader must be told about, in the order they should be told.
+     *
+     * Empty means the session is complete enough to report as it stands. Anything in the
+     * list is a statement about **what is missing**, phrased so the reader can act on it:
+     * "no reading carries a quantified uncertainty" rather than "uncertainty: N/A".
+     *
+     * The distinction matters more than it looks. A report that is silent about a gap is
+     * claiming there is no gap, and a student whose write-up is graded on uncertainty
+     * analysis needs to know whether their error bars are real before they submit it.
+     *
+     * @ownership   owns the result
+     * @thread      ui
+     * @pre         none
+     * @post        Empty exactly when no gap applies
+     * @invariant   Every entry names a concrete absence
+     * @errors      May allocate; allocation failure terminates, as elsewhere in this project
+     * @complexity  O(n) in the reading count plus the ledger size
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.report_names_its_gaps
+     */
+    [[nodiscard]] std::vector<std::string> gaps() const;
+
+    /**
+     * @brief Whether a format can carry this session, and why not when it cannot.
+     *
+     * Delegates to the io module's pre-flight check rather than re-deriving the answer: the
+     * refusal must be the **same** refusal the exporter would give, or the panel will offer
+     * an export that then fails. This is the "the user can see the limitation" side of the
+     * io module's contract, made visible one layer up.
+     *
+     * @param format The exporter to test. It is an `IExporter` rather than a `FormatDesc`
+     *               because the io module's check takes the exporter -- the answer depends on
+     *               what the implementation can actually write, and a description is a claim
+     *               about that rather than a substitute for it.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         none
+     * @post        Indicates `ok` exactly when `check_export` would
+     * @invariant   Agrees with `check_export` for every exporter and session
+     * @errors      noexcept
+     * @complexity  O(channels)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.export_refusal_matches_the_exporter
+     */
+    [[nodiscard]] qp::runtime::ExportRefusal export_readiness(
+        const qp::runtime::IExporter& format) const;
+
+private:
+    qp::runtime::RunLedger& ledger_;
+    qp::runtime::Dataset dataset_;
+    qp::runtime::Trace trace_;
+};
+
+}  // namespace qp::views::model
