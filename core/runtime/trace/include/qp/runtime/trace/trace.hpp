@@ -58,7 +58,7 @@
  * @frozen      no
  * @tests       trace.sample.index_and_time_are_separate,
  *              trace.trace.append_is_ordered, trace.trace.rejects_time_travel,
- *              trace.trace.cursor_navigation
+ *              trace.trace.cursor_navigation, trace.trace.a_copy_is_a_snapshot
  */
 #pragma once
 

@@ -20,6 +20,8 @@
 
 #include <qp/runtime/trace.hpp>
 
+#include <qp/units/dimensions.hpp>
+
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -214,6 +216,46 @@ TEST_CASE("trace.trace.rejects_time_travel", "[trace]") {
 // Reading and walking
 // ===========================================================================
 
+TEST_CASE("trace.trace.a_copy_is_a_snapshot", "[trace]") {
+    // Why `runtime/trace` has no separate snapshot type. The two needs that would ask for one are already met:
+    //
+    //   - **keeping a trace that would otherwise be replaced** -- the run controller returns its trace by
+    //     value, and a trace is a value, so a caller that wants the previous one keeps it. Asserted here, so
+    //     the decision rests on a property the codebase checks rather than on a reading of the code;
+    //   - **recording where a reading came from** -- that is provenance (a run id and a sample index), which is
+    //     data *about* a trace rather than a copy of it, and `Sample::index` exists to carry exactly that.
+    //
+    // What would need a real snapshot is a frozen sub-range for a range export, or a shared view with
+    // copy-on-write for a large trace. Neither has a caller today, and a mechanism without a consumer is the
+    // mistake this project has recorded more than once -- so the decision is written in `docs/plan-tree.md`
+    // with the conditions that would reopen it.
+    Trace original{RunId{7}};
+    REQUIRE(original.add_channel(Channel{"x", qp::units::dims::length}).has_value());
+    REQUIRE(original.append(0.0, {UncertainValue::measured(1.0, 0.1, qp::units::dims::length)})
+                .has_value());
+
+    const Trace kept = original;   // the copy a view or a report would hold
+
+    // The original moves on; the copy does not. This is the property that makes a copy usable as a snapshot.
+    REQUIRE(original.append(0.01, {UncertainValue::measured(1.1, 0.1, qp::units::dims::length)})
+                .has_value());
+    REQUIRE(original.size() == 2);
+    REQUIRE(kept.size() == 1);
+    REQUIRE(kept.samples().back().values[0].value == 1.0);
+    REQUIRE(kept.run() == original.run());
+    REQUIRE(kept.channel_count() == original.channel_count());
+
+    // A cursor is a *view* of one trace, so it is deliberately not copyable-as-a-snapshot: it points at the
+    // trace it was made from, and the copy above is what keeps the data alive.
+    Cursor cursor{kept};
+    REQUIRE(cursor.valid());
+    REQUIRE(cursor.current()->values[0].value == 1.0);
+    // One sample in the copy, so the cursor has nowhere to go: a cursor over a shared buffer would have walked
+    // into the original's second sample and reported a reading the copy does not hold.
+    REQUIRE_FALSE(cursor.has_next());
+    REQUIRE_FALSE(cursor.next());
+    REQUIRE(cursor.index() == 0);
+}
 TEST_CASE("trace.trace.cursor_navigation", "[trace]") {
     Trace trace = one_channel();
     for (int i = 0; i < 4; ++i) {

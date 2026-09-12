@@ -198,6 +198,15 @@ def main() -> int:
               f"违规 {rules or '无'}（期望 ['D2']）")
         if not ok:
             failures.append(f"collect() 扫描 {scanned} 个文件、违规 {rules}，期望 3 / ['D2']")
+            # A scan of 0 out of a fixture that was just written is not a rule failure -- it means the walk
+            # did not see the files at all, and the cause is outside this file (a temp directory the walk
+            # skipped, a filesystem that did not show the writes yet, something deleting them underneath).
+            # Observed twice and not reproducible; the listing is what makes the next occurrence diagnosable
+            # instead of mysterious, which is the difference between a flaky gate and a known one.
+            if scanned == 0:
+                listing = sorted(str(q.relative_to(root)) for q in root.rglob("*"))
+                failures.append("  fixture listing at scan time: " + ", ".join(listing))
+                failures.append(f"  fixture root: {root}")
 
     if failures:
         print("\n方言门禁自检失败：", file=sys.stderr)
