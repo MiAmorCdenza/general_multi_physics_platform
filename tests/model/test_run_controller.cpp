@@ -34,7 +34,7 @@
 #include <qp/views/model/run_controller.hpp>
 
 #include <qp/views/model/demo_library.hpp>
-#include <qp/views/model/type_catalog.hpp>
+#include <qp/graph/ir/node_type_registry.hpp>
 
 #include <qp/plugins/mechanics/mechanics_binder.hpp>
 
@@ -109,12 +109,12 @@ public:
 
 private:
     qp::authoring::Session session_{};
-    qp::views::TypeCatalog catalog_{};
+    qp::graph::NodeTypeRegistry catalog_{};
     qp::graph::NodeId node_{};
     /// Registers the demonstrator types, so `graph/validate` has something to check the fixture's node against
     /// rather than reporting an unknown type for every case.
     struct Register {
-        explicit Register(qp::views::TypeCatalog& c) { (void)qp::views::register_demo_library(c); }
+        explicit Register(qp::graph::NodeTypeRegistry& c) { (void)qp::views::register_demo_library(c); }
     };
     Register registered_{catalog_};
 };
@@ -251,7 +251,7 @@ TEST_CASE("run.controller.reports_validation_without_refusing", "[run]") {
 
     // A catalog that knows nothing: every node in the graph is an unknown type, which is a validation error and
     // is still runnable, because the binder claims the type regardless of what the catalog says.
-    qp::views::TypeCatalog empty_catalog{};
+    qp::graph::NodeTypeRegistry empty_catalog{};
     const qp::graph::ResolveContext blind{&empty_catalog, &qp::ports::builtin_registry()};
 
     RunController controller{fixture.session(), binders(), blind};

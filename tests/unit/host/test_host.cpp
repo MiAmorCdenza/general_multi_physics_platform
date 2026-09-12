@@ -307,6 +307,44 @@ TEST_CASE("host.mounts_a_dependent_after_its_dependency", "[host]") {
     CHECK(h.formats().size() == 0);
 }
 
+TEST_CASE("host.a_builtin_type_is_attributed_and_removable", "[host]") {
+    // A built-in is this build's own content: the editor's demonstrator types. It goes through the same record a
+    // plugin's contribution does, which is what makes `origin_of` able to answer for it and `unload` able to
+    // take it back -- a second registration path would be the one hole in the record.
+    host::PluginHost h{kGrant};
+
+    qp::graph::NodeDesc builtin;
+    builtin.type_name = "builtin.demo";
+    builtin.label = "Built-in Demo";
+    builtin.category = "fixture";
+    REQUIRE(h.add_builtin_node_type(builtin) == diag::ErrorCode::ok);
+    CHECK(catalog_has(h, "builtin.demo"));
+    CHECK(h.origin_of("builtin.demo") == host::PluginHost::kBuiltinOrigin);
+
+    // Not a plugin: it has no manifest, no library and no capability declaration, so listing it among the
+    // mounted plugins would answer a question nobody asked.
+    CHECK(h.mounted_ids().empty());
+    CHECK(h.capabilities().size() == 0);
+
+    // A plugin's type and a built-in's are attributed to different origins, which is the whole reason the
+    // built-in path exists rather than the window registering into the registry directly.
+    REQUIRE(h.load(QP_HOST_FIXTURE_content).ok());
+    CHECK(h.origin_of(kNodeType) == kContentId);
+    CHECK(h.origin_of("builtin.demo") == host::PluginHost::kBuiltinOrigin);
+
+    // A duplicate is refused by the same rule a plugin's duplicate meets, because it is the same registry.
+    qp::graph::NodeDesc clash;
+    clash.type_name = "builtin.demo";
+    CHECK(h.add_builtin_node_type(clash) == diag::ErrorCode::duplicate_connection);
+
+    h.clear_builtin_node_types();
+    CHECK_FALSE(catalog_has(h, "builtin.demo"));
+    CHECK(h.origin_of("builtin.demo").empty());
+    // And only the built-ins: clearing them must not touch a plugin's contributions.
+    CHECK(catalog_has(h, kNodeType));
+    CHECK(contains(h.mounted_ids(), kContentId));
+}
+
 TEST_CASE("host.scanning_a_directory_mounts_what_it_can_and_reports_the_rest", "[host]") {
     const test::TempDir tmp{"qp_host_scan"};
 

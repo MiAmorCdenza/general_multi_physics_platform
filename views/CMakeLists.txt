@@ -84,9 +84,14 @@ target_include_directories(qp_views
         $<INSTALL_INTERFACE:include>)
 
 target_compile_features(qp_views PUBLIC cxx_std_20)
+# `qp::host` is here because the window borrows the composition root: the catalog a content plugin registers
+# into is the host's, and a window that owned its own would be the second answer to "which types exist" that
+# this layer already had to remove once. Linking it into the view library rather than only into the shell is
+# what lets `tests/unit/views/` construct a window at all.
 target_link_libraries(qp_views
     PUBLIC Qt6::Widgets
            qp::views_model
+           qp::host
            qp::authoring_commands qp::authoring_document qp::authoring_capability
            qp::runtime_run qp::runtime_store
            qp::graph_kernels qp::field
@@ -99,7 +104,11 @@ add_executable(qp_shell
     app/main.cpp)
 
 target_include_directories(qp_shell PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/qt)
-target_link_libraries(qp_shell PRIVATE qp::views)
+# `qp::host` is the composition root, and the shell is the one caller that is allowed to know it: the host
+# owns the node catalog that content plugins register into, and the window borrows that catalog. Linking it
+# here rather than into `qp_views` is the dependency direction -- a window that linked the host would be a
+# window that could load plugins by itself, which is not a decision a widget should be able to make.
+target_link_libraries(qp_shell PRIVATE qp::views qp::host)
 
 # The application is where plugin knowledge belongs, and the macro is how it knows whether there is
 # any. Defined here rather than in a header so the window cannot accidentally depend on it: `views`

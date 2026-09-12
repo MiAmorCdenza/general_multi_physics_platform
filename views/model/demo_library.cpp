@@ -84,7 +84,8 @@ void bound(PortDesc& p, double low, double high, double step) {
 
 }  // namespace
 
-qp::diag::Result<void> register_demo_library(TypeCatalog& catalog) noexcept {
+std::vector<NodeDesc> demo_library() {
+    std::vector<NodeDesc> types;
     // ---- A source: no inputs, one output -----------------------------------
     {
         NodeDesc d;
@@ -105,7 +106,7 @@ qp::diag::Result<void> register_demo_library(TypeCatalog& catalog) noexcept {
         PortDesc frequency = parameter(3, "frequency", "Frequency", "Hz");
         bound(frequency, 0.0, 100.0, 0.5);
         d.inputs.push_back(std::move(frequency));
-        if (auto r = catalog.add(std::move(d)); !r) return r.error();
+        types.push_back(std::move(d));
     }
 
     // ---- A model: inputs and one output ------------------------------------
@@ -129,7 +130,7 @@ qp::diag::Result<void> register_demo_library(TypeCatalog& catalog) noexcept {
         bound(mass, 0.001, 100.0, 0.001);
         d.inputs.push_back(std::move(mass));
         d.inputs.push_back(choice(5, "integrator", "Integrator", {"euler", "rk4", "verlet"}));
-        if (auto r = catalog.add(std::move(d)); !r) return r.error();
+        types.push_back(std::move(d));
     }
 
     // ---- An instrument: a sink with a measurement --------------------------
@@ -152,7 +153,7 @@ qp::diag::Result<void> register_demo_library(TypeCatalog& catalog) noexcept {
         PortDesc averaging = parameter(3, "samples", "Samples");
         bound(averaging, 1.0, 1000.0, 1.0);
         d.inputs.push_back(std::move(averaging));
-        if (auto r = catalog.add(std::move(d)); !r) return r.error();
+        types.push_back(std::move(d));
     }
 
     // ---- A sink with no outputs, to exercise the endpoint case -------------
@@ -169,7 +170,7 @@ qp::diag::Result<void> register_demo_library(TypeCatalog& catalog) noexcept {
         PortDesc path = parameter(2, "path", "Path");
         path.type = qp::ports::kString;
         d.inputs.push_back(std::move(path));
-        if (auto r = catalog.add(std::move(d)); !r) return r.error();
+        types.push_back(std::move(d));
     }
 
     // ---- A boolean parameter, so the editor renders a checkbox ------------
@@ -190,9 +191,17 @@ qp::diag::Result<void> register_demo_library(TypeCatalog& catalog) noexcept {
         PortDesc bypass = parameter(3, "bypass", "Bypass");
         bypass.type = qp::ports::kBool;
         d.inputs.push_back(std::move(bypass));
-        if (auto r = catalog.add(std::move(d)); !r) return r.error();
+        types.push_back(std::move(d));
     }
 
+    return types;
+}
+
+qp::diag::Result<void> register_demo_library(qp::graph::NodeTypeRegistry& catalog) noexcept {
+    for (NodeDesc& desc : demo_library()) {
+        const diag::Result<void> added = catalog.register_type(std::move(desc));
+        if (!added) return added.error();
+    }
     return {};
 }
 

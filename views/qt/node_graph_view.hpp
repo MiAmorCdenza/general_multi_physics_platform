@@ -59,7 +59,6 @@
 namespace qp::views {
 
 class NodeItem;
-class TypeCatalog;
 
 /// @brief The view id whose layout slot this canvas owns.
 ///
@@ -100,7 +99,7 @@ public:
      * @frozen      no
      * @tests       qt.views.nodegraph.items_match_graph
      */
-    NodeGraphView(qp::authoring::Session& session, const TypeCatalog& catalog,
+    NodeGraphView(qp::authoring::Session& session, const qp::graph::NodeTypeRegistry& catalog,
                   qp::authoring::Document& document, QWidget* parent = nullptr);
 
     /// @brief Declared out of line because `Bridge` is incomplete here.
@@ -225,7 +224,7 @@ private:
     class Bridge;
 
     qp::authoring::Session& session_;
-    const TypeCatalog& catalog_;
+    const qp::graph::NodeTypeRegistry& catalog_;
     qp::authoring::Document& document_;
     QGraphicsScene* scene_ = nullptr;
     std::unique_ptr<Bridge> bridge_;

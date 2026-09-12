@@ -45,7 +45,7 @@
 #include <qp/authoring/portui/port_ui.hpp>
 #include <qp/graph/ir.hpp>
 #include <qp/views/model/editor_choice.hpp>
-#include <qp/views/model/type_catalog.hpp>
+#include <qp/graph/ir/node_type_registry.hpp>
 
 #include <optional>
 #include <string>
@@ -70,7 +70,7 @@ class PropertyPanel final : public QWidget {
     Q_OBJECT
 
 public:
-    PropertyPanel(qp::authoring::Session& session, const TypeCatalog& catalog,
+    PropertyPanel(qp::authoring::Session& session, const qp::graph::NodeTypeRegistry& catalog,
                   const qp::authoring::PortUiRegistry& port_ui, QWidget* parent = nullptr);
 
     /// @brief Shows the parameters of `node`. An invalid id shows an empty panel.
@@ -100,7 +100,7 @@ private:
                      qp::ports::Value value);
 
     qp::authoring::Session& session_;
-    const TypeCatalog& catalog_;
+    const qp::graph::NodeTypeRegistry& catalog_;
     const qp::authoring::PortUiRegistry& port_ui_;
     QFormLayout* form_ = nullptr;
     std::optional<qp::graph::NodeId> current_{};

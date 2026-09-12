@@ -356,6 +356,23 @@ L0 是本项目唯一不可插件化的部分，也是接口面必须最小的�
 
 **判据**：四个创作视图投影同一 IR，是同一份图的四种皮，不是四种架构。
 
+**当前落地**：`qt/node_graph_view`（节点编辑器）、`property_panel`（`portui` 驱动）、
+`measurement_panel` 与 `confidence_panel`（测量与置信度）、`editor_window`（装配、File 菜单、Run）。
+`blocks` / `formula` 两个视图**未开工**：它们是「同一份图的另外两张皮」，排在内容插件之后——
+在只有演示节点库的时候加第二个视图，只会把 paint 代码写两遍。
+
+**节点目录只有一份。** 视图层曾有自己的可枚举容器 `views::TypeCatalog`（当时 `INodeCatalog`
+不提供枚举，编辑器需要枚举，容器就写在了调用者那一层）。内容插件出现后这件事的代价才显形：
+插件的主要贡献就是节点类型，而唯一可枚举的容器在**消费者**层，插件无处可放。于是容器下沉为
+`core/graph/ir::NodeTypeRegistry`，视图层只留下真正属于它的一件事——**面板如何分组**
+（`views::by_category`，纯函数，不构造任何 Qt 对象即可断言）。两个容器就是两个「有哪些类型」的答案，
+而面板只会显示它碰巧拿到的那个。
+
+**`EditorWindow` 借用宿主，不拥有它。** 构造参数是 `qp::host::PluginHost&`，节点目录与它注册的
+内置演示类型都归宿主所有，理由同上：窗口自己持有一份就是第二份答案。演示类型走
+`PluginHost::add_builtin_node_type` 而不是直接写注册表，所以它们和插件的贡献一样**可归因**
+（`origin_of` 答 `qp.builtin`）**可撤销**——绕过记录的那条路，正是记录要堵的洞。
+
 ### 6.2 `plugins/` —— 内容（可整体删除）
 
 | 目录 | 内容 |
@@ -368,6 +385,21 @@ L0 是本项目唯一不可插件化的部分，也是接口面必须最小的�
 | `views_items/` | 场线、粒子、拖尾等渲染项（三来源：内置 / 用户热扫描 / 节点内联） |
 | `experiments/` | L1 教师层 YAML 实验描述 |
 | `examples/` | 示例图库 |
+
+**当前落地**：`formats/qpjson`、`formats/csv`、`mechanics`（RK4 积分器 + `MechanicsBinder`）。
+`models` / `instruments` / `analysis` / `views_items` / `experiments` / `examples` 都**未开工**，
+它们是内容而不是框架——框架侧的判断是「这些目录是否需要新的接口才能写」。见第 9 节的框架完成度审计。
+
+**动态装载已经真的接上了。** 在此之前，「插件即内容」只对一个**构建**成立：内容靠
+`QP_HAS_*` 宏静态链进 `qp_shell`，仓库里没有任何代码调用过 `load_plugins`。现在
+`views/app/main.cpp` 构建一个 `qp::host::PluginHost`，扫描 `QP_PLUGIN_DIR`（未设置时为可执行文件旁的
+`plugins/`），按 manifest 位协商能力，把装载结果逐条报到 stderr，并把宿主自己的节点目录交给窗口。
+静态链接的内容与目录里装载的内容进的是**同一组注册表**，这才是「万物皆插件」作为平台属性而非构建属性。
+
+**能力授权写在 `main` 里而不是取 `kKnownCapabilities`**，这是决定而不是啰嗦：一个把自己知道的全部
+都授出去的宿主拒绝不了任何东西，于是「这次会话允许做什么」就由「现场有哪些插件」回答。
+`field_domain` 与 `render_domain` 目前不在授权里，因为没有内容贡献它们；加一个贡献它们的插件，
+就是在这里加一位。
 
 ### 6.3 `tests/` `bench/`
 

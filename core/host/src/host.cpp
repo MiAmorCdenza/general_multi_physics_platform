@@ -201,7 +201,27 @@ std::string_view PluginHost::origin_of(std::string_view type_name) const noexcep
             if (name == type_name) return std::string_view{entry.id};
         }
     }
+    for (const std::string& name : builtins_.node_types) {
+        if (name == type_name) return kBuiltinOrigin;
+    }
     return std::string_view{};
+}
+
+diag::ErrorCode PluginHost::add_builtin_node_type(graph::NodeDesc desc) noexcept {
+    // The same path a plugin's contribution takes, minus the plugin: the ledger is what makes the type
+    // attributable and removable, and a built-in that took a different path would be the one kind of
+    // contribution `origin_of` could not answer for.
+    const std::string name = desc.type_name;
+    const diag::Result<void> added = node_types_.register_type(std::move(desc));
+    if (!added) return added.error();
+    builtins_.node_types.push_back(name);
+    ++builtins_.total;
+    return diag::ErrorCode::ok;
+}
+
+void PluginHost::clear_builtin_node_types() noexcept {
+    withdraw(builtins_);
+    builtins_ = Ledger{};
 }
 
 bool PluginHost::is_mounted(std::string_view plugin_id) const noexcept {

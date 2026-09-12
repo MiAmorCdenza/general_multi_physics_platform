@@ -14,13 +14,14 @@
  */
 #include <catch2/catch_test_macros.hpp>
 
+#include <qp/views/model/catalog.hpp>
 #include <qp/views/model/demo_library.hpp>
 #include <qp/views/model/editor_choice.hpp>
 #include <qp/views/model/execution_binders.hpp>
-#include <qp/views/model/type_catalog.hpp>
 
 #include <qp/graph/execution/execution.hpp>
 #include <qp/graph/ir.hpp>
+#include <qp/graph/ir/node_type_registry.hpp>
 
 #include <memory>
 #include <string>
@@ -29,6 +30,7 @@
 
 using namespace qp::views;
 using qp::authoring::EditorKind;
+using qp::graph::NodeTypeRegistry;
 using qp::graph::PortDesc;
 using qp::graph::PortNumber;
 
@@ -79,68 +81,15 @@ public:
 }  // namespace
 
 // ===========================================================================
-// The type catalog
+// The palette's grouping over the node catalog
 // ===========================================================================
-
-TEST_CASE("views.catalog.register_and_enumerate", "[views]") {
-    TypeCatalog catalog;
-    REQUIRE(catalog.size() == 0);
-    REQUIRE(catalog.all().empty());
-
-    qp::graph::NodeDesc d;
-    d.type_name = "x.one";
-    d.label = "One";
-    REQUIRE(catalog.add(d).has_value());
-
-    REQUIRE(catalog.size() == 1);
-    REQUIRE(catalog.all().size() == 1);
-    REQUIRE(catalog.find("x.one") != nullptr);
-    REQUIRE(catalog.find("x.one")->label == "One");
-    REQUIRE(catalog.find("absent") == nullptr);
-    REQUIRE(catalog.find("") == nullptr);
-
-    // The catalog is what a palette enumerates, so the enumeration must be the
-    // registration order: a palette that reordered between runs would move a
-    // user's node out from under their muscle memory.
-    qp::graph::NodeDesc second;
-    second.type_name = "x.two";
-    REQUIRE(catalog.add(second).has_value());
-    REQUIRE(catalog.all()[0]->type_name == "x.one");
-    REQUIRE(catalog.all()[1]->type_name == "x.two");
-
-    SECTION("a duplicate type name is refused, not replaced") {
-        // The type name is what a saved document refers to. Replacing it would
-        // silently change the meaning of every document that already names it,
-        // which is far worse than a plugin failing to load.
-        qp::graph::NodeDesc clash;
-        clash.type_name = "x.one";
-        clash.label = "Replacement";
-        const auto refused = catalog.add(clash);
-        REQUIRE_FALSE(refused.has_value());
-        REQUIRE(refused.error() == qp::diag::ErrorCode::duplicate_connection);
-        REQUIRE(catalog.size() == 2);
-        REQUIRE(catalog.find("x.one")->label == "One");
-    }
-
-    SECTION("an empty type name is refused") {
-        qp::graph::NodeDesc blank;
-        REQUIRE_FALSE(catalog.add(blank).has_value());
-        REQUIRE(catalog.size() == 2);
-    }
-
-    SECTION("removal frees the name") {
-        // A plugin that unloads must be reloadable. Leaving the name taken would
-        // make an unloaded plugin permanently unloadable.
-        REQUIRE(catalog.remove("x.one"));
-        REQUIRE(catalog.size() == 1);
-        REQUIRE(catalog.find("x.one") == nullptr);
-        REQUIRE(catalog.add(d).has_value());
-        REQUIRE_FALSE(catalog.remove("never-registered"));
-    }
-}
+//
+// The catalog itself -- registration, refusal of a duplicate, removal, enumeration in registration order -- is
+// `core/graph/ir`'s `NodeTypeRegistry`, asserted by `graph.catalog.*` in the core partition. What is left here
+// is the view layer's own decision: how a palette groups what the registry holds.
 
 TEST_CASE("views.catalog.grouped_by_category", "[views]") {
-    TypeCatalog catalog;
+    NodeTypeRegistry catalog;
     qp::graph::NodeDesc a;
     a.type_name = "a";
     a.category = "models";
@@ -152,12 +101,12 @@ TEST_CASE("views.catalog.grouped_by_category", "[views]") {
     c.category = "sources";
     qp::graph::NodeDesc uncategorised;
     uncategorised.type_name = "d";   // no category
-    REQUIRE(catalog.add(a).has_value());
-    REQUIRE(catalog.add(b).has_value());
-    REQUIRE(catalog.add(c).has_value());
-    REQUIRE(catalog.add(uncategorised).has_value());
+    REQUIRE(catalog.register_type(a).has_value());
+    REQUIRE(catalog.register_type(b).has_value());
+    REQUIRE(catalog.register_type(c).has_value());
+    REQUIRE(catalog.register_type(uncategorised).has_value());
 
-    const auto groups = catalog.by_category();
+    const auto groups = by_category(catalog);
     REQUIRE(groups.size() == 3);
     REQUIRE(groups[0].first == "models");
     REQUIRE(groups[0].second.size() == 2);
@@ -171,10 +120,32 @@ TEST_CASE("views.catalog.grouped_by_category", "[views]") {
     REQUIRE(groups[2].first == kUncategorised);
     REQUIRE(groups[2].second.size() == 1);
     REQUIRE(groups[2].second[0]->type_name == "d");
+
+    // Every registered type appears exactly once, which is the property that makes the grouping total rather
+    // than merely plausible. A group loop that dropped a type would still produce a palette.
+    std::size_t grouped = 0;
+    for (const auto& group : groups) grouped += group.second.size();
+    REQUIRE(grouped == catalog.size());
+
+    // Group order is first-appearance order over the registry's own order, not sorted. A palette that sorted
+    // would move a user's node out from under their muscle memory between two plugin load orders.
+    NodeTypeRegistry ordered;
+    qp::graph::NodeDesc z;
+    z.type_name = "z";
+    z.category = "zebra";
+    qp::graph::NodeDesc alpha;
+    alpha.type_name = "alpha";
+    alpha.category = "aardvark";
+    REQUIRE(ordered.register_type(z).has_value());
+    REQUIRE(ordered.register_type(alpha).has_value());
+    const auto appearance = by_category(ordered);
+    REQUIRE(appearance.size() == 2);
+    REQUIRE(appearance[0].first == "zebra");
+    REQUIRE(appearance[1].first == "aardvark");
 }
 
 TEST_CASE("views.demo.library_has_expected_types", "[views]") {
-    TypeCatalog catalog;
+    NodeTypeRegistry catalog;
     REQUIRE(register_demo_library(catalog).has_value());
     REQUIRE(catalog.size() == 5);
     REQUIRE(catalog.find("demo.signal") != nullptr);
@@ -200,8 +171,8 @@ TEST_CASE("views.demo.library_has_expected_types", "[views]") {
     int booleans = 0;
     int strings = 0;
     int sockets = 0;
-    for (const qp::graph::NodeDesc* d : catalog.all()) {
-        for (const PortDesc& p : d->inputs) {
+    for (const qp::graph::NodeDesc& d : catalog.all()) {
+        for (const PortDesc& p : d.inputs) {
             if (p.connectable) {
                 ++sockets;
                 continue;
@@ -222,8 +193,8 @@ TEST_CASE("views.demo.library_has_expected_types", "[views]") {
 
     // And the demonstrators must not claim to be domain-specific: they are the
     // view layer's fixtures, not the platform's physics, which belongs in plugins.
-    for (const qp::graph::NodeDesc* d : catalog.all()) {
-        REQUIRE(d->type_name.rfind("demo.", 0) == 0);
+    for (const qp::graph::NodeDesc& d : catalog.all()) {
+        REQUIRE(d.type_name.rfind("demo.", 0) == 0);
     }
 }
 

@@ -49,9 +49,11 @@
 #include <qp/plugins/qpjson/qpjson_format.hpp>
 #include <qp/views/model/export_controller.hpp>
 #endif
+#include <qp/views/model/demo_library.hpp>
 #include <qp/views/model/document_controller.hpp>
 #include <qp/views/model/measurement_model.hpp>
-#include <qp/views/model/type_catalog.hpp>
+#include <qp/graph/ir/node_type_registry.hpp>
+#include <qp/host/host.hpp>
 
 #include "editor_window.hpp"
 #include <QString>
@@ -94,7 +96,7 @@ void connect_nodes(qp::authoring::Session& session, qp::graph::NodeId from,
 TEST_CASE("qt.views.nodegraph.items_match_graph", "[views][qt]") {
     qp::authoring::Session session;
     qp::authoring::Document document;
-    qp::views::TypeCatalog catalog;
+    qp::graph::NodeTypeRegistry catalog;
     REQUIRE(qp::views::register_demo_library(catalog).has_value());
 
     qp::views::NodeGraphView canvas{session, catalog, document};
@@ -127,7 +129,7 @@ TEST_CASE("qt.views.nodegraph.items_match_graph", "[views][qt]") {
 TEST_CASE("qt.views.nodegraph.positions_come_from_layout", "[views][qt]") {
     qp::authoring::Session session;
     qp::authoring::Document document;
-    qp::views::TypeCatalog catalog;
+    qp::graph::NodeTypeRegistry catalog;
     REQUIRE(qp::views::register_demo_library(catalog).has_value());
 
     const qp::graph::NodeId node = add_node(session, "demo.signal");
@@ -163,7 +165,7 @@ TEST_CASE("qt.views.nodegraph.positions_come_from_layout", "[views][qt]") {
 TEST_CASE("qt.views.nodegraph.drag_moves_the_node_once", "[views][qt]") {
     qp::authoring::Session session;
     qp::authoring::Document document;
-    qp::views::TypeCatalog catalog;
+    qp::graph::NodeTypeRegistry catalog;
     REQUIRE(qp::views::register_demo_library(catalog).has_value());
 
     const qp::graph::NodeId node = add_node(session, "demo.signal");
@@ -201,7 +203,8 @@ TEST_CASE("qt.views.nodegraph.drag_moves_the_node_once", "[views][qt]") {
 }
 
 TEST_CASE("qt.views.editor_window.shares_one_session", "[views][qt]") {
-    qp::views::EditorWindow window;
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
     window.seed_demo_graph();
 
     // Three nodes and two edges, all added through the session by the window.
@@ -253,7 +256,8 @@ TEST_CASE("qt.views.editor_window.file_menu_follows_the_document", "[views][qt]"
     SKIP("this build has no document format plugin");
 #endif
 
-    qp::views::EditorWindow window;
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
     window.seed_demo_graph();
 
     QMenu* file_menu = nullptr;
@@ -338,7 +342,8 @@ TEST_CASE("qt.views.shell.links_core_state", "[views][qt]") {
     // The wiring-check window reports core state rather than placeholders, which
     // is the point of it: a demo showing hard-coded numbers would keep passing
     // after the link to the core had broken.
-    qp::views::EditorWindow window;
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
     REQUIRE(window.catalog().size() == 5);
     REQUIRE(window.session().graph().node_count() == 0);
 
@@ -364,7 +369,7 @@ TEST_CASE("qt.views.shell.links_core_state", "[views][qt]") {
 
 TEST_CASE("qt.views.properties.row_per_parameter", "[views][qt]") {
     qp::authoring::Session session;
-    qp::views::TypeCatalog catalog;
+    qp::graph::NodeTypeRegistry catalog;
     REQUIRE(qp::views::register_demo_library(catalog).has_value());
     qp::authoring::PortUiRegistry port_ui;
 
@@ -411,7 +416,7 @@ TEST_CASE("qt.views.properties.row_per_parameter", "[views][qt]") {
 
 TEST_CASE("qt.views.properties.edit_goes_through_session", "[views][qt]") {
     qp::authoring::Session session;
-    qp::views::TypeCatalog catalog;
+    qp::graph::NodeTypeRegistry catalog;
     REQUIRE(qp::views::register_demo_library(catalog).has_value());
     qp::authoring::PortUiRegistry port_ui;
 
@@ -524,7 +529,8 @@ TEST_CASE("qt.views.canvas.unframed_view_reports_clipped", "[views][qt]") {
     // framed sits at the default transform with its viewport at the scene origin, and a graph
     // whose nodes start at (48, 48) and run past x = 600 cannot fit in a viewport narrower than
     // that. No window manager, no timing, no pixel inspection.
-    qp::views::EditorWindow window;
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
     window.seed_demo();
     window.resize(1280, 720);
 
@@ -568,7 +574,8 @@ TEST_CASE("qt.views.canvas.whole_graph_is_visible", "[views][qt]") {
     // So this asserts the property that was actually violated: **every node is inside the
     // visible area** after framing. It is a property of the view, which is why it belongs in the
     // Qt suite rather than the ordinary one.
-    qp::views::EditorWindow window;
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
     window.seed_demo();
     window.resize(1280, 720);
     window.show();
@@ -606,7 +613,8 @@ TEST_CASE("qt.views.measurement.one_ledger_per_session", "[views][qt]") {
     // one session, one graph, one undo stack -- reappearing one layer up, which is why the fix
     // was to borrow rather than to synchronise. The assertion is on the **identity**, because
     // an equality check would pass for a copy that happened to match.
-    qp::views::EditorWindow window;
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
     REQUIRE(&window.measurements().ledger() == &window.ledger());
 
     // A fresh window has no run, so both surfaces say so together.
@@ -633,7 +641,8 @@ TEST_CASE("qt.views.measurement.fresh_window_is_empty", "[views][qt]") {
     // The same contract the graph half already had, asserted for the measurement half because
     // the same mistake is available here: a constructor that seeds is a constructor that has
     // decided something on the caller's behalf.
-    qp::views::EditorWindow window;
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
     REQUIRE(window.session().graph().node_count() == 0);
     REQUIRE(window.measurements().dataset().empty());
     REQUIRE(window.measurements().trace().empty());
@@ -652,7 +661,8 @@ TEST_CASE("qt.views.confidence.shows_the_models_notes", "[views][qt]") {
     // model is asserted by the ordinary suite on both compilers; re-wording a warning here would
     // put the tested text and the displayed text in different places, and the displayed one is the
     // one a student reads.
-    qp::views::EditorWindow window;
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
     window.seed_demo();
 
     auto* panel = window.findChild<qp::views::ConfidencePanel *>();
@@ -685,7 +695,8 @@ TEST_CASE("qt.views.confidence.energy_drift_is_shown", "[views][qt]") {
     // correct drift. What this pins is that the panel displays it -- the rendering layer's failure
     // mode is showing the refusal text for a run the model could answer, which no model-level test
     // can see.
-    qp::views::EditorWindow window;
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
     window.seed_demo();
 
     auto* panel = window.findChild<qp::views::ConfidencePanel *>();

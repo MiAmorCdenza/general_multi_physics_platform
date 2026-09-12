@@ -2,9 +2,9 @@
 #
 # This split is not tidiness, it is what makes the view layer testable.
 #
-# Everything here is plain C++ over core types: the enumerable node-type catalog,
-# the built-in demonstrator library, and the rule that decides which control edits
-# a port. None of it needs a QApplication, an event loop or a widget, so it is
+# Everything here is plain C++ over core types: the palette's grouping over the node
+# catalog, the built-in demonstrator library, and the rule that decides which control
+# edits a port. None of it needs a QApplication, an event loop or a widget, so it is
 # covered by the ordinary Catch2 suite that already runs on both compilers --
 # including the GCC build, which cannot link Qt at all.
 #
@@ -19,7 +19,7 @@
 # Qt-free component whose header says "qt" misleads the next reader.
 
 add_library(qp_views_model STATIC
-    type_catalog.cpp
+    catalog.cpp
     demo_library.cpp
     editor_choice.cpp
     measurement_model.cpp

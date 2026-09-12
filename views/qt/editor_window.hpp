@@ -42,13 +42,13 @@
 #include <qp/authoring/commands/session.hpp>
 #include <qp/authoring/document/document.hpp>
 #include <qp/authoring/portui/port_ui.hpp>
+#include <qp/graph/ir/node_type_registry.hpp>
+#include <qp/host/host.hpp>
 #include <qp/runtime/run/run.hpp>
 #include <qp/views/model/confidence_model.hpp>
 #include <qp/views/model/document_controller.hpp>
 #include <qp/views/model/run_controller.hpp>
 #include <qp/views/model/measurement_model.hpp>
-#include <qp/views/model/type_catalog.hpp>
-#include <qp/views/model/demo_library.hpp>
 
 #include <memory>
 
@@ -78,14 +78,43 @@ class EditorWindow final : public QMainWindow {
     Q_OBJECT
 
 public:
-    explicit EditorWindow(QWidget* parent = nullptr);
+    /**
+     * @brief Opens the editor over `content`'s node catalog.
+     *
+     * @param content The composition root, **borrowed**. It owns the catalog, and the window borrows it rather
+     *                than holding one of its own: a window that owned a catalog would be a second answer to
+     *                "which types exist", and the palette would show whichever one it happened to hold. That
+     *                duplicate was removed once already, when content plugins needed somewhere to put a node
+     *                type and the only enumerable catalog lived in this layer.
+     *
+     *                The window registers its demonstrator types through `add_builtin_node_type`, so they are
+     *                attributed and removable like anything else rather than being a hole in the record.
+     * @param parent  The Qt parent, as usual.
+     *
+     * @ownership   observes the host and its catalog
+     * @thread      ui
+     * @pre         `content` outlives this window
+     * @post        The demonstrator types are in the catalog, attributed to `PluginHost::kBuiltinOrigin`
+     * @invariant   The catalog is not modified after construction
+     * @errors      noexcept; a type the host refuses is skipped rather than fatal
+     * @complexity  O(types)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.editor_window.shares_one_session
+     */
+    explicit EditorWindow(qp::host::PluginHost& content, QWidget* parent = nullptr) noexcept;
     ~EditorWindow() override;
 
     /// @brief The session both panels edit through. Exposed so a test can drive it.
     [[nodiscard]] qp::authoring::Session& session() noexcept { return session_; }
 
+    /// @brief The composition root this window reads its content from. Exposed so a test can add a type.
+    [[nodiscard]] qp::host::PluginHost& content() noexcept { return *content_; }
+
     /// @brief The catalog the palette and the panel resolve types against.
-    [[nodiscard]] TypeCatalog& catalog() noexcept { return catalog_; }
+    [[nodiscard]] const qp::graph::NodeTypeRegistry& catalog() const noexcept {
+        return content_->node_types();
+    }
 
     /// @brief The measurement session this window reports on.
     ///
@@ -213,14 +242,16 @@ private:
     void build_file_menu();
 
     qp::authoring::Session session_{};
+    // The composition root this window reads its content from. Borrowed, and the only source of node types: the
+    // palette, the property panel, the canvas and the framework pre-flight all resolve against its catalog, so
+    // a type a plugin registered at startup is a type all four can see.
+    qp::host::PluginHost* content_ = nullptr;
     // The document and the file menu's behaviour. It owns the `Document` -- the canvas borrows it from
     // here -- and registers itself as a session listener, because the dirty flag has to follow every edit
     // rather than the ones this window happens to start.
     qp::views::model::DocumentController document_controller_{
         session_, qp::views::model::document_formats()};
-    TypeCatalog catalog_{};
     qp::authoring::PortUiRegistry port_ui_{};
-    qp::authoring::Registry capabilities_{};
     qp::runtime::RunLedger ledger_{};
     // One measurement session per window, measuring a length by default. The quantity is a
     // construction parameter rather than a field the user sets later because the dataset's

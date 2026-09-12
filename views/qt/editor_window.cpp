@@ -11,6 +11,7 @@
 #include <QMenuBar>
 #include <QToolBar>
 
+#include <qp/views/model/demo_library.hpp>
 #include <qp/views/model/execution_binders.hpp>
 #include <qp/views/model/export_controller.hpp>
 
@@ -69,19 +70,23 @@ private:
     EditorWindow* window_;
 };
 
-EditorWindow::EditorWindow(QWidget* parent) : QMainWindow(parent) {
+EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexcept
+    : QMainWindow(parent), content_(&content) {
     setWindowTitle(QStringLiteral("qp -- experiment editor"));
-    // The built-in demonstrators, so the palette and the panel have something to
-    // resolve. A real build loads these from plugins; the shell registers them
-    // directly, which is the only thing the shell is allowed to shortcut.
-    const auto seeded = register_demo_library(catalog_);
-    if (!seeded.has_value()) {
-        // Not fatal: an incomplete library still gives a usable window, and the
-        // status line will name the missing types once it is built.
+    // The built-in demonstrators, registered through the host rather than into a catalog of our own. They are
+    // this build's content, so they are attributed and removable like anything else: a type that existed
+    // without the record knowing about it is exactly the hole the record was added to close.
+    //
+    // The types that matter are content plugins; these are the minimum that exercises every editor path. See
+    // demo_library.hpp for what is deliberately absent.
+    for (qp::graph::NodeDesc& desc : demo_library()) {
+        // A refusal is not fatal: an incomplete library still gives a usable window, and the status line names
+        // the missing types once it is built.
+        (void)content_->add_builtin_node_type(std::move(desc));
     }
 
-    canvas_ = new NodeGraphView(session_, catalog_, document_controller_.document(), this);
-    properties_ = new PropertyPanel(session_, catalog_, port_ui_, this);
+    canvas_ = new NodeGraphView(session_, content_->node_types(), document_controller_.document(), this);
+    properties_ = new PropertyPanel(session_, content_->node_types(), port_ui_, this);
     // Without a minimum the splitter collapses this panel to nothing when the
     // other two want more room -- and the first screenshot of this window showed
     // the panel simply absent, which reads as a missing feature rather than as a
@@ -94,17 +99,19 @@ EditorWindow::EditorWindow(QWidget* parent) : QMainWindow(parent) {
 
     auto* palette = new QListWidget(this);
     palette->setMinimumWidth(180);
-    for (const qp::graph::NodeDesc* desc : catalog_.all()) {
-        palette->addItem(QString::fromStdString(desc->label.empty() ? desc->type_name
-                                                                   : desc->label));
+    // The registry returns descriptors by value-of-container, in registration order, and the palette uses that
+    // order rather than sorting: a palette that reordered between runs would move a user's node out from under
+    // their muscle memory.
+    for (const qp::graph::NodeDesc& desc : content_->node_types().all()) {
+        palette->addItem(QString::fromStdString(desc.label.empty() ? desc.type_name : desc.label));
     }
     connect(palette, &QListWidget::itemDoubleClicked, this, [this, palette](QListWidgetItem* it) {
-        const auto index = static_cast<std::size_t>(palette->row(it));
-        const auto all = catalog_.all();
+        const std::size_t index = static_cast<std::size_t>(palette->row(it));
+        const auto& all = content_->node_types().all();
         if (index < all.size()) {
             // Through add_node, which goes through the session. The palette is not
             // allowed a shortcut the canvas does not get.
-            (void)add_node(all[index]->type_name);
+            (void)add_node(all[index].type_name);
         }
     });
 
@@ -168,7 +175,7 @@ EditorWindow::EditorWindow(QWidget* parent) : QMainWindow(parent) {
     // already true and actionable.
     run_controller_ = std::make_unique<qp::views::model::RunController>(
         session_, qp::views::model::execution_binders(),
-        qp::graph::ResolveContext{&catalog_, &qp::ports::builtin_registry()});
+        qp::graph::ResolveContext{&content_->node_types(), &qp::ports::builtin_registry()});
     auto* tools = addToolBar(tr("Experiment"));
     tools->setMovable(false);
     run_action_ = tools->addAction(tr("Run"));
@@ -457,7 +464,7 @@ void EditorWindow::seed_demo() {
 EditorWindow::~EditorWindow() = default;
 
 qp::graph::NodeId EditorWindow::add_node(const std::string& type_name) {
-    if (catalog_.find(type_name) == nullptr) {
+    if (content_->node_types().find(type_name) == nullptr) {
         on_mutation_failed(QStringLiteral("no such type: %1")
                                .arg(QString::fromStdString(type_name)));
         return {};

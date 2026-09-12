@@ -1,23 +1,39 @@
 /**
  * @file main.cpp
- * @brief The shell executable: opens the editor.
+ * @brief The shell executable: builds the content host, then opens the editor.
  *
- * A thin `main`, and deliberately so. Everything with behaviour lives in
- * `qp::views` so that it can be constructed and inspected without an event loop;
- * an application whose logic exists only inside `main` cannot be tested at all,
- * and the first casualty is always the thing that was hard to reach.
+ * A thin `main`, and deliberately so. Everything with behaviour lives in `qp::views` or `qp::host` so that it
+ * can be constructed and inspected without an event loop; an application whose logic exists only inside `main`
+ * cannot be tested at all, and the first casualty is always the thing that was hard to reach.
  *
- * @ownership   owns
+ * ## What this function actually decides
+ *
+ * Three things, in this order, and the order is the whole design:
+ *
+ *   1. **What content this build has.** Two sources, and they are different in kind. The statically linked
+ *      plugins (`QP_HAS_*`) are this build's own content; the plugin **directory** is content somebody else
+ *      built, loaded at startup through `qp::host::PluginHost`. Both end up in the same registries, which is
+ *      what makes "everything is a plugin" a property of the platform rather than of a build.
+ *   2. **How much to grant.** The host is constructed with an explicit capability grant rather than with
+ *      "everything this build knows". A plugin whose manifest declares a bit outside the grant is refused
+ *      before its code runs, and a build that granted everything could not express that decision at all.
+ *   3. **What to say when it goes wrong.** Plugin loading is reported, never fatal: a directory with one
+ *      broken library refuses the whole directory (see `PluginHost::load_directory`), and the window still
+ *      opens, because a lab machine with a mistyped plugin path must still be able to open a saved document
+ *      and read its numbers.
+ *
+ * @ownership   owns (the plugin host, the registered formats and the window)
  * @thread      ui
  * @pre         none
  * @post        none
- * @invariant   No application state is created outside the window
+ * @invariant   No application state is created outside the window and the host
  * @errors      returns the Qt event loop's exit code
  * @frozen      no
- * @tests       views.editor_window.shares_one_session
+ * @tests       host.loads_a_real_plugin_and_mounts_what_it_registers
  */
 #include "editor_window.hpp"
 
+#include <qp/host/host.hpp>
 #include <qp/views/model/document_controller.hpp>
 #include <qp/views/model/execution_binders.hpp>
 #include <qp/views/model/export_controller.hpp>
@@ -32,11 +48,58 @@
 #endif
 
 #include <QApplication>
+#include <QDebug>
+#include <QtGlobal>
+
+#include <filesystem>
+#include <string>
+
+namespace {
+
+/**
+ * @brief Where this build looks for content libraries that were not linked into it.
+ *
+ * `QP_PLUGIN_DIR` when it is set, because that is what a lab machine needs: the same build with a different
+ * content directory, without a rebuild. Otherwise a `plugins` directory beside the executable, which is how a
+ * packaged build ships its content. The environment variable wins rather than being a fallback because the
+ * awkward case -- a developer testing one plugin against the shipped set -- is the one that has to be
+ * expressible without moving files around.
+ *
+ * @ownership   owns the returned string
+ * @thread      ui
+ * @pre         none
+ * @post        Returns a path even when no such directory exists; `load_directory` treats that as empty
+ * @invariant   Never throws; allocation failure terminates, as elsewhere in this project
+ * @errors      noexcept
+ * @complexity  O(path length)
+ * @nondet      Reads the environment
+ * @frozen      no
+ * @tests       host.scanning_a_directory_mounts_what_it_can_and_reports_the_rest
+ */
+[[nodiscard]] std::string plugin_directory(const char* argv0) {
+    // `qEnvironmentVariable` rather than `std::getenv`, and not for convenience: the C runtime's `getenv` is
+    // flagged as unsafe by the MSVC CRT (C4996) and a warning-as-error build then refuses the shell. Qt's
+    // accessor is the same read on every platform this project builds for, and this file is Qt code.
+    const QString from_env = qEnvironmentVariable("QP_PLUGIN_DIR");
+    if (!from_env.isEmpty()) return from_env.toStdString();
+    std::error_code ec;
+    // `weakly_canonical` rather than `canonical`: the executable path is what the operating system reported,
+    // and a build directory that has since been renamed should land in an empty scan rather than in a
+    // diagnostic about the program's own location.
+    const std::filesystem::path exe = std::filesystem::weakly_canonical(argv0 != nullptr ? argv0 : ".", ec);
+    const std::filesystem::path beside = (ec ? std::filesystem::path{argv0 != nullptr ? argv0 : "."}
+                                             : exe.parent_path()) /
+                                         "plugins";
+    return beside.string();
+}
+
+}  // namespace
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
-    // The one place that knows which plugins exist. Mounting happens before the window is built, because
-    // the window's controllers capture their lists during construction.
+
+    // The one place that knows which plugins exist **in this build**. Mounting happens before the window is
+    // built, because the window's controllers capture their lists during construction.
     //
     // Guarded by `QP_BUILD_PLUGINS`: with plugins off there is nothing to mount, and the Run action then
     // reports that no node has an operator -- which is the accurate description of that build.
@@ -59,11 +122,33 @@ int main(int argc, char** argv) {
     (void)qp::views::model::mount_export_format(&trace_exporter);
 #endif
 
-    qp::views::EditorWindow window;
+    // The other source of content: libraries this build did not link, loaded through the plugin host.
+    //
+    // The grant is written out rather than taken from `kKnownCapabilities`, and that is a decision rather than
+    // verbosity. A host that grants everything it knows cannot refuse anything, so the manifest check would
+    // pass for every plugin that parses -- and "what is this session allowed to do" would be answered by
+    // whichever plugins happened to be present. `field_domain` and `render_domain` are absent because no
+    // content in this build contributes to them; adding a plugin that does is how they get added here.
+    qp::host::PluginHost content_host{qp::plugin::Capability::node_types |
+                                      qp::plugin::Capability::kernels |
+                                      qp::plugin::Capability::file_io};
+    const std::string content_dir = plugin_directory(argc > 0 ? argv[0] : nullptr);
+    const qp::host::LoadReport loaded = content_host.load_directory(content_dir, "dll");
+    if (loaded.attempts() > 0) {
+        // To stderr, one line per attempt, because a plugin that did not mount is the single most common
+        // reason a user's palette is missing an entry -- and a window that opened without saying so would
+        // leave them reading the wrong file.
+        qWarning().noquote() << QString::fromStdString(loaded.to_text()).trimmed();
+    }
+
+    qp::views::EditorWindow window(content_host);
     // The application decides to seed itself; the window does not. One call, so the graph and
     // the measurement session cannot be seeded in the wrong order by a caller that only
     // remembered one of them.
     window.seed_demo();
     window.show();
+    // The host outlives the window: it owns the catalog the window resolved types against, and a plugin
+    // unloaded while the window still held a descriptor pointer would be the dangling case the host's own
+    // record exists to prevent.
     return QApplication::exec();
 }

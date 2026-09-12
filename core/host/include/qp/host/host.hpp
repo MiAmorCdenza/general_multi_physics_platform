@@ -83,6 +83,14 @@
 #include <utility>
 #include <vector>
 
+// Qt defines `slots`, `signals`, `emit` and `foreach` as preprocessor macros. A host built inside a Qt program
+// would otherwise have every one of those words rewritten before the compiler saw it, and `views/CMakeLists.txt`
+// carries the same guard for the same reason: a header that uses one as an identifier fails with an error that
+// points at a correct line. Reported rather than silently worked around.
+#if defined(slots) || defined(signals) || defined(emit) || defined(foreach)
+#  error "qp/host/host.hpp requires QT_NO_KEYWORDS: Qt's keyword macros collide with this code"
+#endif
+
 namespace qp::host {
 
 /**
@@ -434,6 +442,58 @@ public:
     /// @brief The capability registry, for "who offers this".
     [[nodiscard]] const authoring::Registry& capabilities() const noexcept { return capabilities_; }
 
+    /// @brief The id the ledger attributes a built-in node type to.
+    ///
+    /// Not a plugin id and deliberately not shaped like one: `qp.builtin` can never be a manifest id, because a
+    /// manifest id is a reverse-domain name a distributor controls. A ledger entry that could be mistaken for a
+    /// plugin's would make "which plugin contributed this" answerable with the wrong plugin.
+    static constexpr std::string_view kBuiltinOrigin = "qp.builtin";
+
+    /**
+     * @brief Adds a node type that this build ships rather than loads.
+     *
+     * The editor has a handful of demonstrator types -- a source, a spring-damper, a readout, an export, a
+     * filter -- and they are **not** the platform's physics. What they are is the minimum that exercises every
+     * editor path, which is why they exist at all, and the reason this method exists beside `IPluginHost` is
+     * that the alternative was worse: a window that owned a second catalog would be a second answer to "which
+     * types exist", and the palette would show whichever one it happened to hold. That duplicate was removed
+     * once already when content plugins needed somewhere to put a node type.
+     *
+     * Built-ins go through the same record as everything else, so `unload` would take them back and `origin_of`
+     * names them. They are not a mounted plugin, so they do not appear in `mounted_ids()`.
+     *
+     * @param desc The description. Same rules and the same refusals as a plugin's contribution.
+     *
+     * @ownership   owns (the descriptor is moved into the catalog)
+     * @thread      main
+     * @pre         none
+     * @post        On success the type is in the catalog, attributed to `kBuiltinOrigin`
+     * @invariant   On failure nothing was added
+     * @errors      noexcept; `invalid_argument` for an unusable description, `duplicate_connection` for a name
+     *              already served
+     * @complexity  O(types)
+     * @nondet      none
+     * @frozen      no
+     * @tests       host.a_builtin_type_is_attributed_and_removable
+     */
+    [[nodiscard]] diag::ErrorCode add_builtin_node_type(graph::NodeDesc desc) noexcept;
+
+    /**
+     * @brief Removes every built-in node type, for a session that wants a clean catalog.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        No type attributed to `kBuiltinOrigin` remains registered
+     * @invariant   No plugin's contribution is touched
+     * @errors      noexcept
+     * @complexity  O(built-ins)
+     * @nondet      none
+     * @frozen      no
+     * @tests       host.a_builtin_type_is_attributed_and_removable
+     */
+    void clear_builtin_node_types() noexcept;
+
     /**
      * @brief Which plugin contributed `type_name`, or an empty view when nothing did.
      *
@@ -663,6 +723,10 @@ private:
     /// The mount table. A `std::vector` because mount order is reported and the set is small; lookups are
     /// linear.
     std::vector<Mounted> mounted_{};
+    /// What this build registers itself, under `kBuiltinOrigin`. Kept apart from `mounted_` because it is not a
+    /// plugin: it has no manifest, no library and no capability declaration, and listing it among the plugins
+    /// would make `mounted_ids()` answer a question nobody asked.
+    Ledger builtins_{};
     /// The borrowed view `mounted_plugins()` returns, refreshed on every change to `mounted_`.
     std::vector<std::string_view> mounted_view_{};
     /// One provider per mounted plugin, kept alive for as long as the capability registry refers to it.

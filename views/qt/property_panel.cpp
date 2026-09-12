@@ -46,7 +46,7 @@ QString row_caption(const qp::graph::PortDesc& port) {
 
 }  // namespace
 
-PropertyPanel::PropertyPanel(qp::authoring::Session& session, const TypeCatalog& catalog,
+PropertyPanel::PropertyPanel(qp::authoring::Session& session, const qp::graph::NodeTypeRegistry& catalog,
                              const qp::authoring::PortUiRegistry& port_ui, QWidget* parent)
     : QWidget(parent), session_(session), catalog_(catalog), port_ui_(port_ui) {
     form_ = new QFormLayout(this);

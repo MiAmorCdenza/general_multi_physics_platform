@@ -3,7 +3,7 @@
  * @brief Implementation of the node editor canvas.
  */
 #include "node_graph_view.hpp"
-#include <qp/views/model/type_catalog.hpp>
+#include <qp/graph/ir/node_type_registry.hpp>
 
 #include <qp/graph/mutate/command.hpp>
 
@@ -287,7 +287,7 @@ private:
     NodeGraphView* view_;
 };
 
-NodeGraphView::NodeGraphView(qp::authoring::Session& session, const TypeCatalog& catalog,
+NodeGraphView::NodeGraphView(qp::authoring::Session& session, const qp::graph::NodeTypeRegistry& catalog,
                              qp::authoring::Document& document, QWidget* parent)
     : QGraphicsView(parent), session_(session), catalog_(catalog), document_(document) {
     scene_ = new QGraphicsScene(this);
