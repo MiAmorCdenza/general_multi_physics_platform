@@ -253,6 +253,33 @@ public:
     [[nodiscard]] diag::Result<void> restore(std::size_t index);
 
     /**
+     * @brief Replaces the trace with an empty one belonging to `run`.
+     *
+     * Needed because a **run replaces the session**, it does not extend it. The seeded demonstration
+     * describes a different experiment from the one a user just ran, and appending a real trace to it
+     * would make the time axis go backwards at the seam -- which the trace refuses, so the failure would
+     * appear as an append error rather than as "you started a new experiment".
+     *
+     * The run identity is supplied by the caller rather than minted here, because the ledger that issued
+     * it is the authority on which run these numbers belong to. Two sources for that answer is the defect
+     * this session already fixed once.
+     *
+     * @param run The run the new trace belongs to.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         none
+     * @post        `trace().size() == 0` and `trace().channel_count() == 0`
+     * @invariant   The dataset is untouched: readings are a separate record from the time axis
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.reset_trace_starts_a_new_recording
+     */
+    void reset_trace(qp::runtime::RunId run) noexcept { trace_ = qp::runtime::Trace{run}; }
+
+    /**
      * @brief Appends one sample to the trace.
      *
      * @param t      Simulation or wall time of the sample, non-decreasing.

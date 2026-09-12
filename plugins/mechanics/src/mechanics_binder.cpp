@@ -44,6 +44,11 @@ constexpr std::int64_t kRk4Choice = 1;
 
 }  // namespace
 
+bool MechanicsBinder::can_bind(std::string_view type_name,
+                               const execution::StateView& layout) const noexcept {
+    return type_name == kSpringDamperType && layout.components_per_particle == kComponents;
+}
+
 std::unique_ptr<execution::IStateOperator> MechanicsBinder::bind(
     std::string_view type_name, const qp::graph::Node& node, const execution::StateView& layout) {
     // "Not mine" for a different type, and for a layout this family cannot describe. Both are

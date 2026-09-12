@@ -43,6 +43,7 @@
 #include <qp/authoring/portui/port_ui.hpp>
 #include <qp/runtime/run/run.hpp>
 #include <qp/views/model/confidence_model.hpp>
+#include <qp/views/model/run_controller.hpp>
 #include <qp/views/model/measurement_model.hpp>
 #include <qp/views/model/type_catalog.hpp>
 #include <qp/views/model/demo_library.hpp>
@@ -130,6 +131,13 @@ public:
     /// @brief Records the demonstrator graph through the session.
     void seed_demo_graph();
 
+    /// @brief Runs the first runnable node and shows the result.
+    ///
+    /// Wired to the toolbar action. Kept as a named method rather than a lambda in the constructor so a
+    /// test can invoke the same path the button does -- a test that called the controller directly would
+    /// not cover the wiring, which is where the defects in a thin layer always are.
+    void run_once();
+
     /// @brief Records a few readings so the measurement panel is not empty on start.
     ///
     /// A repeat measurement of one length with a deliberately **mixed** provenance: two
@@ -173,6 +181,13 @@ private:
     // once with two run ledgers.
     qp::views::model::ConfidenceModel confidence_{measurements_.trace()};
     ConfidencePanel* confidence_panel_ = nullptr;
+
+    // The run action. The binders are **not** owned here: `views` must not depend on `plugins`, so the
+    // application mounts them through `views::model::mount_execution_binder` and the window consults
+    // whatever is there. A window that named a plugin by type could not be built without that plugin,
+    // which would make the plugin split a claim rather than a property.
+    std::unique_ptr<qp::views::model::RunController> run_controller_{};
+    QAction* run_action_ = nullptr;
 
     /// @brief Whether the run's clamp count has been pushed into the confidence model yet.
     ///

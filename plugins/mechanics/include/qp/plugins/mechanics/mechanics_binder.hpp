@@ -75,6 +75,28 @@ public:
     MechanicsBinder() = default;
 
     /**
+     * @brief Whether `type_name` is the spring-damper type, with a layout this family can use.
+     *
+     * Answers for the **type**, not for an instance: a spring-damper asking for damping is still a type
+     * this binder owns, and saying otherwise would report it as an unknown node rather than as one whose
+     * two settings need changing.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        True exactly for `kSpringDamperType` with three components per particle
+     * @invariant   Independent of any node instance
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.binding.damping_is_refused,
+     *              execution.binding.other_integrators_are_refused
+     */
+    [[nodiscard]] bool can_bind(std::string_view type_name,
+                               const graph::execution::StateView& layout) const noexcept override;
+
+    /**
      * @brief Builds an RK4 oscillator for a spring-damper node, or declines.
      *
      * Returns null -- "not mine" -- when the type is not a spring-damper, when the state layout is not

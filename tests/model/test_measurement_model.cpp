@@ -290,6 +290,39 @@ TEST_CASE("measurement.model.trace_is_separate_from_readings", "[measurement][mo
     REQUIRE(m.trace().size() == 50);
 }
 
+TEST_CASE("measurement.model.reset_trace_starts_a_new_recording", "[measurement][model]") {
+    // A run **replaces** the session's trace rather than extending it. The seeded demonstration describes
+    // a different experiment from the one a user just ran, and appending a real trace to it makes the time
+    // axis go backwards at the seam -- which the trace refuses, so the failure would surface as an append
+    // error rather than as "you started a new experiment".
+    Session session;
+    MeasurementModel& m = session.model();
+    REQUIRE(m.add_channel("x", qp::units::dims::length).has_value());
+    m.add_reading(1.0, rt::UncertaintyKind::standard, 0.05);
+    for (int i = 0; i < 10; ++i) {
+        REQUIRE(m.add_sample(0.01 * i, std::vector<double>{1.0}, 0.05).has_value());
+    }
+    REQUIRE(m.trace().size() == 10);
+
+    const rt::RunId run{7};
+    m.reset_trace(run);
+
+    // Channels go with the samples, not just the samples: a trace whose time axis was replaced but whose
+    // channels were not would accept a sample of the old width and label it with the old quantity.
+    REQUIRE(m.trace().size() == 0);
+    REQUIRE(m.trace().channel_count() == 0);
+    REQUIRE(m.trace().run() == run);
+
+    // Readings are a separate record and survive. A run is not a reason to discard measurements the user
+    // took, and the two records being independent is the property that makes a lab notebook one document.
+    REQUIRE(m.dataset().size() == 1);
+
+    // The new recording starts at zero time, which is why the trace is replaced rather than appended to.
+    REQUIRE(m.add_channel("x", qp::units::dims::length).has_value());
+    REQUIRE(m.add_sample(0.0, std::vector<double>{2.0}, 0.05).has_value());
+    REQUIRE(m.trace().size() == 1);
+}
+
 TEST_CASE("measurement.model.export_refusal_matches_the_exporter", "[measurement][model]") {
     // The panel must not form a second opinion about what a format can carry. If it did,
     // an export could pass the panel's check and fail the exporter's, and the user's

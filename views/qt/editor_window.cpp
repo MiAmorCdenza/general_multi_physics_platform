@@ -5,11 +5,17 @@
 #include "editor_window.hpp"
 
 #include "node_graph_view.hpp"
+#include <QAction>
+#include <QToolBar>
+
+#include <qp/views/model/execution_binders.hpp>
+
 #include "confidence_panel.hpp"
 #include "measurement_panel.hpp"
 #include "property_panel.hpp"
 
 #include <qp/graph/mutate/command.hpp>
+#include <qp/ports/value.hpp>
 
 #include <QHBoxLayout>
 #include <QLabel>
@@ -152,6 +158,19 @@ EditorWindow::EditorWindow(QWidget* parent) : QMainWindow(parent) {
         resizeDocks({dock}, {kDockWidth}, Qt::Horizontal);
     });
 
+    // The Run action. Built after the panels, because `run_once` refreshes them.
+    // The binders come from wherever the application mounted them. An empty list is a legitimate
+    // state -- a build with no plugins has none -- and the Run action's message for that case is
+    // already true and actionable.
+    run_controller_ = std::make_unique<qp::views::model::RunController>(
+        session_, qp::views::model::execution_binders());
+    auto* tools = addToolBar(tr("Experiment"));
+    tools->setMovable(false);
+    run_action_ = tools->addAction(tr("Run"));
+    run_action_->setToolTip(QString::fromStdString(run_controller_->description()));
+    run_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+R")));
+    connect(run_action_, &QAction::triggered, this, &EditorWindow::run_once);
+
     status_ = new QLabel(this);
     statusBar()->addWidget(status_);
 
@@ -219,6 +238,33 @@ void EditorWindow::seed_demo_graph() {
     const qp::graph::NodeId model = add_node("demo.spring_damper");
     const qp::graph::NodeId scope = add_node("demo.instrument");
     if (!source.valid() || !model.valid() || !scope.valid()) return;
+
+    // The model's parameters, set through the session like every other edit -- so they show up in the
+    // property panel, are undoable, and bump the graph version the run record pins.
+    //
+    // Without this the Run action reports "no node in this graph has an operator yet", which is true:
+    // the binder needs `k`, `m`, `c` and `integrator`, and a node nobody has filled in is a node it
+    // cannot run. That was the first thing the Run button did on launch, and it is the correct answer to
+    // an incomplete demo rather than a defect in the run loop.
+    //
+    // `omega = sqrt(k/m) = 20 rad/s`, matching `RunController::kOmega` so the trace's frequency
+    // component and the kernel's parameter block agree. Damping is zero **on purpose**: the kernel
+    // integrates `x'' = -omega^2 x` and has no damping term, and the binder refuses a non-zero `c` rather
+    // than silently dropping it. Seeding a non-zero value would open the demo on a refusal, which
+    // teaches the wrong thing about what the tool can do.
+    const auto set_parameter = [this](qp::graph::NodeId node, qp::graph::PortNumber port,
+                                      qp::ports::Value value) {
+        qp::graph::SetParam command;
+        command.id = node;
+        command.port = port;
+        command.value = std::move(value);
+        const auto applied = session_.apply(command);
+        if (!applied.has_value()) on_mutation_failed(describe(applied.error()));
+    };
+    set_parameter(model, 2, qp::ports::Value{200.0});                     // stiffness, N/m
+    set_parameter(model, 3, qp::ports::Value{0.0});                       // damping, N*s/m
+    set_parameter(model, 4, qp::ports::Value{0.5});                       // mass, kg
+    set_parameter(model, 5, qp::ports::Value{std::int64_t{1}});           // integrator: rk4
 
     // Connections go through the session too, so undo reverses them and both
     // panels are told. A failure is reported rather than swallowed: a graph that
@@ -372,6 +418,56 @@ void EditorWindow::seed_demo_measurement() {
     confidence_.set_omega(kOmega);
     clamps_noted_ = true;
     confidence_panel_->refresh();
+}
+
+
+void EditorWindow::run_once() {
+    if (run_controller_ == nullptr) return;
+
+    qp::views::model::RunResult result = run_controller_->run();
+
+    // The status line speaks first: it is where every other message in this window goes, and a user who
+    // pressed a button is looking for a response in one consistent place.
+    status_->setText(QString::fromStdString(result.report.message));
+
+    if (!result.report.ok) {
+        // A failed run leaves the panels alone. Replacing good readings with nothing because a run was
+        // refused would destroy the user's work to report a problem that did not touch it.
+        //
+        // An empty trace after a *successful* run is not possible; after a failed one it means the
+        // binder was never reached, and there is nothing to show either way.
+        if (result.trace.empty()) return;
+        // A **partial** trace is shown: the confidence panel exists to make a diverging run visible, and
+        // it cannot do that from an empty panel.
+    }
+
+    // The measurement session is **replaced**, not appended to. The seeded demo describes a different
+    // experiment from the one that just ran, and appending would make the time axis go backwards at the
+    // seam -- which the trace refuses, so the failure would appear as an append error rather than as
+    // "you ran a new experiment".
+    measurements_.reset_trace(result.report.run);
+
+    // The two channels are copied across by name, so the panels find them through the same constants the
+    // run loop wrote them with. A rename on either side breaks here rather than silently producing an
+    // unaskable trace.
+    for (const qp::runtime::Channel& channel : result.trace.channels()) {
+        (void)measurements_.add_channel(channel.name, channel.dim);
+    }
+    for (const qp::runtime::Sample& sample : result.trace.samples()) {
+        std::vector<double> values;
+        values.reserve(sample.values.size());
+        for (const qp::runtime::UncertainValue& v : sample.values) values.push_back(v.value);
+        (void)measurements_.add_sample(sample.t, values, 0.0);
+    }
+
+    // The confidence model needs the frequency the run integrated against, or its energy figure would be
+    // computed for a different potential than the data came from -- and it would then report drift that
+    // is an artefact of the mismatch. `omega_was_declared` is what lets the panel say which it is.
+    confidence_.set_omega(qp::views::model::RunController::kOmega);
+
+    measurements_panel_->refresh();
+    confidence_panel_->refresh();
+    refresh_status();
 }
 
 }  // namespace qp::views

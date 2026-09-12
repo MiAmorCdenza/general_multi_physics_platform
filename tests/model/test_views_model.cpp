@@ -16,9 +16,15 @@
 
 #include <qp/views/model/demo_library.hpp>
 #include <qp/views/model/editor_choice.hpp>
+#include <qp/views/model/execution_binders.hpp>
 #include <qp/views/model/type_catalog.hpp>
 
+#include <qp/graph/execution/execution.hpp>
+#include <qp/graph/ir.hpp>
+
+#include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 using namespace qp::views;
@@ -54,6 +60,21 @@ qp::authoring::PortUiDesc numeric_description(const std::string& type, double lo
     d.maximum = high;
     return d;
 }
+
+/// @brief An inert binder, so the mounting rules can be asserted without a plugin.
+class InertBinder final : public qp::graph::execution::IOperatorBinder {
+public:
+    [[nodiscard]] bool can_bind(std::string_view,
+                                const qp::graph::execution::StateView&) const noexcept override {
+        return false;
+    }
+
+    [[nodiscard]] std::unique_ptr<qp::graph::execution::IStateOperator> bind(
+        std::string_view, const qp::graph::Node&,
+        const qp::graph::execution::StateView&) override {
+        return nullptr;
+    }
+};
 
 }  // namespace
 
@@ -326,4 +347,55 @@ TEST_CASE("views.editor_choice.unregistered_type_is_read_only", "[views]") {
     REQUIRE(fallback.is_valid());
     REQUIRE(fallback.editor == EditorKind::read_only);
     REQUIRE_FALSE(fallback.label.empty());
+}
+
+// ===========================================================================
+// Where the window gets its binders
+// ===========================================================================
+
+TEST_CASE("views.binders.mounted_once_and_in_order", "[views]") {
+    // The inversion that keeps the view layer free of the plugin layer: `views/model` declares where
+    // binders come from, and whoever assembles the application puts them there. The rules that make that
+    // usable rather than merely possible are what is asserted here.
+    //
+    // This list is process-wide, so the case asserts its own additions and never the list's absolute
+    // contents. A case that demanded an empty list would pass alone and fail in a suite, which is the
+    // shape of test that gets deleted rather than fixed.
+    std::vector<qp::graph::execution::IOperatorBinder*>& binders =
+        qp::views::model::execution_binders();
+
+    // The same object every call, because a caller that copied it would be copying borrows.
+    REQUIRE(&qp::views::model::execution_binders() == &binders);
+
+    InertBinder first;
+    InertBinder second;
+    const std::size_t before = binders.size();
+
+    qp::views::model::mount_execution_binder(&first);
+    REQUIRE(binders.size() == before + 1);
+    REQUIRE(binders.back() == &first);
+
+    // Idempotent per pointer: mounting the same binder twice would have it consulted twice, which is
+    // wasted work rather than a wrong answer -- and the deduplication costs one comparison.
+    qp::views::model::mount_execution_binder(&first);
+    REQUIRE(binders.size() == before + 1);
+
+    // Nothing is reordered: the list is the consultation order, and a first binder that claimed a type
+    // must keep claiming it before a later one is asked.
+    qp::views::model::mount_execution_binder(&second);
+    REQUIRE(binders.size() == before + 2);
+    REQUIRE(binders[before] == &first);
+    REQUIRE(binders[before + 1] == &second);
+
+    // A null binder is ignored rather than stored. A caller assembling binders from optional plugins will
+    // have holes, and a stored null would be dereferenced on every run -- the search does skip nulls, but
+    // the list is what a reader looks at to see what is mounted.
+    qp::views::model::mount_execution_binder(nullptr);
+    REQUIRE(binders.size() == before + 2);
+
+    // The published list is what a run consults, so the pointers in it have to be the ones a caller
+    // mounted: a copy would leave the window running binders nobody filled in.
+    binders.pop_back();
+    binders.pop_back();
+    REQUIRE(binders.size() == before);
 }

@@ -23,7 +23,9 @@ add_library(qp_views_model STATIC
     demo_library.cpp
     editor_choice.cpp
     measurement_model.cpp
-    confidence_model.cpp)
+    confidence_model.cpp
+    run_controller.cpp
+    execution_binders.cpp)
 
 add_library(qp::views_model ALIAS qp_views_model)
 
@@ -40,7 +42,7 @@ target_compile_features(qp_views_model PUBLIC cxx_std_20)
 # rather than a second opinion about it. None of that needs Qt, which is the point -- the
 # arithmetic that can be wrong is asserted on both compilers.
 target_link_libraries(qp_views_model
-    PUBLIC qp::graph_ir qp::ports qp::units qp::authoring_portui
+    PUBLIC qp::graph_ir qp::ports qp::units qp::authoring_portui qp::authoring_commands
            qp::runtime_store qp::runtime_trace qp::runtime_run qp::runtime_io
            qp::graph_structure qp::graph_eval qp::graph_execution
     PRIVATE qp_warnings qp_sanitize)

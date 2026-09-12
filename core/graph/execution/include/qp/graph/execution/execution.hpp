@@ -233,7 +233,43 @@ public:
     IOperatorBinder(const IOperatorBinder&) = delete;
     IOperatorBinder& operator=(const IOperatorBinder&) = delete;
 
-    /// @brief Builds the operator for `node`, or null when this binder does not handle its type.
+    /**
+     * @brief Whether this binder handles `type_name` at all, with `layout`.
+     *
+     * Separate from `bind` because the two questions have different answers, and the difference is what
+     * the user reads. A search for something to run needs to know **whether a type is known**, which does
+     * not depend on the instance's parameters; whether a particular instance can be honoured is the next
+     * question. Collapsing them made a graph holding a spring-damper with damping report "no node in this
+     * graph has an operator yet" -- which sends the reader looking for a missing plugin instead of at the
+     * two numbers on the node in front of them.
+     *
+     * Examined with the layout the run will use, so a binder that cannot describe the state shape says so
+     * here rather than being counted as recognising a type it could never run.
+     *
+     * @param type_name The node type, e.g. "demo.spring_damper".
+     * @param layout    The state layout the operator would be handed.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        The answer depends only on `type_name` and `layout`, never on a node instance
+     * @invariant   A binder answering true here answers non-null from `bind` for at least one
+     *              parameterisation of that type
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.loop.can_bind_answers_for_the_type_not_the_instance
+     */
+    [[nodiscard]] virtual bool can_bind(std::string_view type_name,
+                                       const StateView& layout) const noexcept = 0;
+
+    /// @brief Builds the operator for `node`, or null when this binder cannot honour it.
+    ///
+    /// A null here means "this type is mine, but not what this instance asks for" -- damping the kernel
+    /// has no term for, an integrator with no implementation, a parameter nobody has filled in. Callers
+    /// should have asked `can_bind` first; this is the second question, not the first.
+    ///
     ///
     /// @param type_name The node instance's type, e.g. "demo.spring_damper".
     /// @param node      The instance, for reading parameters. Const: a binder must not edit the graph.
@@ -293,7 +329,8 @@ struct RunOutcome final {
  * @errors      See each declaration
  * @frozen      no
  * @tests       execution.loop.records_the_initial_condition,
- *              execution.loop.second_run_replaces_the_trace
+ *              execution.loop.second_run_replaces_the_trace,
+ *              execution.loop.run_can_be_named_after_binding
  */
 class GraphRun final {
 public:
@@ -308,24 +345,61 @@ public:
      * @param node    The node instance. Only its type and parameters are read.
      * @param binders The binders to consult, in order. Later ones are tried when earlier ones
      *                decline, so a general binder may precede a specific one.
-     * @param run     The run identity the trace belongs to.
+     * @param run     The run identity the trace belongs to, or a **default-constructed** id meaning
+     *                "not known yet". A valid id files the trace under that run; an unknown one leaves
+     *                the trace unnamed until `set_run` supplies an identity.
+     *
+     *                Accepting an unknown identity is a correction rather than a convenience. Opening a
+     *                run in the ledger before binding means a refused bind leaves an entry for a run
+     *                that never executed, and a ledger full of those is unreadable -- exactly what its
+     *                own gap report exists to avoid. A caller that wants to bind first therefore needs
+     *                `prepare` to tolerate an unknown identity, and nothing is lost: `set_run` creates
+     *                the trace, so it cannot carry an id nobody issued.
      * @param layout  The state layout to use. Defaults to the mechanics family's three components.
      *
      * @ownership   owns the operator
      * @thread      main
-     * @pre         `run.valid()`
-     * @post        On success `operator_name()` is non-empty and `is_ready()` is true
+     * @pre         none
+     * @post        On success `operator_name()` is non-empty and `is_ready()` is true; the trace is
+     *              fresh, its channels are declared, and a valid `run` names it
      * @invariant   No binder is consulted twice
      * @errors      `not_implemented` when no binder claims the node, so the caller can say which
      *              type it was rather than reporting a generic failure
      * @complexity  O(binders * parameters)
      * @nondet      none
      * @frozen      no
-     * @tests       execution.loop.rejects_unusable_arguments
- */
+     * @tests       execution.loop.rejects_unusable_arguments,
+     *              execution.loop.run_can_be_named_after_binding
+     */
     [[nodiscard]] diag::Result<void> prepare(
         const Node& node, const std::vector<IOperatorBinder*>& binders,
         qp::runtime::RunId run, std::size_t particles = 1);
+
+    /**
+     * @brief Names the run this loop's trace belongs to, replacing any previous trace.
+     *
+     * Called after `prepare` by a caller that wanted to know whether anything would run before opening a
+     * ledger entry. It clears the recorded samples, because a trace and a run identity are one record:
+     * keeping samples from an unnamed trace and then labelling them would attribute numbers to a run that
+     * did not produce them.
+     *
+     * @param run A valid run identity. An invalid one is ignored, so a caller cannot erase a good run's
+     *            trace by passing a default-constructed id.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        For a valid `run`, `trace().run() == run` and the channels are declared
+     * @invariant   A caller can append samples immediately afterwards
+     * @errors      May allocate; the channel set is fixed, so a channel failure would be a defect and is
+     *              asserted rather than returned
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.loop.rejects_unusable_arguments,
+     *              execution.loop.run_can_be_named_after_binding
+     */
+    void set_run(qp::runtime::RunId run);
 
     /// @brief Sets the initial state of one particle.
     ///
@@ -439,11 +513,32 @@ public:
     [[nodiscard]] const qp::runtime::Trace& trace() const noexcept { return trace_; }
 
 private:
+    /**
+     * @brief Declares the run's channels on the trace.
+     *
+     * Called from `prepare` and `set_run` alone, because the channels name quantities that only exist once
+     * an operator is bound: a loop with no operator has no position to record. There is no "declared"
+     * flag: the trace's own channel count is the readable answer, and a second copy of it would be a
+     * second thing to keep in step.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         `trace_` carries the run identity the samples will belong to
+     * @post        On success the trace holds exactly the position and velocity channels, in that order
+     * @invariant   A caller can append a two-value sample immediately afterwards
+     * @errors      `already_exists` propagated from `Trace::add_channel` if the channel is duplicated
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.loop.records_the_initial_condition,
+     *              execution.loop.run_can_be_named_after_binding
+     */
+    [[nodiscard]] diag::Result<void> declare_channels();
+
     StateView state_{};
     std::unique_ptr<IStateOperator> operator_{};
     std::string operator_name_{};
     qp::runtime::Trace trace_{qp::runtime::RunId{}};
-    bool channels_declared_ = false;
 };
 
 }  // namespace qp::graph::execution

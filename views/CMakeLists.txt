@@ -100,3 +100,11 @@ add_executable(qp_shell
 
 target_include_directories(qp_shell PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/qt)
 target_link_libraries(qp_shell PRIVATE qp::views)
+
+# The application is where plugin knowledge belongs, and the macro is how it knows whether there is
+# any. Defined here rather than in a header so the window cannot accidentally depend on it: `views`
+# must build with plugins absent, and a macro it could see would invite exactly that.
+if(QP_BUILD_PLUGINS)
+    target_compile_definitions(qp_shell PRIVATE QP_HAS_MECHANICS_PLUGIN)
+    target_link_libraries(qp_shell PRIVATE qp::plugins::mechanics)
+endif()

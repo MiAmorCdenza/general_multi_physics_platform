@@ -9,6 +9,7 @@
 
 #include <qp/units/dimensions.hpp>
 
+#include <cassert>
 #include <string>
 #include <utility>
 
@@ -51,7 +52,6 @@ bool StateView::is_consistent() const noexcept {
 diag::Result<void> GraphRun::prepare(const Node& node,
                                      const std::vector<IOperatorBinder*>& binders,
                                      rt::RunId run, std::size_t particles) {
-    if (!run.valid()) return diag::ErrorCode::invalid_argument;
     if (particles == 0) return diag::ErrorCode::invalid_argument;
 
     // The state exists before any binder is consulted, because a binder is handed the layout it must
@@ -76,17 +76,37 @@ diag::Result<void> GraphRun::prepare(const Node& node,
         return diag::ErrorCode::not_implemented;
     }
 
-    // A fresh trace per run, so a second run does not append to the first one's samples. Reassigned
-    // rather than cleared because the run identity is fixed at construction.
+    // A fresh trace per run so a second run does not append to the first one's samples, and its channels
+    // are declared **here** rather than in `set_run`: a bound loop is one that can record, and
+    // `Trace::append` refuses a sample whose width does not match the channel count. Leaving the channels
+    // to `set_run` would make a bound-but-unfiled loop look ready and then fail on its first sample.
+    //
+    // The identity may still be unknown, which is the point of the parameter's contract: a caller that
+    // binds before it opens a ledger entry has none yet, and `set_run` re-files the trace under the real
+    // one once it does.
     trace_ = rt::Trace{run};
-    channels_declared_ = false;
+    return declare_channels();
+}
+
+diag::Result<void> GraphRun::declare_channels() {
     const auto x_channel = trace_.add_channel(rt::Channel{kPositionChannel, qp::units::dims::length});
     if (!x_channel.has_value()) return x_channel.error();
     const auto v_channel =
         trace_.add_channel(rt::Channel{kVelocityChannel, qp::units::dims::velocity});
     if (!v_channel.has_value()) return v_channel.error();
-    channels_declared_ = true;
     return {};
+}
+
+void GraphRun::set_run(rt::RunId run) {
+    if (!run.valid()) return;  // cannot erase a good run's trace with an id nobody issued
+    // A fresh trace per run, so a second run does not append to the first one's samples. Reassigned
+    // rather than cleared because the run identity is fixed at construction.
+    trace_ = rt::Trace{run};
+    const auto declared = declare_channels();
+    // The only way this fails is a duplicate channel name, which the fixed channel set above cannot
+    // produce; asserting the invariant here keeps `set_run` noexcept for its callers.
+    assert(declared.has_value() && "the fixed channel set cannot collide with itself");
+    (void)declared;
 }
 
 diag::Result<void> GraphRun::set_initial(std::size_t particle, double position, double velocity) {

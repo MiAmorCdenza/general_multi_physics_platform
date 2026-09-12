@@ -68,6 +68,12 @@ public:
 /// @brief A binder that answers for any type, so the loop can be exercised without a plugin.
 class AnyTypeBinder final : public execution::IOperatorBinder {
 public:
+    [[nodiscard]] bool can_bind(std::string_view type_name,
+                                const execution::StateView&) const noexcept override {
+        (void)type_name;
+        return true;
+    }
+
     [[nodiscard]] std::unique_ptr<execution::IStateOperator> bind(
         std::string_view, const Node&, const execution::StateView&) override {
         return std::make_unique<RotationOperator>();
@@ -77,6 +83,32 @@ public:
 /// @brief A binder that refuses everything, for the "nothing can run this" case.
 class NoTypeBinder final : public execution::IOperatorBinder {
 public:
+    [[nodiscard]] bool can_bind(std::string_view type_name,
+                                const execution::StateView&) const noexcept override {
+        (void)type_name;
+        return false;
+    }
+
+    [[nodiscard]] std::unique_ptr<execution::IStateOperator> bind(
+        std::string_view, const Node&, const execution::StateView&) override {
+        return nullptr;
+    }
+};
+
+/// @brief A binder that owns a type but can honour no instance of it.
+///
+/// The stub that makes `can_bind` and `bind` two different questions rather than one asked twice. Every
+/// instance of the type is declined, so `can_bind` is true -- the type is this binder's -- while `bind`
+/// returns null. A design that collapsed the two could express only one of the two answers, and the
+/// answer it would lose is the one that tells a user whether to look for a plugin or at the two numbers
+/// on the node in front of them.
+class ClaimsButRefusesBinder final : public execution::IOperatorBinder {
+public:
+    [[nodiscard]] bool can_bind(std::string_view type_name,
+                                const execution::StateView&) const noexcept override {
+        return type_name == "mine.but.unusable";
+    }
+
     [[nodiscard]] std::unique_ptr<execution::IStateOperator> bind(
         std::string_view, const Node&, const execution::StateView&) override {
         return nullptr;
@@ -86,6 +118,12 @@ public:
 /// @brief A binder that answers for exactly one type name, so ordering can be exercised.
 class NamedTypeBinder final : public execution::IOperatorBinder {
 public:
+    [[nodiscard]] bool can_bind(std::string_view type_name,
+                                const execution::StateView&) const noexcept override {
+        (void)type_name;
+        return type_name == wanted_;
+    }
+
     explicit NamedTypeBinder(std::string_view wanted) : wanted_(wanted) {}
     [[nodiscard]] std::unique_ptr<execution::IStateOperator> bind(
         std::string_view type_name, const Node&, const execution::StateView&) override {
@@ -185,16 +223,118 @@ TEST_CASE("execution.loop.second_run_replaces_the_trace", "[execution]") {
     REQUIRE(run.trace().size() == 51);
 }
 
+TEST_CASE("execution.loop.run_can_be_named_after_binding", "[execution]") {
+    // A caller that must bind **before** it opens a ledger entry prepares with an unknown identity and
+    // supplies the real one afterwards. That ordering is not a convenience: opening the run first means a
+    // refused bind leaves an entry for a run that never executed, and a ledger whose gaps read like
+    // events is worse than no ledger -- the gap is the information.
+    //
+    // So `prepare` accepting `RunId{}` is the contract that makes the honest ordering possible, and this
+    // case is what says so.
+    AnyTypeBinder binder;
+    const Node node = any_node("anything");
+
+    execution::GraphRun run;
+    REQUIRE(run.prepare(node, {&binder}, rt::RunId{}).has_value());
+    REQUIRE(run.is_ready());
+    // Bound but unfiled: the loop knows what would run, can already record, and has recorded nothing.
+    // The channels come with binding rather than with the identity, so a bound loop is never a loop whose
+    // first sample would be refused for having the wrong width.
+    REQUIRE(run.trace().empty());
+    REQUIRE(run.trace().channel_count() == 2);
+    REQUIRE_FALSE(run.trace().run().valid());
+
+    // Samples can be taken without an identity, and they carry none. Nothing is wrong yet; it is a trace
+    // that has not been filed.
+    REQUIRE(run.set_initial(0, 3.0, 0.0).has_value());
+    run.set_omega(2.0);
+    REQUIRE(run.run(10, 1.0e-3).ok());
+    REQUIRE(run.trace().size() == 11);
+    REQUIRE_FALSE(run.trace().run().valid());
+
+    // Naming it replaces the trace, and this is the assertion that keeps the record honest: samples and
+    // identity are one record, so relabelling the previous numbers would attribute them to a run that did
+    // not produce them.
+    run.set_run(rt::RunId{42});
+    REQUIRE(run.trace().run() == rt::RunId{42});
+    REQUIRE(run.trace().empty());
+    REQUIRE(run.trace().channel_count() == 2);
+
+    // A caller can append immediately: the channels came with the identity.
+    REQUIRE(run.run(4, 1.0e-3).ok());
+    REQUIRE(run.trace().size() == 5);
+    REQUIRE(run.trace().run() == rt::RunId{42});
+
+    // An id nobody issued cannot be used to erase a named trace.
+    run.set_run(rt::RunId{});
+    REQUIRE(run.trace().run() == rt::RunId{42});
+    REQUIRE(run.trace().size() == 5);
+}
+
+TEST_CASE("execution.loop.can_bind_answers_for_the_type_not_the_instance", "[execution]") {
+    // `can_bind` and `bind` answer two different questions, and the interface keeps them apart on purpose.
+    //
+    //   - `can_bind(type, layout)` -- "is this type mine at all, in a state I could describe?"
+    //   - `bind(type, node, layout)` -- "can I honour *this instance*?", where the answer may be no for a
+    //     reason the instance carries: a parameter nobody filled in, damping the kernel has no term for,
+    //     an integrator with no implementation.
+    //
+    // The distinction is what a caller needs in order to say the right sentence. Collapsed into one, the
+    // only available message for every refusal is the same, and the one it loses is the one that tells a
+    // user whether to install a plugin or to look at the numbers already on the node.
+    const execution::StateView layout = execution::StateView::zeroed(1);
+
+    // The type is mine, and no instance of it is usable. That is expressible, and this is the stub that
+    // proves the interface can express it.
+    ClaimsButRefusesBinder unusable;
+    REQUIRE(unusable.can_bind("mine.but.unusable", layout));
+    REQUIRE(unusable.can_bind("yours", layout) == false);
+
+    // It still declines the run: answering true to the first question is not a promise to run anything.
+    // This is the pair a search-then-run caller must handle, and the graph layer's job is only to report
+    // it -- naming the node is the caller's business.
+    execution::GraphRun refused;
+    const auto prepared = refused.prepare(any_node("mine.but.unusable"), {&unusable}, rt::RunId{1});
+    REQUIRE_FALSE(prepared.has_value());
+    REQUIRE(prepared.error() == qp::diag::ErrorCode::not_implemented);
+    REQUIRE_FALSE(refused.is_ready());
+
+    // And the answer to the first question does not depend on the node instance, which is what makes it
+    // askable **before** there is anything to run: the same type and layout give the same answer for a
+    // node with parameters and for one without.
+    Node bare = any_node("mine.but.unusable");
+    Node filled = any_node("mine.but.unusable");
+    filled.set_param(2, qp::ports::Value{200.0});
+    REQUIRE(filled.param(2).valid());
+    REQUIRE(unusable.can_bind(bare.type_name, layout) == unusable.can_bind(filled.type_name, layout));
+
+    // The layout is part of the question, because a binder that cannot describe the state shape cannot
+    // run anything regardless of which node it is handed.
+    const execution::StateView other_shape = execution::StateView::zeroed(2, 1);
+    REQUIRE(other_shape.is_consistent());
+    REQUIRE(unusable.can_bind("mine.but.unusable", other_shape) ==
+            unusable.can_bind("mine.but.unusable", layout));
+}
+
 TEST_CASE("execution.loop.rejects_unusable_arguments", "[execution]") {
     AnyTypeBinder binder;
     const Node node = any_node("anything");
 
-    // An invalid run identity is refused at the point the trace would be created, and zero particles
-    // is not a run.
+    // Zero particles is not a run, with or without an identity: there is no state to step.
     {
         execution::GraphRun run;
-        REQUIRE_FALSE(run.prepare(node, {&binder}, rt::RunId{}).has_value());
         REQUIRE_FALSE(run.prepare(node, {&binder}, rt::RunId{1}, 0).has_value());
+        REQUIRE_FALSE(run.prepare(node, {&binder}, rt::RunId{}, 0).has_value());
+    }
+
+    // An unknown identity is accepted -- `execution.loop.run_can_be_named_after_binding` is where that is
+    // tested -- but `set_run` refuses one, so a caller cannot erase a named run's trace by passing a
+    // default-constructed id.
+    {
+        execution::GraphRun run;
+        REQUIRE(run.prepare(node, {&binder}, rt::RunId{1}).has_value());
+        run.set_run(rt::RunId{});
+        REQUIRE(run.trace().run() == rt::RunId{1});
     }
 
     // No binder claims the type: `not_implemented`, so the caller can name what it could not run

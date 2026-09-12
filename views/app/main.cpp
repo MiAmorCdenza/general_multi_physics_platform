@@ -18,10 +18,26 @@
  */
 #include "editor_window.hpp"
 
+#include <qp/views/model/execution_binders.hpp>
+
+#if defined(QP_HAS_MECHANICS_PLUGIN)
+#include <qp/plugins/mechanics/mechanics_binder.hpp>
+#endif
+
 #include <QApplication>
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    // The one place that knows which plugins exist. Mounting happens before the window is built, because
+    // the window's run controller captures the list during construction.
+    //
+    // Guarded by `QP_BUILD_PLUGINS`: with plugins off there is nothing to mount, and the Run action then
+    // reports that no node has an operator -- which is the accurate description of that build.
+#if defined(QP_HAS_MECHANICS_PLUGIN)
+    qp::plugins::mechanics::MechanicsBinder mechanics;
+    qp::views::model::mount_execution_binder(&mechanics);
+#endif
+
     qp::views::EditorWindow window;
     // The application decides to seed itself; the window does not. One call, so the graph and
     // the measurement session cannot be seeded in the wrong order by a caller that only

@@ -371,7 +371,7 @@ qp_add_test(qp_test_graph_domain
 qp_add_test(qp_test_graph_field
     SOURCES unit/graph/test_field.cpp
     LIBS qp::field)
-# The run loop, driven through a real plugin node.
+# The binding half: which node becomes which operator, and what is refused.
 #
 # The test lives under `unit/plugins/` rather than `unit/graph/` because it owns contracts declared in
 # **two** modules -- the loop in `core/graph/execution` and the binder in `plugins/mechanics` -- and the
@@ -551,12 +551,31 @@ qp_add_test(qp_test_runtime_io
 # from a consumer's checkout entirely, so this file cannot assume the target exists:
 # CMake's `if(TARGET ...)` is the honest way to ask, and it stays correct whether the
 # directory is missing, the option is off, or the two disagree.
-if(TARGET qp::views_model)
+#
+# Two targets, not one, and the second condition is the reason. `qp::views_model` does
+# **not** depend on the plugin -- the view layer was deliberately inverted so it could be
+# built without one -- but three of the four files below include plugin headers, because
+# a confidence panel needs a real integrator to produce a trace worth judging and the Run
+# controller needs a real binder. So with `QP_BUILD_VIEWS=ON` and `QP_BUILD_PLUGINS=OFF`
+# the link line names a target that does not exist and configure fails outright. Asking
+# for both targets converts that into "these tests need a plugin", which is the truth.
+if(TARGET qp::views_model AND TARGET qp::plugins::mechanics)
     qp_add_test(qp_test_views_model
         SOURCES model/test_views_model.cpp
                 model/test_measurement_model.cpp
                 model/test_confidence_model.cpp
         LIBS qp::views_model qp::runtime_io qp::runtime_store qp::runtime_trace qp::runtime_run qp::plugins::mechanics)
+
+    # The window's Run action, in this partition rather than the plugin one, because its
+    # cases are claimed by `views/model/run_controller.hpp`. Test ownership is judged per
+    # invocation, so the file's **path** decides which gate owns it: `--only model` sees
+    # this subtree and the plugin invocation does not, and a case filed under
+    # `unit/plugins/` had its contracts in a partition that could not see it -- which the
+    # gate reported, correctly, as both orphans and dangling `@tests` ids.
+    qp_add_test(qp_test_run_controller
+        SOURCES model/test_run_controller.cpp
+        LIBS qp::views_model qp::plugins::mechanics qp::graph_execution qp::authoring_commands
+             qp::graph_mutate)
 endif()
 
 # The Qt half of the view layer is tested only when Qt is in the build. Guarded
