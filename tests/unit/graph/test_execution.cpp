@@ -236,6 +236,47 @@ private:
     return node;
 }
 
+/// @brief A binder for a model whose state is **not** the mechanics family's three components.
+///
+/// It exists because that is what the loop could not express. `GraphRun::prepare` and `check_run` used to build
+/// the layout themselves -- `StateView::zeroed(particles)`, whose component count is three -- so every binder was
+/// asked about a shape this one does not accept and declined, and a two- or four-component model was reported as
+/// having nothing to run and could not be prepared at all. The defect was latent while the only operator in the
+/// tree was the three-component oscillator.
+class TwoComponentBinder final : public execution::IOperatorBinder {
+public:
+    static constexpr std::size_t kComponents = 2;
+
+    [[nodiscard]] bool can_bind(std::string_view type_name,
+                                const execution::StateView& layout) const noexcept override {
+        // The type **and** the layout, which is the whole point: a binder is asked with the layout it will be
+        // handed, so it can say no instead of reading a component nothing writes.
+        return type_name == kType && layout.components_per_particle == kComponents;
+    }
+
+    [[nodiscard]] std::unique_ptr<execution::IStateOperator> bind(
+        std::string_view type_name, const Node&, const execution::StateView& layout) override {
+        if (!can_bind(type_name, layout)) return nullptr;
+        return std::make_unique<CounterOperator>();
+    }
+
+    static constexpr const char* kType = "test.two_component";
+
+private:
+    /// @brief Advances component 0 by `dt` and leaves component 1 alone: enough to see that it ran.
+    class CounterOperator final : public execution::IStateOperator {
+    public:
+        [[nodiscard]] std::string_view name() const noexcept override { return "counter"; }
+        [[nodiscard]] execution::SimModelDesc describe() const noexcept override { return {}; }
+        [[nodiscard]] qp::diag::Result<void> step(execution::StateView& state, double dt) override {
+            for (std::size_t i = 0; i < state.count; ++i) {
+                state.set(i, 0, state.at(i, 0) + dt);
+            }
+            return {};
+        }
+    };
+};
+
 }  // namespace
 
 TEST_CASE("execution.loop.records_the_initial_condition", "[execution]") {
@@ -247,7 +288,7 @@ TEST_CASE("execution.loop.records_the_initial_condition", "[execution]") {
     execution::GraphRun run;
     const Node node = any_node("anything");
 
-    REQUIRE(run.prepare(node, {&binder}, rt::RunId{7}).has_value());
+    REQUIRE(run.prepare(node, {&binder}, execution::StateView::zeroed(1), rt::RunId{7}).has_value());
     REQUIRE(run.is_ready());
     REQUIRE(run.operator_name() == "test.rotation");
     REQUIRE(run.set_initial(0, 1.0, 0.0).has_value());
@@ -295,13 +336,13 @@ TEST_CASE("execution.loop.second_run_replaces_the_trace", "[execution]") {
     execution::GraphRun run;
     const Node node = any_node("anything");
 
-    REQUIRE(run.prepare(node, {&binder}, rt::RunId{1}).has_value());
+    REQUIRE(run.prepare(node, {&binder}, execution::StateView::zeroed(1), rt::RunId{1}).has_value());
     REQUIRE(run.set_initial(0, 1.0, 0.0).has_value());
     run.set_omega(2.0);
     REQUIRE(run.run(100, 1.0e-3).ok());
     REQUIRE(run.trace().size() == 101);
 
-    REQUIRE(run.prepare(node, {&binder}, rt::RunId{2}).has_value());
+    REQUIRE(run.prepare(node, {&binder}, execution::StateView::zeroed(1), rt::RunId{2}).has_value());
     REQUIRE(run.trace().size() == 0);
     REQUIRE(run.trace().run() == rt::RunId{2});
 
@@ -329,7 +370,7 @@ TEST_CASE("execution.loop.run_can_be_named_after_binding", "[execution]") {
     const Node node = any_node("anything");
 
     execution::GraphRun run;
-    REQUIRE(run.prepare(node, {&binder}, rt::RunId{}).has_value());
+    REQUIRE(run.prepare(node, {&binder}, execution::StateView::zeroed(1), rt::RunId{}).has_value());
     REQUIRE(run.is_ready());
     // Bound but unfiled: the loop knows what would run, can already record, and has recorded nothing.
     // The channels come with binding rather than with the identity, so a bound loop is never a loop whose
@@ -388,7 +429,7 @@ TEST_CASE("execution.loop.can_bind_answers_for_the_type_not_the_instance", "[exe
     // This is the pair a search-then-run caller must handle, and the graph layer's job is only to report
     // it -- naming the node is the caller's business.
     execution::GraphRun refused;
-    const auto prepared = refused.prepare(any_node("mine.but.unusable"), {&unusable}, rt::RunId{1});
+    const auto prepared = refused.prepare(any_node("mine.but.unusable"), {&unusable}, execution::StateView::zeroed(1), rt::RunId{1});
     REQUIRE_FALSE(prepared.has_value());
     REQUIRE(prepared.error() == qp::diag::ErrorCode::not_implemented);
     REQUIRE_FALSE(refused.is_ready());
@@ -422,7 +463,7 @@ TEST_CASE("execution.check_run.answers_before_anything_steps", "[execution]") {
     const ResolveContext ctx{&catalog, &qp::ports::builtin_registry()};
 
     // Nothing in it.
-    RunReadiness empty = check_run(graph, ctx, {&binder});
+    RunReadiness empty = check_run(graph, ctx, {&binder}, execution::StateView::zeroed(1));
     REQUIRE_FALSE(empty.ok());
     REQUIRE(empty.refusal == RunRefusal::empty_graph);
     REQUIRE_FALSE(empty.detail.empty());
@@ -432,7 +473,7 @@ TEST_CASE("execution.check_run.answers_before_anything_steps", "[execution]") {
 
     // A node whose type no binder claims: the graph is not empty, and this build cannot run it. The two
     // answers are different sentences because they are different problems.
-    RunReadiness none = check_run(graph, ctx, {&refuses});
+    RunReadiness none = check_run(graph, ctx, {&refuses}, execution::StateView::zeroed(1));
     REQUIRE_FALSE(none.ok());
     REQUIRE(none.refusal == RunRefusal::no_operator);
     REQUIRE(none.detail.find("no node") != std::string::npos);
@@ -445,7 +486,7 @@ TEST_CASE("execution.check_run.answers_before_anything_steps", "[execution]") {
     REQUIRE(unusable_node.has_value());
     OneTypeCatalog unusable_catalog{"mine.but.unusable"};
     const ResolveContext unusable_ctx{&unusable_catalog, &qp::ports::builtin_registry()};
-    RunReadiness declined = check_run(unusable, unusable_ctx, {&declines});
+    RunReadiness declined = check_run(unusable, unusable_ctx, {&declines}, execution::StateView::zeroed(1));
     REQUIRE_FALSE(declined.ok());
     REQUIRE(declined.refusal == RunRefusal::node_cannot_be_honoured);
     REQUIRE(declined.type_name == "mine.but.unusable");
@@ -453,7 +494,7 @@ TEST_CASE("execution.check_run.answers_before_anything_steps", "[execution]") {
     REQUIRE(declined.detail.find("mine.but.unusable") != std::string::npos);
 
     // And the answer a caller acts on: which node, which operator, and that nothing was stepped.
-    RunReadiness ready = check_run(graph, ctx, {&binder});
+    RunReadiness ready = check_run(graph, ctx, {&binder}, execution::StateView::zeroed(1));
     REQUIRE(ready.ok());
     REQUIRE(ready.node == added.value());
     REQUIRE(ready.type_name == "anything");
@@ -461,6 +502,74 @@ TEST_CASE("execution.check_run.answers_before_anything_steps", "[execution]") {
     REQUIRE(ready.detail.find("test.rotation") != std::string::npos);
     // Nothing stepped: the graph is exactly as it was, with no trace anywhere.
     REQUIRE(graph.node_count() == 1);
+}
+
+TEST_CASE("execution.check_run.asks_each_binder_with_the_layout_it_will_use", "[execution]") {
+    // **The defect this case exists for.** Both `check_run` and `GraphRun::prepare` used to build the layout
+    // themselves, at three components per particle -- the mechanics family's shape, which was the only shape in
+    // the tree when the loop was written. So a model whose state is two components or four was asked about a
+    // layout it does not accept, declined, and was reported as "nothing to run" even though a binder in the list
+    // claims it. `plugins/models`' pendulum is two components and its projectile is four, which is what surfaced
+    // it.
+    //
+    // The case asserts the property rather than the fix: the layout a run will use reaches the binder, and the
+    // answer changes with it. A test that only checked "a two-component model now runs" would pass for an
+    // implementation that special-cased two.
+    TwoComponentBinder binder;
+    const Node node = any_node(TwoComponentBinder::kType);
+    const std::vector<execution::IOperatorBinder*> binders{&binder};
+
+    qp::graph::Graph graph;
+    REQUIRE(graph.add_node_named(TwoComponentBinder::kType, "counter").has_value());
+
+    const ResolveContext ctx{nullptr, nullptr};
+
+    // With the layout the model declares, the graph is runnable and prepares.
+    const execution::StateView matching = execution::StateView::zeroed(1, TwoComponentBinder::kComponents);
+    const execution::RunReadiness ready = check_run(graph, ctx, binders, matching);
+    REQUIRE(ready.ok());
+    REQUIRE(ready.node.valid());
+
+    execution::GraphRun loop;
+    REQUIRE(loop.prepare(node, binders, matching, rt::RunId{1}).has_value());
+    REQUIRE(loop.operator_name() == "counter");
+
+    // With any other layout the binder declines, and both functions say so. Three is the case that used to be
+    // hardcoded, so it is the one worth naming.
+    for (const std::size_t components : {std::size_t{1}, std::size_t{3}, std::size_t{4}}) {
+        const execution::StateView wrong = execution::StateView::zeroed(1, components);
+        INFO("components " << components);
+        const execution::RunReadiness refused = check_run(graph, ctx, binders, wrong);
+        REQUIRE_FALSE(refused.ok());
+        REQUIRE(refused.refusal == execution::RunRefusal::no_operator);
+
+        execution::GraphRun other;
+        const auto prepared = other.prepare(node, binders, wrong, rt::RunId{1});
+        REQUIRE_FALSE(prepared.has_value());
+        REQUIRE(prepared.error() == qp::diag::ErrorCode::not_implemented);
+    }
+
+    // And the operator really runs at its own shape: one step of 0.5 advances the first component by 0.5 and
+    // leaves the second alone, which is only possible if the state handed over has two of them.
+    execution::GraphRun stepped;
+    REQUIRE(stepped.prepare(node, binders, matching, rt::RunId{2}).has_value());
+    REQUIRE(stepped.set_initial(0, 0.0, 0.0).has_value());
+    REQUIRE(stepped.run(1, 0.5).ok());
+    REQUIRE(stepped.state().components_per_particle == TwoComponentBinder::kComponents);
+    REQUIRE(std::abs(stepped.state().at(0, 0) - 0.5) < 1.0e-12);
+    REQUIRE(stepped.state().at(0, 1) == 0.0);
+
+    // An **empty** layout is refused rather than defaulted, and that is a correction: there used to be a
+    // `particles` argument beside the layout, so a caller could pass `StateView{}` and have the loop fill in a
+    // mechanics-shaped state of that many particles. Two numbers for one thing, with the layout silently winning
+    // whenever it named a count -- and the losing number was the one a test asserted about, which is how a
+    // parameter becomes impossible to argue with. There is one number now and it is the caller's.
+    AnyTypeBinder accepts_anything;
+    execution::GraphRun defaulted;
+    const auto nothing = defaulted.prepare(any_node("anything"), {&accepts_anything}, execution::StateView{},
+                                           rt::RunId{1});
+    REQUIRE_FALSE(nothing.has_value());
+    REQUIRE(nothing.error() == qp::diag::ErrorCode::invalid_argument);
 }
 
 TEST_CASE("execution.check_run.reports_validation_without_refusing", "[execution]") {
@@ -476,7 +585,7 @@ TEST_CASE("execution.check_run.reports_validation_without_refusing", "[execution
     OneTypeCatalog catalog{"anything"};
     const ResolveContext ctx{&catalog, &qp::ports::builtin_registry()};
 
-    const RunReadiness readiness = check_run(graph, ctx, {&binder});
+    const RunReadiness readiness = check_run(graph, ctx, {&binder}, execution::StateView::zeroed(1));
     REQUIRE(readiness.ok());
     // Whatever the empty catalog's verdict is, the answer is consistent: problems are counted in the struct and
     // never turn into a refusal.
@@ -502,7 +611,7 @@ TEST_CASE("execution.loop.a_raising_operator_is_a_fault_not_a_crash", "[executio
     RaisingBinder raising;
 
     execution::GraphRun run;
-    REQUIRE(run.prepare(any_node("demo.raising"), {&raising}, rt::RunId{7}).has_value());
+    REQUIRE(run.prepare(any_node("demo.raising"), {&raising}, execution::StateView::zeroed(1), rt::RunId{7}).has_value());
     REQUIRE(run.is_ready());
     REQUIRE(run.operator_name() == "test.raising");
     REQUIRE(run.set_initial(0, 1.0, 0.0).has_value());
@@ -538,8 +647,18 @@ TEST_CASE("execution.loop.rejects_unusable_arguments", "[execution]") {
     // Zero particles is not a run, with or without an identity: there is no state to step.
     {
         execution::GraphRun run;
-        REQUIRE_FALSE(run.prepare(node, {&binder}, rt::RunId{1}, 0).has_value());
-        REQUIRE_FALSE(run.prepare(node, {&binder}, rt::RunId{}, 0).has_value());
+        // A layout with no particles is a caller mistake rather than a default to be filled in: StateView{}
+        // is an empty state, and "run this over nothing" is not a request. This used to be expressed by passing
+        // particles = 0 beside a non-empty layout -- and that stopped being expressible when the separate
+        // count was removed, which is exactly why it was removed: two numbers for one thing, one of them
+        // silently winning, and a test that could no longer fail.
+        REQUIRE_FALSE(run.prepare(node, {&binder}, execution::StateView{}, rt::RunId{1}).has_value());
+        REQUIRE_FALSE(run.prepare(node, {&binder}, execution::StateView{}, rt::RunId{}).has_value());
+        // And a layout that claims a size its own values do not have is refused for the same reason.
+        execution::StateView ragged = execution::StateView::zeroed(2, 3);
+        ragged.values.pop_back();
+        REQUIRE_FALSE(ragged.is_consistent());
+        REQUIRE_FALSE(run.prepare(node, {&binder}, ragged, rt::RunId{1}).has_value());
     }
 
     // An unknown identity is accepted -- `execution.loop.run_can_be_named_after_binding` is where that is
@@ -547,7 +666,7 @@ TEST_CASE("execution.loop.rejects_unusable_arguments", "[execution]") {
     // default-constructed id.
     {
         execution::GraphRun run;
-        REQUIRE(run.prepare(node, {&binder}, rt::RunId{1}).has_value());
+        REQUIRE(run.prepare(node, {&binder}, execution::StateView::zeroed(1), rt::RunId{1}).has_value());
         run.set_run(rt::RunId{});
         REQUIRE(run.trace().run() == rt::RunId{1});
     }
@@ -557,7 +676,7 @@ TEST_CASE("execution.loop.rejects_unusable_arguments", "[execution]") {
     {
         execution::GraphRun run;
         NoTypeBinder none;
-        const auto prepared = run.prepare(node, {&none}, rt::RunId{1});
+        const auto prepared = run.prepare(node, {&none}, execution::StateView::zeroed(1), rt::RunId{1});
         REQUIRE_FALSE(prepared.has_value());
         REQUIRE(prepared.error() == qp::diag::ErrorCode::not_implemented);
         REQUIRE_FALSE(run.is_ready());
@@ -568,7 +687,7 @@ TEST_CASE("execution.loop.rejects_unusable_arguments", "[execution]") {
     {
         execution::GraphRun run;
         NamedTypeBinder specific{"wanted.type"};
-        REQUIRE(run.prepare(any_node("wanted.type"), {nullptr, &specific}, rt::RunId{1}).has_value());
+        REQUIRE(run.prepare(any_node("wanted.type"), {nullptr, &specific}, execution::StateView::zeroed(1), rt::RunId{1}).has_value());
         REQUIRE(run.is_ready());
     }
 
@@ -576,14 +695,14 @@ TEST_CASE("execution.loop.rejects_unusable_arguments", "[execution]") {
     {
         NamedTypeBinder specific{"wanted.type"};
         execution::GraphRun declined;
-        REQUIRE_FALSE(declined.prepare(any_node("other.type"), {&specific}, rt::RunId{1}).has_value());
+        REQUIRE_FALSE(declined.prepare(any_node("other.type"), {&specific}, execution::StateView::zeroed(1), rt::RunId{1}).has_value());
 
         execution::GraphRun accepted;
-        REQUIRE(accepted.prepare(any_node("wanted.type"), {&specific}, rt::RunId{1}).has_value());
+        REQUIRE(accepted.prepare(any_node("wanted.type"), {&specific}, execution::StateView::zeroed(1), rt::RunId{1}).has_value());
     }
 
     execution::GraphRun run;
-    REQUIRE(run.prepare(node, {&binder}, rt::RunId{1}).has_value());
+    REQUIRE(run.prepare(node, {&binder}, execution::StateView::zeroed(1), rt::RunId{1}).has_value());
 
     // An out-of-range particle is reported rather than silently dropped: a run that ignored it would
     // show fewer particles than the user thought they configured.
@@ -601,7 +720,7 @@ TEST_CASE("execution.loop.rejects_unusable_arguments", "[execution]") {
     // A non-positive or non-finite step is refused before any state is touched.
     for (const double bad : {0.0, -0.01, std::nan("")}) {
         execution::GraphRun other;
-        REQUIRE(other.prepare(node, {&binder}, rt::RunId{2}).has_value());
+        REQUIRE(other.prepare(node, {&binder}, execution::StateView::zeroed(1), rt::RunId{2}).has_value());
         const execution::RunOutcome refused = other.run(10, bad);
         REQUIRE_FALSE(refused.ok());
         REQUIRE(refused.error == qp::diag::ErrorCode::invalid_argument);
@@ -627,7 +746,7 @@ TEST_CASE("execution.loop.failure_keeps_earlier_samples", "[execution]") {
     // without needing any physics to diverge.
     AnyTypeBinder binder;
     execution::GraphRun run;
-    REQUIRE(run.prepare(any_node("anything"), {&binder}, rt::RunId{1}).has_value());
+    REQUIRE(run.prepare(any_node("anything"), {&binder}, execution::StateView::zeroed(1), rt::RunId{1}).has_value());
     REQUIRE(run.set_initial(0, 1.0, 0.0).has_value());
     run.set_omega(std::nan(""));
 

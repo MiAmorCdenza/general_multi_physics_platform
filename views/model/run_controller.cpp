@@ -64,8 +64,29 @@ RunResult RunController::run() const {
     // once in the view layer and not at all in the framework -- and the difference is not tidiness: the
     // framework version also asks `graph/validate`, so a caller can see the graph's problems *before* waiting
     // for a run rather than after.
+    // The layout the run will use, and it is **not** a constant any more. `GraphRun::prepare` and `check_run`
+    // used to build a mechanics-shaped layout of three components per particle, so a model whose state is two
+    // components or four could never be prepared: every binder was asked about a shape it does not accept and
+    // declined. That was latent while the only operator in the tree was the three-component oscillator, and
+    // `plugins/models`' pendulum (two) and projectile (four) are what surfaced it.
+    //
+    // The count is derived exactly the way `check_run` derives its own: ask each binder which layout it will
+    // take for the node, since the model owns its state shape and the caller cannot know it. `4` is the search
+    // ceiling -- the widest layout anything in this repository declares -- and a model needing more would raise
+    // it in one place.
+    const auto layout_for = [this](const qp::graph::Node& node) {
+        for (std::size_t components = 1; components <= 4; ++components) {
+            const execution::StateView probe = execution::StateView::zeroed(1, components);
+            for (graph::execution::IOperatorBinder* binder : binders_) {
+                if (binder != nullptr && binder->can_bind(node.type_name, probe)) return probe;
+            }
+        }
+        return execution::StateView::zeroed(1);
+    };
+
     const qp::graph::Graph& graph = session_->graph();
-    const execution::RunReadiness ready = execution::check_run(graph, resolve_, binders_);
+    const execution::RunReadiness ready = execution::check_run(graph, resolve_, binders_,
+                                                               execution::StateView::zeroed(1));
     if (!ready.ok()) {
         out.report.message = ready.detail;
         out.report.node_type = ready.type_name;
@@ -91,7 +112,7 @@ RunResult RunController::run() const {
     // record a run that never executed, and a ledger whose gaps cite it as present is worse than one
     // that admits the gap -- the whole point of the record is that a missing entry means something.
     execution::GraphRun loop;
-    const auto prepared = loop.prepare(*candidate, binders_, rt::RunId{});
+    const auto prepared = loop.prepare(*candidate, binders_, layout_for(*candidate), rt::RunId{});
     if (!prepared.has_value()) {
         // The type is supported -- `can_bind` said so, which is why this node was chosen -- but no
         // operator can honour *this instance*: a parameter is missing, damping the kernel has no term

@@ -521,11 +521,18 @@ struct RunReadiness final {
  * @param graph   The graph to inspect. Not modified.
  * @param ctx     The catalog and port registry to validate against.
  * @param binders The binders a run would consult, in order.
+ * @param layout  The state layout a run would use, because a binder's answer depends on it -- that is what
+ *                `can_bind`'s layout argument is for. **Required**, and it used to be absent: this function and
+ *                `GraphRun::prepare` both built a mechanics-shaped layout of three components per particle, so a
+ *                model whose state is two components or four was reported as unrunnable and could never be
+ *                prepared. `plugins/models`' pendulum is two and its projectile is four, which is how the defect
+ *                surfaced; it had been latent since the loop was written, because the only operator in the tree
+ *                was the three-component oscillator.
  * @param particles How many particles the run would use, since a binder is asked with a layout.
  *
  * @ownership   observes
  * @thread      main
- * @pre         `ctx.valid()`
+ * @pre         `ctx.valid()` and `layout.is_consistent()`
  * @post        `detail` is non-empty for every refusal and for success
  * @invariant   The graph is not modified
  * @errors      noexcept
@@ -533,11 +540,13 @@ struct RunReadiness final {
  * @nondet      none
  * @frozen      no
  * @tests       execution.check_run.answers_before_anything_steps,
- *              execution.check_run.reports_validation_without_refusing
+ *              execution.check_run.reports_validation_without_refusing,
+ *              execution.check_run.asks_each_binder_with_the_layout_it_will_use
  */
 [[nodiscard]] RunReadiness check_run(const qp::graph::Graph& graph,
                                      const ResolveContext& ctx,
                                      const std::vector<IOperatorBinder*>& binders,
+                                     const StateView& layout,
                                      std::size_t particles = 1);
 /**
  * @brief What one run produced, and everything needed to say what it did.
@@ -605,25 +614,36 @@ public:
      *                own gap report exists to avoid. A caller that wants to bind first therefore needs
      *                `prepare` to tolerate an unknown identity, and nothing is lost: `set_run` creates
      *                the trace, so it cannot carry an id nobody issued.
-     * @param layout  The state layout to use. Defaults to the mechanics family's three components.
+     * @param layout  The state layout to use: how many particles and how many doubles each. **Required**, and
+     *                see `check_run` for why a default of "one particle, three components" was a defect rather
+     *                than a convenience: a model with a two- or four-component state could not be prepared at
+     *                all, because the layout is what a binder is handed when it decides whether it can run the
+     *                node.
+     *
+     *                There is no separate particle count, and that is a correction rather than a simplification:
+     *                while both existed, the count was unreachable whenever the layout named one -- the same
+     *                number in two places, with the layout silently winning. A test asserting the other one was
+     *                rejected stopped failing, which is a parameter that cannot be argued with.
      *
      * @ownership   owns the operator
      * @thread      main
-     * @pre         none
+     * @pre         `layout.is_consistent()` and `layout.count > 0`
      * @post        On success `operator_name()` is non-empty and `is_ready()` is true; the trace is
      *              fresh, its channels are declared, and a valid `run` names it
      * @invariant   No binder is consulted twice
-     * @errors      `not_implemented` when no binder claims the node, so the caller can say which
-     *              type it was rather than reporting a generic failure
+     * @errors      `invalid_argument` for a layout with no particles or an inconsistent size, and
+     *              `not_implemented` when no binder claims the node, so the caller can say which type it was
+     *              rather than reporting a generic failure
      * @complexity  O(binders * parameters)
      * @nondet      none
      * @frozen      no
      * @tests       execution.loop.rejects_unusable_arguments,
-     *              execution.loop.run_can_be_named_after_binding
+     *              execution.loop.run_can_be_named_after_binding,
+     *              execution.check_run.asks_each_binder_with_the_layout_it_will_use
      */
     [[nodiscard]] diag::Result<void> prepare(
         const Node& node, const std::vector<IOperatorBinder*>& binders,
-        qp::runtime::RunId run, std::size_t particles = 1);
+        const StateView& layout, qp::runtime::RunId run);
 
     /**
      * @brief Names the run this loop's trace belongs to, replacing any previous trace.

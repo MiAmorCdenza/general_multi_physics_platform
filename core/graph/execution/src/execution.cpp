@@ -52,13 +52,32 @@ bool StateView::is_consistent() const noexcept {
 
 diag::Result<void> GraphRun::prepare(const Node& node,
                                      const std::vector<IOperatorBinder*>& binders,
-                                     rt::RunId run, std::size_t particles) {
-    if (particles == 0) return diag::ErrorCode::invalid_argument;
+                                     const StateView& layout, rt::RunId run) {
+    // The layout is the caller's, in both dimensions. A layout with no particles is a caller mistake rather
+    // than a default to be filled in: `StateView{}` is an empty state, and "run this over nothing" is not a
+    // meaningful request. There used to be a `particles` argument beside this one, and it was unreachable --
+    // whenever the layout named a count, that count won -- so it is gone rather than documented as ignored.
+    //
+    // `is_consistent` and not just the two counts: a layout whose `values` do not match its own claimed shape
+    // would be allocated **from** the counts here, so the ragged buffer a caller passed would be discarded and
+    // the run would quietly succeed at a shape nobody asked for. Refusing is what makes the layout a contract
+    // rather than a hint -- and this is a case the ragged-layout assertion in
+    // `execution.loop.rejects_unusable_arguments` caught, because the first version of this check only looked at
+    // the counts and the run prepared happily.
+    if (layout.count == 0 || layout.components_per_particle == 0 || !layout.is_consistent()) {
+        return diag::ErrorCode::invalid_argument;
+    }
 
     // The state exists before any binder is consulted, because a binder is handed the layout it must
     // be able to work with. Asking it to build an operator and *then* checking the layout would let
     // it read the wrong component while deciding.
-    state_ = StateView::zeroed(particles);
+    //
+    // **The component count comes from the caller now.** It used to be `StateView::zeroed(particles)`, whose
+    // default is the mechanics family's three, so a model with a two- or four-component state could never be
+    // prepared: every binder was asked about a shape it does not accept and declined. Latent since the loop was
+    // written, because the only operator in the tree was the three-component oscillator; `plugins/models`'
+    // pendulum is two and its projectile is four, which is what surfaced it.
+    state_ = StateView::zeroed(layout.count, layout.components_per_particle);
 
     operator_.reset();
     operator_name_.clear();
@@ -132,7 +151,8 @@ void GraphRun::set_omega(double omega) noexcept {
 }
 
 RunReadiness check_run(const qp::graph::Graph& graph, const ResolveContext& ctx,
-                       const std::vector<IOperatorBinder*>& binders, std::size_t particles) {
+                       const std::vector<IOperatorBinder*>& binders, const StateView& layout,
+                       std::size_t particles) {
     RunReadiness out;
 
     if (graph.node_count() == 0) {
@@ -154,8 +174,13 @@ RunReadiness check_run(const qp::graph::Graph& graph, const ResolveContext& ctx,
     }
 
     // The search, by `can_bind` rather than by node order alone: a graph holding a type this build does not
-    // have is still runnable as long as something in it is.
-    const StateView probe = StateView::zeroed(particles);
+    // have is still runnable as long as something in it is. The probe carries the **caller's** component count,
+    // because that is the answer a binder gives: a probe of the wrong shape makes every binder decline and the
+    // graph is reported as having nothing to run.
+    const StateView probe = layout.components_per_particle > 0
+                                ? StateView::zeroed(layout.count > 0 ? layout.count : particles,
+                                                    layout.components_per_particle)
+                                : StateView::zeroed(particles);
     const Node* candidate = nullptr;
     for (const qp::graph::NodeSlot& slot : graph.slots()) {
         if (!slot.occupied) continue;

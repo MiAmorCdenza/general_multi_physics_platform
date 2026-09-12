@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file test_execution_binding.cpp
  * @brief Which node becomes which operator, and what is refused.
  *
@@ -70,7 +70,7 @@ TEST_CASE("execution.binding.binder_comes_from_the_plugin", "[execution]") {
     // generic failure, and the operator's name travels from the kernel to the caller so a report can
     // say which method produced the numbers.
     execution::GraphRun run;
-    REQUIRE(run.prepare(spring_damper(12.0, 0.5), binders(), rt::RunId{1}).has_value());
+    REQUIRE(run.prepare(spring_damper(12.0, 0.5), binders(), execution::StateView::zeroed(1), rt::RunId{1}).has_value());
     REQUIRE(run.is_ready());
     REQUIRE(run.operator_name() == "rk4_oscillator");
 
@@ -79,7 +79,7 @@ TEST_CASE("execution.binding.binder_comes_from_the_plugin", "[execution]") {
         unknown.id = qp::graph::NodeId{2, 1};
         unknown.type_name = "demo.something_else";
         execution::GraphRun other;
-        const auto prepared = other.prepare(unknown, binders(), rt::RunId{1});
+        const auto prepared = other.prepare(unknown, binders(), execution::StateView::zeroed(1), rt::RunId{1});
         REQUIRE_FALSE(prepared.has_value());
         REQUIRE(prepared.error() == qp::diag::ErrorCode::not_implemented);
         REQUIRE_FALSE(other.is_ready());
@@ -114,7 +114,7 @@ TEST_CASE("execution.binding.missing_parameter_is_refused", "[execution]") {
         missing_k.set_param(4, qp::ports::Value{0.5});
         missing_k.set_param(5, qp::ports::Value{std::int64_t{1}});
         execution::GraphRun run;
-        REQUIRE_FALSE(run.prepare(missing_k, binders(), rt::RunId{1}).has_value());
+        REQUIRE_FALSE(run.prepare(missing_k, binders(), execution::StateView::zeroed(1), rt::RunId{1}).has_value());
     }
     {
         Node missing_m;
@@ -122,16 +122,16 @@ TEST_CASE("execution.binding.missing_parameter_is_refused", "[execution]") {
         missing_m.set_param(2, qp::ports::Value{12.0});
         missing_m.set_param(5, qp::ports::Value{std::int64_t{1}});
         execution::GraphRun run;
-        REQUIRE_FALSE(run.prepare(missing_m, binders(), rt::RunId{1}).has_value());
+        REQUIRE_FALSE(run.prepare(missing_m, binders(), execution::StateView::zeroed(1), rt::RunId{1}).has_value());
     }
 
     // A non-positive mass has no frequency. Refused rather than producing a NaN frequency that would
     // surface later as a diverged run with no explanation of why.
     {
         execution::GraphRun zero;
-        REQUIRE_FALSE(zero.prepare(spring_damper(12.0, 0.0), binders(), rt::RunId{1}).has_value());
+        REQUIRE_FALSE(zero.prepare(spring_damper(12.0, 0.0), binders(), execution::StateView::zeroed(1), rt::RunId{1}).has_value());
         execution::GraphRun negative;
-        REQUIRE_FALSE(negative.prepare(spring_damper(12.0, -1.0), binders(), rt::RunId{1})
+        REQUIRE_FALSE(negative.prepare(spring_damper(12.0, -1.0), binders(), execution::StateView::zeroed(1), rt::RunId{1})
                           .has_value());
     }
 
@@ -140,7 +140,7 @@ TEST_CASE("execution.binding.missing_parameter_is_refused", "[execution]") {
     // the window report that nothing can run this node type, which is misleading about a node it owns.
     {
         execution::GraphRun free_particle;
-        REQUIRE_FALSE(free_particle.prepare(spring_damper(0.0, 0.5), binders(), rt::RunId{1})
+        REQUIRE_FALSE(free_particle.prepare(spring_damper(0.0, 0.5), binders(), execution::StateView::zeroed(1), rt::RunId{1})
                           .has_value());
     }
 }
@@ -152,14 +152,14 @@ TEST_CASE("execution.binding.damping_is_refused", "[execution]") {
     // reading a plot. That is the failure mode this platform exists to prevent, so the honest answer is
     // that no operator provides it yet.
     execution::GraphRun damped;
-    const auto prepared = damped.prepare(spring_damper(12.0, 0.5, /*c=*/0.5), binders(), rt::RunId{1});
+    const auto prepared = damped.prepare(spring_damper(12.0, 0.5, /*c=*/0.5), binders(), execution::StateView::zeroed(1), rt::RunId{1});
     REQUIRE_FALSE(prepared.has_value());
     REQUIRE(prepared.error() == qp::diag::ErrorCode::not_implemented);
     REQUIRE_FALSE(damped.is_ready());
 
     // Undamped is accepted, so the refusal is about damping and not about the fixture.
     execution::GraphRun undamped;
-    REQUIRE(undamped.prepare(spring_damper(12.0, 0.5, 0.0), binders(), rt::RunId{1}).has_value());
+    REQUIRE(undamped.prepare(spring_damper(12.0, 0.5, 0.0), binders(), execution::StateView::zeroed(1), rt::RunId{1}).has_value());
 }
 
 TEST_CASE("execution.binding.other_integrators_are_refused", "[execution]") {
@@ -169,7 +169,7 @@ TEST_CASE("execution.binding.other_integrators_are_refused", "[execution]") {
     // and handing back a dissipative one contradicts the choice.
     for (const std::int64_t choice : {std::int64_t{0}, std::int64_t{2}}) {
         execution::GraphRun run;
-        REQUIRE_FALSE(run.prepare(spring_damper(12.0, 0.5, 0.0, choice), binders(), rt::RunId{1})
+        REQUIRE_FALSE(run.prepare(spring_damper(12.0, 0.5, 0.0, choice), binders(), execution::StateView::zeroed(1), rt::RunId{1})
                           .has_value());
     }
 
@@ -181,7 +181,7 @@ TEST_CASE("execution.binding.other_integrators_are_refused", "[execution]") {
         unchosen.set_param(2, qp::ports::Value{12.0});
         unchosen.set_param(4, qp::ports::Value{0.5});
         execution::GraphRun run;
-        REQUIRE_FALSE(run.prepare(unchosen, binders(), rt::RunId{1}).has_value());
+        REQUIRE_FALSE(run.prepare(unchosen, binders(), execution::StateView::zeroed(1), rt::RunId{1}).has_value());
     }
 }
 
@@ -195,7 +195,7 @@ TEST_CASE("execution.binding.end_to_end_against_a_closed_form", "[execution]") {
     const double omega = std::sqrt(k / m);
 
     execution::GraphRun run;
-    REQUIRE(run.prepare(spring_damper(k, m), binders(), rt::RunId{7}).has_value());
+    REQUIRE(run.prepare(spring_damper(k, m), binders(), execution::StateView::zeroed(1), rt::RunId{7}).has_value());
     REQUIRE(run.set_initial(0, 1.0, 0.0).has_value());
     run.set_omega(omega);
 
@@ -216,7 +216,7 @@ TEST_CASE("execution.binding.end_to_end_against_a_closed_form", "[execution]") {
     // And a quarter period in, it is at zero with the expected velocity -- so the phase is right and
     // not merely the amplitude. `x(t) = cos(omega t)`, `v(t) = -omega sin(omega t)`.
     execution::GraphRun quarter;
-    REQUIRE(quarter.prepare(spring_damper(k, m), binders(), rt::RunId{8}).has_value());
+    REQUIRE(quarter.prepare(spring_damper(k, m), binders(), execution::StateView::zeroed(1), rt::RunId{8}).has_value());
     REQUIRE(quarter.set_initial(0, 1.0, 0.0).has_value());
     quarter.set_omega(omega);
     const std::size_t q_steps = 1024;
