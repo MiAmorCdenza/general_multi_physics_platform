@@ -100,7 +100,7 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
     properties_->resize(300, properties_->height());
 
     auto* palette = new QListWidget(this);
-    palette->setMinimumWidth(180);
+    palette->setMinimumWidth(150);
     // The registry returns descriptors by value-of-container, in registration order, and the palette uses that
     // order rather than sorting: a palette that reordered between runs would move a user's node out from under
     // their muscle memory.

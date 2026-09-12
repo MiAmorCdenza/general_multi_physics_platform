@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "收尾：宿主用 loader 自带的真实夹具做端到端验收（并钉住「两个插件声明同一位就互斥」这条作者约束）；像素画图标栅格化为 PNG 并打包成 Qt 资源（.qrc），派生图与位图表由逐像素比较守住",
+  "updated": "C5 的第三条「大字号」落地：节点字号显式化并由字体量出盒子，回退布局改成两列以适配画布真实宽度，frame_graph 加缩放下限；新增 qt.views.canvas.a_node_box_holds_its_type 把三者钉住（并量出端口桩被判出界、端口行数无上限两个先前看不见的缺陷）",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",

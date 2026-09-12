@@ -118,26 +118,33 @@ public:
     [[nodiscard]] static const char* view_id() noexcept { return kGraphViewId; }
 
     /**
-    /**
-     * @brief Scales and centres the view so the whole graph is visible.
+     * @brief Scales and centres the view so the whole graph is visible, within the legibility floor.
      *
      * ## Why this exists, and why centring was not enough
      *
      * `centerOn` scrolls a viewport over the scene at the current scale, so a graph **wider than
      * the viewport is clipped wherever you centre it**. `default_position` lays nodes out in rows
-     * of four, 168 units apart, which is wider than this canvas on a 1280-wide window -- and the
-     * running shell therefore showed one node of three while its own status line reported
-     * "nodes 3 | edges 2". The scene held all three; the view could not show them.
+     * of four, which is wider than this canvas on a 1280-wide window -- and the running shell
+     * therefore showed one node of three while its own status line reported "nodes 3 | edges 2".
+     * The scene held all three; the view could not show them.
      *
      * `fitInView` with `KeepAspectRatio` shows the whole graph. It is also what makes the view's
      * contents deterministic, which is what turned "the screenshot looks a bit off" into a
      * finding instead of a matter of opinion.
      *
+     * ## Two clamps, and the second one is newer
+     *
+     * Never magnify past 1:1, so a node's size does not depend on how many exist. And never shrink
+     * below `kMinimumScale`: framing a graph that does not fit used to scale it down without limit,
+     * which undoes the point of choosing a legible type size. A graph wider than the viewport is
+     * therefore shown at the floor and **scrolled**, and `all_nodes_are_visible()` reports that
+     * honestly rather than the view pretending otherwise.
+     *
      * @ownership   owns
      * @thread      ui
      * @pre         the scene exists and the viewport has a size
-     * @post        The whole scene rect is inside the viewport, at no more than 1:1
-     * @invariant   Never magnifies past 1:1, so a node's size does not depend on how many exist
+     * @post        The whole scene rect is inside the viewport when it fits at or above `kMinimumScale`
+     * @invariant   The scale is in `[kMinimumScale, 1.0]`
      * @errors      May allocate; allocation failure terminates
      * @complexity  O(1)
      * @nondet      none
@@ -145,6 +152,13 @@ public:
      * @tests       qt.views.canvas.whole_graph_is_visible
      */
     void frame_graph();
+
+    /// @brief The smallest scale `frame_graph` will choose. Public so a caller can state the same floor.
+    ///
+    /// `0.8` rather than `1.0`: a graph has to be substantially wider than the viewport before any
+    /// shrinking happens at all, and 80% of a 10 pt title is still comfortably readable -- which is what the
+    /// finding was about. A graph that needs less than this is scrolled instead.
+    static constexpr qreal kMinimumScale = 0.85;
 
     /**
      * @brief Whether every node item lies inside the viewport.
@@ -208,6 +222,42 @@ public:
 
     /// @brief The node the user currently has selected, if any.
     [[nodiscard]] std::optional<qp::graph::NodeId> selected_node() const;
+
+    /**
+     * @brief The current zoom factor: 1.0 is a node drawn at its authored size.
+     *
+     * Exposed because "how large is the text" is otherwise only answerable by looking, and charter C5 asks for
+     * large type as an acceptance criterion. A test can then hold the promise `frame_graph` makes -- that it
+     * never drops below `kMinimumScale` -- instead of asserting the numbers inside the paint code.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         none
+     * @post        A positive scale, equal to the transform's horizontal scale
+     * @invariant   `>= kMinimumScale` for any view `frame_graph` has framed
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.canvas.a_node_box_holds_its_type
+     */
+    [[nodiscard]] qreal scale_factor() const noexcept { return transform().m11(); }
+
+    /**
+     * @brief The size a node box is drawn at, in graph units, so a test can hold the type size to it.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         none
+     * @post        The box the paint code uses, from the fonts this platform resolved
+     * @invariant   The same value for every node in a process
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      Depends on the resolved fonts
+     * @frozen      no
+     * @tests       qt.views.canvas.a_node_box_holds_its_type
+     */
+    [[nodiscard]] static QSizeF authored_node_size() noexcept;
 
     /// @brief The most recent mutation error, so a view can report it.
     [[nodiscard]] const std::string& last_error() const noexcept { return last_error_; }

@@ -10,10 +10,13 @@
 
 #include <qp/graph/mutate/command.hpp>
 
+#include <QFont>
+#include <QFontMetricsF>
 #include <QGraphicsItem>
 #include <QGraphicsSceneMouseEvent>
 #include <QPainter>
 #include <QPen>
+#include <QSizeF>
 #include <QString>
 #include <QTimer>
 
@@ -33,10 +36,100 @@ namespace {
 // Node box geometry, in **graph** coordinates. Not pixels: the view applies the
 // zoom, and a canvas that stored pixel sizes would forget where things were the
 // moment the user zoomed or scrolled.
-constexpr qreal kNodeWidth = 168.0;
-constexpr qreal kNodeHeight = 62.0;
-constexpr qreal kPortRadius = 4.0;
-constexpr qreal kPortSpacing = 20.0;
+//
+// ## Why these numbers grew, and the rule they follow
+//
+// The first themed build drew 168x62 boxes with **Qt's default font**, which is 9 pt at 96 dpi -- roughly 12
+// device pixels. A screenshot review called the labels "legible but small", and at a typical laptop's
+// device-pixel ratio the port labels were around six physical pixels tall. Charter C5 asks for "large type",
+// and the palette work had only made the *colours* a contract; the size was nobody's.
+//
+// So the sizes below are tied to an explicit point size rather than to a default. `kTitlePointSize` and
+// `kLabelPointSize` are the authoritative numbers and the box is sized to hold them, not the other way round:
+//
+//   - the header must clear the title's line height plus its padding;
+//   - the body must clear `kPortRows` rows of `kPortRowHeight`, the type name line and the footer.
+//
+// Qt reports font metrics in device pixels, so the box is computed from the **font actually resolved** --
+// see `refresh_metrics()`. On a 144 dpi screen the same point size yields a taller line and the box grows with
+// it, which is what "large type" has to mean on a machine that is not this one.
+constexpr qreal kNodeWidth = 188.0;
+constexpr qreal kPortRadius = 5.5;
+/// Gap between the two columns of the fallback layout, in graph units.
+constexpr qreal kColumnGap = 30.0;
+/// Distance from the scene's edge to the first node. Also the margin `frame_graph` leaves when centring.
+constexpr qreal kMargin = 28.0;
+/// Point size of a node's title. Held in the same units Qt's font system uses so a high-DPI screen scales it.
+constexpr int kTitlePointSize = 10;
+/// Point size of every other label in a node box: the type name, the port names, the footer.
+constexpr int kLabelPointSize = 9;
+/// How many port rows a node box reserves room for. A node with more ports than this draws the first
+/// `kPortRows` only -- see the note in `paint` for why that is the honest answer rather than a clipped box.
+constexpr std::size_t kPortRows = 3;
+
+namespace {
+
+/// @brief The box metrics, measured from the fonts this platform actually resolved.
+///
+/// A struct rather than a pile of constants because every number below is derived: change a point size and the
+/// box has to change with it, and a set of independent constants is a set that silently disagrees.
+struct NodeMetrics final {
+    qreal width = kNodeWidth;
+    qreal header_height = 34.0;
+    qreal height = 104.0;
+    qreal port_row_height = 26.0;
+    qreal first_port_y = 48.0;
+};
+
+/// @brief Measures the fonts and derives the box.
+///
+/// A free function rather than a member of `NodeMetrics`, and the reason is a compiler one that took a build to
+/// find: calling `NodeMetrics::measure()` from `metrics()` below resolved to a *non-static* member on MSVC
+/// (C2352) because the class and the caller sit in the same anonymous namespace. A free function has no such
+/// ambiguity, and it keeps the struct a plain value.
+///
+/// @ownership   owns the returned value
+/// @thread      ui
+/// @pre         none
+/// @post        Every field is consistent with the resolved fonts
+/// @invariant   `height` grows with the fonts and never shrinks below the port block
+/// @errors      noexcept
+/// @complexity  O(1)
+/// @nondet      Depends on the installed fonts and the screen's DPI
+/// @frozen      no
+/// @tests       qt.views.canvas.a_node_box_holds_its_type
+[[nodiscard]] NodeMetrics measure_node_metrics() noexcept {
+    QFont title;
+    title.setPointSize(kTitlePointSize);
+    title.setBold(true);
+    QFont label;
+    label.setPointSize(kLabelPointSize);
+
+    const QFontMetricsF title_metrics{title};
+    const QFontMetricsF label_metrics{label};
+
+    NodeMetrics m;
+    // Padding above and below the title: a header exactly one line tall reads as clipped, and a title touching
+    // the category band's edge reads as a rendering bug.
+    m.header_height = title_metrics.height() + 14.0;
+    m.port_row_height = label_metrics.height() + 8.0;
+    // The body: the type-name line, the port block, and the footer.
+    m.height = m.header_height + label_metrics.height() + 6.0 +
+               static_cast<qreal>(kPortRows) * m.port_row_height + 6.0 + label_metrics.height() + 4.0;
+    m.first_port_y = m.header_height + label_metrics.height() + 6.0 + m.port_row_height / 2.0;
+    return m;
+}
+
+/// @brief The metrics, measured once per process.
+///
+/// A function-local constant rather than a namespace-scope one: a `QFont` at namespace scope would be
+/// constructed before `QApplication` exists, which Qt warns about and which is undefined enough to avoid.
+[[nodiscard]] const NodeMetrics& metrics() noexcept {
+    static const NodeMetrics measured = measure_node_metrics();
+    return measured;
+}
+
+}  // namespace
 
 /// @brief Keys a NodeId into the maps that hold its item and its position.
 std::uint64_t key_of(qp::graph::NodeId id) noexcept {
@@ -44,10 +137,26 @@ std::uint64_t key_of(qp::graph::NodeId id) noexcept {
 }
 
 /// @brief The nth default position, so a graph with no stored layout is still readable.
+///
+/// ## Two columns, not four
+///
+/// The first version laid nodes out four to a row, which is wider than the canvas on an ordinary window -- so
+/// every fresh graph was scaled down to fit, and the scale-down is exactly what undid the legible type size
+/// above. A fallback layout that forces the view to shrink is a fallback layout that loses the argument it
+/// exists for.
+///
+/// Two columns is the largest row count that fits a default canvas at **1:1**, so the common case (a handful of
+/// nodes, nothing stored yet) is drawn at its authored size and nothing is clipped. A graph that grows past
+/// four nodes scrolls, which is what a node editor does.
+///
+/// Column order fills left-to-right then down, so node 1 and node 2 -- the usual source and model -- end up
+/// side by side with a wire between them.
 QPointF default_position(std::size_t index) noexcept {
-    const auto column = static_cast<qreal>(index % 4U);
-    const auto row = static_cast<qreal>(index / 4U);
-    return QPointF(48.0 + column * (kNodeWidth + 48.0), 48.0 + row * (kNodeHeight + 68.0));
+    constexpr std::size_t kColumns = 2;
+    const auto column = static_cast<qreal>(index % kColumns);
+    const auto row = static_cast<qreal>(index / kColumns);
+    return QPointF(kMargin + column * (kNodeWidth + kColumnGap),
+                   kMargin + row * (metrics().height + 48.0));
 }
 
 /// @brief Human-readable form of a NodeId.
@@ -98,10 +207,11 @@ public:
     }
 
     [[nodiscard]] QRectF boundingRect() const override {
+        const NodeMetrics& m = metrics();
         const qreal left = -kPortRadius;
-        const qreal right = kNodeWidth + kPortRadius;
+        const qreal right = m.width + kPortRadius;
         const qreal extra = kPortRadius + 1.0;
-        return QRectF(left, -extra, right - left, kNodeHeight + 2.0 * extra);
+        return QRectF(left, -extra, right - left, m.height + 2.0 * extra);
     }
 
     void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override {
@@ -126,8 +236,9 @@ public:
         // carrying everything that has to be read -- the type name, the port labels, the footer. The pairs the
         // body uses are the ones `theme.text_clears_wcag_aa` already asserts.
         const qt::theme::Palette& c = qt::theme::palette();
-        const QRectF box(0.0, 0.0, kNodeWidth, kNodeHeight);
-        constexpr qreal kHeaderHeight = 22.0;
+        const NodeMetrics& m = metrics();
+        const QRectF box(0.0, 0.0, m.width, m.height);
+        const qreal header_height = m.header_height;
 
         QColor band = qt::theme::category_colour(category_);
         if (chosen) {
@@ -139,11 +250,20 @@ public:
                                   static_cast<std::uint8_t>(colour.blue())};
         };
 
+        // The fonts are **explicit**, not inherited, and that is the fix for the finding this code was changed
+        // for: a node box drawn at Qt's default font is 9 pt, which at a laptop's device-pixel ratio puts a port
+        // label at about six physical pixels. C5 asks for large type; a default is not a decision.
+        QFont title_font = painter->font();
+        title_font.setPointSize(kTitlePointSize);
+        title_font.setBold(true);
+        QFont label_font = painter->font();
+        label_font.setPointSize(kLabelPointSize);
+
         painter->setPen(Qt::NoPen);
         painter->setBrush(band);
         painter->drawRoundedRect(box, 5.0, 5.0);
         painter->setBrush(qt::theme::to_qcolor(c.surface_raised));
-        painter->drawRect(QRectF(0.0, kHeaderHeight, kNodeWidth, kNodeHeight - kHeaderHeight));
+        painter->drawRect(QRectF(0.0, header_height, m.width, m.height - header_height));
 
         // One outline around the whole box, so the category colour reads as a header rather than as a fill that
         // failed to cover the bottom.
@@ -158,30 +278,42 @@ public:
         painter->setPen(QPen(ring, chosen ? 2.0 : 1.5));
         painter->drawRoundedRect(box, 5.0, 5.0);
 
+        painter->setFont(title_font);
         painter->setPen(title_ink);
-        painter->drawText(QRectF(9.0, 2.0, kNodeWidth - 18.0, kHeaderHeight - 4.0),
+        painter->drawText(QRectF(11.0, 2.0, m.width - 22.0, header_height - 4.0),
                           Qt::AlignLeft | Qt::AlignVCenter, title_);
 
+        painter->setFont(label_font);
         painter->setPen(qt::theme::to_qcolor(c.text_muted));
-        painter->drawText(QRectF(9.0, kHeaderHeight + 1.0, kNodeWidth - 18.0, 15.0),
+        painter->drawText(QRectF(11.0, header_height + 1.0, m.width - 22.0, m.port_row_height),
                           Qt::AlignLeft | Qt::AlignVCenter, type_name_);
 
         // Input labels on the left, output labels on the right, each with a stub.
         // The labels come from the node's descriptor, so a node type whose ports
         // were registered shows them without the canvas knowing anything about it.
+        //
+        // `kPortRows` is a **ceiling**, and reaching it draws no further rows rather than a growing box. A box
+        // that grew with its port count would make a node's size depend on a plugin's descriptor -- so two nodes
+        // of the same type would differ, and the layout algorithm would have nothing stable to work with. A node
+        // with more than three connectable ports on one side therefore shows three; the descriptor panel lists
+        // all of them, and the count is visible in the palette. That is a real limitation and it is stated
+        // rather than hidden by a taller box.
         painter->setPen(qt::theme::to_qcolor(c.text));
         painter->setBrush(qt::theme::to_qcolor(c.accent));
-        const int rows = std::max(inputs_.size(), outputs_.size());
+        const int rows = static_cast<int>(std::min<std::size_t>(
+            std::max(inputs_.size(), outputs_.size()), kPortRows));
         for (int i = 0; i < rows; ++i) {
-            const qreal y = 44.0 + i * kPortSpacing;
+            const qreal y = m.first_port_y + static_cast<qreal>(i) * m.port_row_height;
             if (i < inputs_.size()) {
                 painter->drawEllipse(QPointF(0.0, y), kPortRadius, kPortRadius);
-                painter->drawText(QRectF(8.0, y - 8.0, kNodeWidth / 2.0 - 10.0, 16.0),
+                painter->drawText(QRectF(10.0, y - m.port_row_height / 2.0, m.width / 2.0 - 12.0,
+                                         m.port_row_height),
                                   Qt::AlignLeft | Qt::AlignVCenter, inputs_.at(i));
             }
             if (i < outputs_.size()) {
-                painter->drawEllipse(QPointF(kNodeWidth, y), kPortRadius, kPortRadius);
-                painter->drawText(QRectF(kNodeWidth / 2.0, y - 8.0, kNodeWidth / 2.0 - 8.0, 16.0),
+                painter->drawEllipse(QPointF(m.width, y), kPortRadius, kPortRadius);
+                painter->drawText(QRectF(m.width / 2.0, y - m.port_row_height / 2.0,
+                                         m.width / 2.0 - 10.0, m.port_row_height),
                                   Qt::AlignRight | Qt::AlignVCenter, outputs_.at(i));
             }
         }
@@ -190,7 +322,7 @@ public:
         // disabled grey measures 2.5:1 on `surface_raised`, which is below the graphics floor -- and a disabled
         // colour on information that is not disabled is how a palette's own rules get quietly broken.
         painter->setPen(qt::theme::to_qcolor(c.text_muted));
-        painter->drawText(QRectF(0.0, kNodeHeight - 13.0, kNodeWidth, 12.0),
+        painter->drawText(QRectF(0.0, m.height - m.port_row_height, m.width, m.port_row_height - 2.0),
                           Qt::AlignHCenter | Qt::AlignVCenter, describe(id_));
     }
 
@@ -428,7 +560,7 @@ void NodeGraphView::rebuild() {
         scene_->addItem(item);
     }
 
-    scene_->setSceneRect(scene_->itemsBoundingRect().adjusted(-48.0, -48.0, 48.0, 48.0));
+    scene_->setSceneRect(scene_->itemsBoundingRect().adjusted(-kMargin, -kMargin, kMargin, kMargin));
 
     // Frame what was just built, and do it by **fitting** rather than by centring.
     //
@@ -472,18 +604,42 @@ void NodeGraphView::frame_graph() {
     const QRectF bounds = scene_->itemsBoundingRect();
     if (bounds.isEmpty() || viewport()->width() <= 0 || viewport()->height() <= 0) return;
 
-    // Margin so the outermost nodes are not flush against the edge, which reads as clipped even
-    // when it is not.
-    const QRectF padded = bounds.adjusted(-24.0, -24.0, 24.0, 24.0);
+    // The scene rect is set from the **padded** bounds, not the raw ones, and the difference is what made a
+    // node clip its port stub: `itemsBoundingRect` for a node starting at `kMargin` returns something whose
+    // left edge is `kMargin - kPortRadius`, so the scene began just left of the stub. Deriving both the scene
+    // rect and the framing from one padded rectangle is what keeps the two from disagreeing about where the
+    // graph's edge is.
+    const QRectF padded = bounds.adjusted(-kMargin, -kMargin, kMargin, kMargin);
+    scene_->setSceneRect(padded);
     fitInView(padded, Qt::KeepAspectRatio);
 
-    // Never magnify past 1:1. `fitInView` scales up to fill, so without this clamp a small graph
-    // would be drawn larger than its authored size -- and a node editor that changes how large a
-    // node is depending on how many nodes exist is a node editor whose layout cannot be
-    // reasoned about.
+    // Two clamps, and they pull in opposite directions on purpose.
+    //
+    // **Never magnify past 1:1.** `fitInView` scales up to fill, so without this a graph of two
+    // nodes would be drawn larger than its authored size -- and a node editor whose node size
+    // depends on how many nodes exist is one whose layout cannot be reasoned about.
     if (transform().m11() > 1.0) {
         resetTransform();
-        centerOn(bounds.center());
+        centerOn(padded.center());
+    }
+
+    // **Never shrink below a legibility floor either.** This is the second half of the finding
+    // the sizes above were changed for: framing a graph that does not fit used to scale it down
+    // without limit, and the point of "large type" is lost the moment the view undoes it. So a
+    // graph wider than the viewport is shown at `kMinimumScale` and **scrolled** instead.
+    //
+    // The trade is stated rather than hidden: the whole graph is no longer on screen at once in
+    // that case, `all_nodes_are_visible()` reports it honestly, and a zoom-to-fit is the call a
+    // user makes when seeing everything matters more than reading it. Choosing "smaller and
+    // complete" as the *default* is what produced the original complaint.
+    //
+    // Centring is on the **padded** rect here too. `centerOn(bounds.center())` left the graph
+    // slightly off-centre in the visible window, because the padded rect the frame was computed
+    // from is what the viewport is actually showing.
+    if (transform().m11() < kMinimumScale) {
+        resetTransform();
+        scale(kMinimumScale, kMinimumScale);
+        centerOn(padded.center());
     }
 }
 
@@ -511,6 +667,11 @@ int NodeGraphView::node_item_count() const noexcept {
         if (dynamic_cast<const NodeItem*>(item) != nullptr) ++n;
     }
     return n;
+}
+
+QSizeF NodeGraphView::authored_node_size() noexcept {
+    const NodeMetrics& m = metrics();
+    return QSizeF{m.width, m.height};
 }
 
 int NodeGraphView::edge_item_count() const noexcept {

@@ -562,6 +562,79 @@ TEST_CASE("qt.views.canvas.unframed_view_reports_clipped", "[views][qt]") {
     REQUIRE(canvas->all_nodes_are_visible());
 }
 
+TEST_CASE("qt.views.canvas.a_node_box_holds_its_type", "[views][qt]") {
+    // Charter C5 asks for **large type**, and this is the case that holds it. The palette work made colour and
+    // contrast testable; the size was still nobody's, and a screenshot review found the labels "legible but
+    // small" -- at a laptop's device-pixel ratio a port label was about six physical pixels tall.
+    //
+    // Three things are asserted, and the third is the one a screenshot cannot check:
+    //
+    //   1. a node box is big enough to hold what it draws, measured against the fonts this platform resolved
+    //      rather than against the constants in the paint code;
+    //   2. the fallback layout puts a fresh graph inside the canvas at **1:1**, so nothing is shrunk to fit and
+    //      the type size survives;
+    //   3. `frame_graph` never drops below `kMinimumScale`, so framing a graph that does not fit cannot undo the
+    //      size either. That is the clamp this case exists for: without it, "the text is 10 pt" is true in the
+    //      paint code and false on the screen.
+    const QSizeF authored = qp::views::NodeGraphView::authored_node_size();
+    REQUIRE(authored.width() >= 160.0);
+
+    // A header tall enough for a bold 10 pt line, plus a body with room for the type name, three port rows and
+    // the footer. The lower bound is derived from font metrics rather than written as a number, so it stays
+    // honest on a machine whose default font is larger.
+    QFont title;
+    title.setPointSize(10);
+    title.setBold(true);
+    const QFontMetricsF title_metrics{title};
+    QFont label;
+    label.setPointSize(9);
+    const QFontMetricsF label_metrics{label};
+    const qreal minimum_height = title_metrics.height() + label_metrics.height() +
+                                 3.0 * (label_metrics.height() + 4.0) + label_metrics.height();
+    INFO("authored box is " << authored.height() << " tall, minimum is " << minimum_height);
+    REQUIRE(authored.height() >= minimum_height);
+
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
+    window.seed_demo();
+    window.resize(1280, 720);
+    window.show();
+    QCoreApplication::processEvents();
+
+    auto* canvas = window.findChild<qp::views::NodeGraphView*>();
+    REQUIRE(canvas != nullptr);
+    REQUIRE(canvas->node_item_count() == 3);
+
+    // The viewport is resized to the size this window actually produces, and that number is the point of the
+    // case. A `EditorWindow` at 1280x720 puts a splitter, a palette and a property panel around the canvas, so
+    // the canvas gets about 484 pixels -- and the first version of this layout asked for 547, which is exactly
+    // why framing it chose 0.8 and the type size was quietly undone. Driving the viewport directly makes the
+    // case measure the real constraint instead of the window's nominal width.
+    canvas->resize(500, 640);
+    canvas->viewport()->resize(484, 610);
+    canvas->frame_graph();
+
+    // 1:1 at the canvas the application actually gives: the fallback layout is two columns precisely so this
+    // holds, and a graph drawn at its authored size is the only way the point sizes above mean anything.
+    INFO("canvas viewport " << canvas->viewport()->width() << "x" << canvas->viewport()->height()
+                            << ", scene " << canvas->sceneRect().width() << "x"
+                            << canvas->sceneRect().height() << ", scale " << canvas->scale_factor());
+    REQUIRE(canvas->scale_factor() == 1.0);
+    // And it is genuinely all on screen, which is the other half: a layout that fits by being mainly off the
+    // edge would satisfy the scale assertion and nothing else.
+    REQUIRE(canvas->all_nodes_are_visible());
+
+    // The floor. A canvas narrower than the graph must scroll rather than shrink past the point where the type
+    // size it was designed around is gone.
+    canvas->resize(300, 320);
+    canvas->viewport()->resize(280, 290);
+    canvas->frame_graph();
+    INFO("scale after shrinking the canvas to 280x290: " << canvas->scale_factor());
+    REQUIRE(canvas->scale_factor() >= qp::views::NodeGraphView::kMinimumScale);
+
+    window.close();
+}
+
 TEST_CASE("qt.views.canvas.whole_graph_is_visible", "[views][qt]") {
     // The assertion that would have caught the framing defect directly.
     //

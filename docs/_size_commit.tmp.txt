@@ -1,0 +1,45 @@
+views/qt: make the canvas type size a contract, and fit the layout to the real canvas
+
+Charter C5 asks for "high contrast, large type and colour-blind safe". The palette work made the
+first and third testable; the second was nobody's, and the node box was drawn at Qt's default
+font -- 9 pt at 96 dpi, about six physical pixels for a port label at a laptop's device-pixel
+ratio. A screenshot review called it "legible but small" twice, which is the honest signal that
+"large type" needed a number and an assertion rather than a judgement.
+
+Three changes, and the third is the one a screenshot cannot check:
+
+1. The point sizes are explicit (10 pt title, 9 pt labels) and the box is **measured from the
+   fonts this platform resolved** rather than assembled from independent constants. Qt reports
+   metrics in device pixels, so a 144 dpi screen gets a taller line and a taller box -- which is
+   what "large type" has to mean on a machine that is not this one. The previous failure mode was
+   a set of constants that silently disagreed: change a point size and the box stays the same
+   until text is clipped.
+
+2. The fallback layout went from four columns to two, and the geometry is measured against the
+   canvas the application **actually** provides -- about 484 px at a 1280-wide window once the
+   splitter, the palette and the property panel have taken their share, not the window's nominal
+   width. Four columns is wider than that, so every fresh graph was scaled down to fit, and the
+   scale-down is exactly what undid the type size. Two columns at 188 units fits at 1:1.
+
+3. `frame_graph` gained a **lower** clamp (`kMinimumScale = 0.85`) to go with the upper one it
+   already had. The upper bound stopped a two-node graph being blown up; the lower bound was
+   infinite, so a graph that did not fit was shrunk until the point sizes stopped meaning
+   anything. Such a graph now draws at the floor and **scrolls**, and `all_nodes_are_visible()`
+   reports that honestly instead of the view pretending otherwise.
+
+`qt.views.canvas.a_node_box_holds_its_type` asserts all three: the box is at least as tall as its
+fonts need, the scale is exactly 1.0 at the canvas the application gives, and the floor holds when
+the canvas is shrunk to 280x290. Writing it measured two defects that were invisible before:
+
+  - `itemsBoundingRect`'s left edge sits `kPortRadius` left of a node's position (the port stub),
+    while the scene rect and the framing each computed their own margin -- so the stub counted as
+    outside the graph. Both now derive from one padded rectangle.
+  - the port row count had no relation to the box height, so a fourth port would have been drawn
+    outside the box. `kPortRows = 3` is now a stated ceiling rather than a growing box, because a
+    box that grew with a plugin's descriptor would make two nodes of one type differ in height and
+    leave a layout algorithm with no stable input.
+
+The palette minimum width dropped 180 -> 150 px to give the canvas the width the two-column layout
+needs, and the palette's own entries are unaffected at that size.
+
+GCC 662/662, MSVC 664/664; all four contract partitions and the static gates green.
