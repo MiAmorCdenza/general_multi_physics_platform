@@ -1,0 +1,54 @@
+views/qt: draw edges to their ports, and let a user draw a connection
+
+Two defects, both reported from the screen, and the first one was hiding behind an argument
+that made it sound intentional.
+
+**Edges were drawn centre to centre.** `EdgeItem` stored a pair of points taken from two box
+centres at rebuild time, and its comment said a straight line was "honest about what this
+canvas currently knows". It was honest about a gap that did not need to exist: a connection is
+`(node, port number)`, the port number was in the graph all along, and the row a port is drawn
+at was already computed in `NodeItem::paint`. What a user saw was a line touching neither of
+the ports it joined -- so a **correct** graph looked like a broken one, and the natural next
+move is to draw the connection again, which the bus then refuses as a duplicate.
+
+Fixing it meant `NodeItem` holding its port **numbers** rather than only their labels. The
+row's y now comes from one expression that `paint` and `port_scene_pos` both call, because two
+implementations of "where is the port" would leave a line ending near a port instead of on it.
+`EdgeItem` holds its two `PortRef`s and its two items and recomputes both ends on demand, which
+also fixes the second half: a node drag used to leave its line behind, because the endpoints
+were only ever refreshed by a full rebuild that a drag does not trigger. There is now a drag
+handler, and `remember_position` still fires only on a settled move -- an undo entry per
+mouse-move is not a feature.
+
+Ports are drawn with their direction: an output is a filled disc, an input is an open ring, and
+an edge puts a small dot at its source end. Without that, which way a wire runs is only inferable
+by tracing it.
+
+**There was no gesture to make a connection.** A user looking at two boxes had no way to join
+them: the demo graph arrived pre-wired and nothing could be rewired, which makes the canvas a
+diagram rather than an editor. `mousePressEvent` now starts a gesture when the press lands on a
+port **stub** (not the whole box, so dragging a node by its body still moves it), a preview line
+follows the cursor, and the release connects -- through `Session::apply`, like every other edit
+this canvas makes, so the undo stack and the other panels are in step. A release that lands
+nowhere abandons the gesture silently: the user changed their mind, and a message about an edit
+they did not make is noise. A refusal is reported, because that sentence is the only place the
+reason (a type mismatch, an input already fed, a cycle) appears.
+
+The grab radius is in **device** pixels converted by the current zoom, so the gesture feels the
+same at every scale instead of shrinking when the view zooms out.
+
+Two new cases, and the first asserts geometry rather than a count -- the count was already right
+when the picture was wrong:
+
+  qt.views.nodegraph.an_edge_ends_on_its_ports
+      the line starts on the source node's right edge and ends on the target's left edge, both
+      inside a port row; moving a node moves its end and leaves the other one where it was
+  qt.views.nodegraph.a_dragged_connection_joins_two_ports
+      connecting through the canvas reaches the session, is undoable, and a refused connection
+      reports its reason
+
+Screenshot-verified: the line runs from the `Value` disc on the signal node's right edge to the
+`Drive` ring on the spring-damper's left edge, and the filled/open distinction makes the
+direction visible without tracing.
+
+GCC 662/662, MSVC 664/664; all four contract partitions and the static gates green.

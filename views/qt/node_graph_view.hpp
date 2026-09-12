@@ -50,15 +50,21 @@
 #include <qp/authoring/commands/session.hpp>
 #include <qp/authoring/document/document.hpp>
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
+#include <vector>
+
+class QGraphicsLineItem;
 
 namespace qp::views {
 
 class NodeItem;
+class EdgeItem;
 
 /// @brief The view id whose layout slot this canvas owns.
 ///
@@ -262,6 +268,110 @@ public:
     /// @brief The most recent mutation error, so a view can report it.
     [[nodiscard]] const std::string& last_error() const noexcept { return last_error_; }
 
+    /**
+     * @brief The endpoints of the nth drawn edge, in scene coordinates, for a test or a screenshot check.
+     *
+     * Exposed because "does the line touch the port it claims to join" is otherwise only answerable by looking at
+     * pixels. The pair is `(from, to)`, and an out-of-range index yields two equal points rather than throwing.
+     *
+     * @param index Which edge, in the order `rebuild` drew them.
+     *
+     * @ownership   owns the returned pair
+     * @thread      ui
+     * @pre         none
+     * @post        `first` is the output stub, `second` the input stub
+     * @invariant   Both points lie on the bounding box edges of the two nodes it joins
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.nodegraph.an_edge_ends_on_its_ports
+     */
+    [[nodiscard]] std::pair<QPointF, QPointF> edge_endpoints(std::size_t index) const noexcept;
+
+    /**
+     * @brief Whether a connection is being drawn by hand right now.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         none
+     * @post        none
+     * @invariant   True from a press on a port stub until the release that ends the gesture
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.nodegraph.a_dragged_connection_joins_two_ports
+     */
+    [[nodiscard]] bool is_drawing_connection() const noexcept { return drag_from_ != nullptr; }
+
+    /**
+     * @brief Draws a connection between two ports, as the mouse gesture does.
+     *
+     * The same code path the drag ends in, exposed so a test can exercise the connection **without** synthesising
+     * mouse events: `QTest`'s mouse helpers need a mapped window and a platform plugin, and what is worth
+     * asserting here is the command and the resulting line, not Qt's event delivery.
+     *
+     * @param from_node  The node whose output leaves.
+     * @param from_port  The output port number.
+     * @param to_node    The node whose input arrives.
+     * @param to_port    The input port number.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         none
+     * @post        On success the session holds one more edge and the canvas one more line
+     * @invariant   Refused exactly when the session's command bus refuses it
+     * @errors      Returns whether the connection was made; a refusal emits `mutation_failed`
+     * @complexity  O(nodes + edges) through the session's notification
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.nodegraph.a_dragged_connection_joins_two_ports
+     */
+    bool connect_ports(qp::graph::NodeId from_node, qp::graph::PortIndex from_port,
+                       qp::graph::NodeId to_node, qp::graph::PortIndex to_port);
+
+protected:
+    /**
+     * @brief Starts a connection when the press lands on a port stub, and otherwise lets the node be dragged.
+     *
+     * ## Why the canvas draws connections at all
+     *
+     * Until this existed the only way to connect two nodes was through the session's command bus from outside --
+     * a test helper, or a future script. A user looking at two boxes had no gesture that joined them, so the
+     * demo graph arrived pre-wired and nothing could be rewired. A node editor where the wires can only be drawn
+     * by a program is a diagram, not an editor.
+     *
+     * The press is checked against the **stubs** rather than the whole box, so dragging a node by its body still
+     * moves it: a gesture that connected on any press would make every drag an accidental edit.
+     *
+     * @ownership   owns the gesture's preview line
+     * @thread      ui
+     * @pre         none
+     * @post        Either a connection gesture is in flight, or the event reached the base class (a node drag)
+     * @invariant   A gesture in flight has a non-null `drag_from_`
+     * @errors      no-throw: Qt event handlers must not throw through the event loop
+     * @complexity  O(nodes x ports) for the hit test
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.nodegraph.a_dragged_connection_joins_two_ports
+     */
+    void mousePressEvent(QMouseEvent* event) override;
+
+    /// @brief Moves the preview line, and highlights the port it would land on.
+    void mouseMoveEvent(QMouseEvent* event) override;
+
+    /// @brief Finishes the gesture: connects, or abandons if the release is not on a port.
+    void mouseReleaseEvent(QMouseEvent* event) override;
+
+    /**
+     * @brief How far from a stub a press still counts, in **device** pixels.
+     *
+     * Converted to scene units by the current zoom, so the grab radius is the same distance under the mouse at
+     * every scale instead of growing when the view is zoomed out.
+     */
+    static constexpr qreal kPortGrabPixels = 12.0;
+
 Q_SIGNALS:
     /// @brief Emitted after a selection change, so a property panel can follow.
     void node_selected(qp::graph::NodeId node);
@@ -273,12 +383,21 @@ private:
     /// @brief The session listener that keeps the canvas in step.
     class Bridge;
 
+    /// @brief Recomputes the endpoints of every edge touching `moved`. Called on each drag step.
+    void update_edges_for(const NodeItem& moved);
+
     qp::authoring::Session& session_;
     const qp::graph::NodeTypeRegistry& catalog_;
     qp::authoring::Document& document_;
     QGraphicsScene* scene_ = nullptr;
     std::unique_ptr<Bridge> bridge_;
     std::unordered_map<std::uint64_t, NodeItem*> node_items_;
+    /// Every edge item, so a node drag can refresh the ones that touch it. Borrowed: the scene owns them.
+    std::vector<EdgeItem*> edge_items_;
+    /// The connection being drawn by hand, if any. See `mousePressEvent`.
+    NodeItem* drag_from_ = nullptr;
+    qp::graph::PortIndex drag_from_port_ = qp::graph::kNoPort;
+    QGraphicsLineItem* drag_line_ = nullptr;
     /// Whether the initial framing has happened. See rebuild().
     bool framed_ = false;
     /// Whether a deferred framing is in flight. See rebuild().

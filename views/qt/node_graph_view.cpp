@@ -13,7 +13,9 @@
 #include <QFont>
 #include <QFontMetricsF>
 #include <QGraphicsItem>
+#include <QGraphicsLineItem>
 #include <QGraphicsSceneMouseEvent>
+#include <QMouseEvent>
 #include <QPainter>
 #include <QPen>
 #include <QSizeF>
@@ -21,9 +23,11 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -179,21 +183,38 @@ QString describe(qp::diag::ErrorCode code) {
 /**
  * @brief A node box in the canvas.
  *
- * It holds a node id and the strings it was built with, and nothing else about the
- * graph: no port list, no parameter values. Whatever it draws was resolved from
- * the catalog at rebuild time, so "the item and the graph agree" holds by
- * construction rather than by a synchronisation step somebody has to remember.
+ * It holds a node id, the strings it was built with, and its **port numbers**, and nothing else about the graph:
+ * no parameter values, no edge list. Whatever it draws was resolved from the catalog at rebuild time, so "the
+ * item and the graph agree" holds by construction rather than by a synchronisation step somebody has to
+ * remember.
+ *
+ * ## Why the port numbers are here now
+ *
+ * They were not, and an edge was therefore drawn between two box **centres** -- so a connection existed in the
+ * graph and the canvas showed a line from the middle of one box to the middle of another, touching neither of
+ * the ports it actually joined. The comment that used to sit on `EdgeItem` called that "honest about what this
+ * canvas currently knows"; it was honest about a gap that did not need to exist. A port number is one integer
+ * and the row it is drawn at is already computed in `paint`, so the canvas knew enough all along.
+ *
+ * Which is why `port_scene_pos` exists below and why the port labels are no longer the only thing kept: a
+ * connection is `(node, port number)`, and a canvas that stores only the label cannot say where the line goes.
  */
 class NodeItem final : public QGraphicsItem {
 public:
+    /// @brief One port as the canvas draws it: the number the graph addresses it by, and its label.
+    struct Port final {
+        qp::graph::PortIndex number = 0;
+        QString label{};
+    };
+
     NodeItem(qp::graph::NodeId id, QString title, QString type_name, QString category,
-             QStringList input_labels, QStringList output_labels, QPointF position)
+             std::vector<Port> inputs, std::vector<Port> outputs, QPointF position)
         : id_(id),
           title_(std::move(title)),
           type_name_(std::move(type_name)),
           category_(std::move(category)),
-          inputs_(std::move(input_labels)),
-          outputs_(std::move(output_labels)) {
+          inputs_(std::move(inputs)),
+          outputs_(std::move(outputs)) {
         setPos(position);
         setFlags(ItemIsMovable | ItemIsSelectable | ItemSendsGeometryChanges);
         setZValue(1.0);
@@ -202,8 +223,93 @@ public:
 
     [[nodiscard]] qp::graph::NodeId node_id() const noexcept { return id_; }
 
+    [[nodiscard]] const std::vector<Port>& inputs() const noexcept { return inputs_; }
+    [[nodiscard]] const std::vector<Port>& outputs() const noexcept { return outputs_; }
+
+    /**
+     * @brief Where the centre of `port`'s stub is, in **scene** coordinates.
+     *
+     * The row arithmetic is the same expression `paint` uses, and the duplication is the risk: two places that
+     * decide where a stub is can disagree, and the symptom would be a line ending near a port rather than on it.
+     * `qt.views.nodegraph.an_edge_ends_on_its_ports` asserts that they agree by measuring a rendered edge
+     * against the stub the paint code drew.
+     *
+     * @param port         The port number the graph addresses it by.
+     * @param is_output    Which side. Inputs are on the left edge of the box, outputs on the right.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         none
+     * @post        A point on the box's edge, or a point outside it for a port the box does not draw
+     * @invariant   Depends only on this item's position and the metrics
+     * @errors      noexcept
+     * @complexity  O(ports on that side)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.nodegraph.an_edge_ends_on_its_ports
+     */
+    [[nodiscard]] QPointF port_scene_pos(qp::graph::PortIndex port, bool is_output) const noexcept {
+        const qreal y = port_local_y(port, is_output);
+        if (std::isnan(y)) return mapToScene(QPointF{0.0, 0.0});
+        const qreal x = is_output ? metrics().width : 0.0;
+        return mapToScene(QPointF{x, y});
+    }
+
+    /**
+     * @brief The port nearest `scene_point` within `radius`, or nothing.
+     *
+     * The hit test a hand-drawn connection needs. `radius` is in **scene** units and a caller should scale it by
+     * the view's zoom, or a zoomed-out canvas would make ports impossible to grab -- which is why the radius is a
+     * parameter rather than a constant here.
+     *
+     * A port the box does not draw is never returned: a connection to an invisible port would be an edit the
+     * user cannot see, and could not undo by aiming at it again.
+     *
+     * @param scene_point Where the user is pointing, in scene coordinates.
+     * @param radius      How far away still counts, in scene units.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         none
+     * @post        The nearest drawn port within `radius`, or nothing
+     * @invariant   Never returns a port outside `kPortRows`
+     * @errors      noexcept
+     * @complexity  O(ports)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.nodegraph.a_dragged_connection_joins_two_ports
+     */
+    [[nodiscard]] std::optional<std::pair<qp::graph::PortIndex, bool>>
+    nearest_port(QPointF scene_point, qreal radius) const noexcept {
+        const Port* best = nullptr;
+        bool best_is_output = false;
+        qreal best_distance = radius;
+        for (const bool is_output : {false, true}) {
+            const std::vector<Port>& side = is_output ? outputs_ : inputs_;
+            for (std::size_t i = 0; i < side.size() && i < kPortRows; ++i) {
+                const qreal y = port_local_y(side[i].number, is_output);
+                if (std::isnan(y)) continue;
+                const QPointF stub = mapToScene(QPointF{is_output ? metrics().width : 0.0, y});
+                const QPointF delta = stub - scene_point;
+                const qreal distance = std::hypot(delta.x(), delta.y());
+                if (distance <= best_distance) {
+                    best_distance = distance;
+                    best = &side[i];
+                    best_is_output = is_output;
+                }
+            }
+        }
+        if (best == nullptr) return std::nullopt;
+        return std::make_pair(best->number, best_is_output);
+    }
+
     void set_move_handler(std::function<void(NodeItem&)> handler) {
         on_settled_ = std::move(handler);
+    }
+
+    /// @brief Called while the item is being dragged, so the edges attached to it can follow immediately.
+    void set_drag_handler(std::function<void(NodeItem&)> handler) {
+        on_dragged_ = std::move(handler);
     }
 
     [[nodiscard]] QRectF boundingRect() const override {
@@ -298,23 +404,33 @@ public:
         // with more than three connectable ports on one side therefore shows three; the descriptor panel lists
         // all of them, and the count is visible in the palette. That is a real limitation and it is stated
         // rather than hidden by a taller box.
-        painter->setPen(qt::theme::to_qcolor(c.text));
-        painter->setBrush(qt::theme::to_qcolor(c.accent));
-        const int rows = static_cast<int>(std::min<std::size_t>(
-            std::max(inputs_.size(), outputs_.size()), kPortRows));
-        for (int i = 0; i < rows; ++i) {
-            const qreal y = m.first_port_y + static_cast<qreal>(i) * m.port_row_height;
+        //
+        // The row's y comes from `port_local_y`, which is also what `port_scene_pos` uses, so the stub a user
+        // sees and the point an edge is drawn to are the same arithmetic rather than two implementations of it.
+        painter->setPen(Qt::NoPen);
+        const std::size_t rows = std::min(std::max(inputs_.size(), outputs_.size()), kPortRows);
+        for (std::size_t i = 0; i < rows; ++i) {
             if (i < inputs_.size()) {
+                const qreal y = port_local_y(inputs_[i].number, /*is_output=*/false);
+                // An input is drawn as a **ring**: a connection arrives here, and an open circle reads as a
+                // socket. An output is a filled disc, so the direction of a wire is visible without tracing it.
+                painter->setBrush(qt::theme::to_qcolor(c.surface_raised));
+                painter->setPen(QPen(qt::theme::to_qcolor(c.accent), 1.6));
                 painter->drawEllipse(QPointF(0.0, y), kPortRadius, kPortRadius);
+                painter->setPen(qt::theme::to_qcolor(c.text));
                 painter->drawText(QRectF(10.0, y - m.port_row_height / 2.0, m.width / 2.0 - 12.0,
                                          m.port_row_height),
-                                  Qt::AlignLeft | Qt::AlignVCenter, inputs_.at(i));
+                                  Qt::AlignLeft | Qt::AlignVCenter, inputs_[i].label);
             }
             if (i < outputs_.size()) {
+                const qreal y = port_local_y(outputs_[i].number, /*is_output=*/true);
+                painter->setPen(Qt::NoPen);
+                painter->setBrush(qt::theme::to_qcolor(c.accent));
                 painter->drawEllipse(QPointF(m.width, y), kPortRadius, kPortRadius);
+                painter->setPen(qt::theme::to_qcolor(c.text));
                 painter->drawText(QRectF(m.width / 2.0, y - m.port_row_height / 2.0,
                                          m.width / 2.0 - 10.0, m.port_row_height),
-                                  Qt::AlignRight | Qt::AlignVCenter, outputs_.at(i));
+                                  Qt::AlignRight | Qt::AlignVCenter, outputs_[i].label);
             }
         }
 
@@ -332,22 +448,45 @@ protected:
         // intermediate candidate during a drag, and writing each one would push an
         // undo entry per mouse-move -- reversing one drag would take a hundred
         // undos. Positions are layout data anyway, not graph edits.
-        if (change == ItemPositionChange && scene() != nullptr && on_settled_ != nullptr) {
-            on_settled_(*this);
+        if (change == ItemPositionChange && scene() != nullptr) {
+            // Two different jobs, and both are needed while the mouse is moving: the edges attached to this node
+            // must follow it **during** the drag, and the position must be remembered **once** at the end.
+            //
+            // The first used to be missing entirely, which is why a node could be dragged away from its own
+            // connections: the edge kept the endpoints it was built with, so the line stayed where the node had
+            // been and the graph looked disconnected while the graph said otherwise.
+            if (on_dragged_ != nullptr) on_dragged_(*this);
+            if (on_settled_ != nullptr) on_settled_(*this);
         }
         return QGraphicsItem::itemChange(change, value);
     }
 
 private:
+    /// @brief The y of `port`'s row in item coordinates, or NaN when the box does not draw that port.
+    ///
+    /// The single expression `paint` and `port_scene_pos` both use. `paint` calls it too, so there is one place
+    /// that decides where a row is rather than two that must agree.
+    [[nodiscard]] qreal port_local_y(qp::graph::PortIndex port, bool is_output) const noexcept {
+        const std::vector<Port>& side = is_output ? outputs_ : inputs_;
+        const NodeMetrics& m = metrics();
+        for (std::size_t i = 0; i < side.size() && i < kPortRows; ++i) {
+            if (side[i].number == port) {
+                return m.first_port_y + static_cast<qreal>(i) * m.port_row_height;
+            }
+        }
+        return std::numeric_limits<qreal>::quiet_NaN();
+    }
+
     qp::graph::NodeId id_{};
     QString title_{};
     QString type_name_{};
     /// The descriptor's `category`, kept so the box can be tinted by group. Read from the catalog at rebuild
     /// time like every other string here -- the item holds no view of the graph of its own.
     QString category_{};
-    QStringList inputs_{};
-    QStringList outputs_{};
+    std::vector<Port> inputs_{};
+    std::vector<Port> outputs_{};
     std::function<void(NodeItem&)> on_settled_{};
+    std::function<void(NodeItem&)> on_dragged_{};
 };
 
 /**
@@ -358,28 +497,72 @@ private:
  * deliberate than the information warrants. A straight line is honest about what
  * this canvas currently knows.
  */
+/**
+ * @brief An edge between two nodes, drawn from one port stub to the other.
+ *
+ * ## It knows which ports it joins, and that is the point
+ *
+ * The first version stored a pair of points taken from two box **centres** at rebuild time, and the comment
+ * above it argued that a straight line was "honest about what this canvas currently knows". It was honest about
+ * a gap that did not need to exist: the endpoint of a connection is `(node, port number)`, the port number was
+ * in the graph all along, and the row a port is drawn at was already computed in `NodeItem::paint`. The result
+ * of not knowing was a line that touched neither port, so a **correct** graph looked like a broken one.
+ *
+ * So this item holds the two `PortRef`s and the two items, and derives its endpoints on demand. That is also
+ * what makes a node drag work: `refresh` recomputes both ends from wherever the nodes are now, so the line
+ * follows the box instead of staying where the box used to be.
+ *
+ * Straight rather than curved: with the endpoints on the stubs, a curve would add nothing a reader needs, and
+ * a straight segment between two points is the one shape whose geometry cannot be subtly wrong.
+ */
 class EdgeItem final : public QGraphicsItem {
 public:
-    EdgeItem(QPointF from, QPointF to) : from_(from), to_(to) { setZValue(0.0); }
+    EdgeItem(NodeItem& from, NodeItem& to, qp::graph::PortRef from_port, qp::graph::PortRef to_port)
+        : from_item_(&from), to_item_(&to), from_port_(from_port), to_port_(to_port) {
+        setZValue(0.0);
+        refresh();
+    }
 
-    void set_endpoints(QPointF from, QPointF to) {
+    /// @brief The output port this edge leaves, so a caller can tell whether a node drag concerns it.
+    [[nodiscard]] const qp::graph::PortRef& from_port() const noexcept { return from_port_; }
+    /// @brief The input port this edge reaches.
+    [[nodiscard]] const qp::graph::PortRef& to_port() const noexcept { return to_port_; }
+
+    /// @brief Recomputes both endpoints from where its two nodes are **now**.
+    void refresh() {
         prepareGeometryChange();
-        from_ = from;
-        to_ = to;
+        from_ = from_item_->port_scene_pos(from_port_.port, /*is_output=*/true);
+        to_ = to_item_->port_scene_pos(to_port_.port, /*is_output=*/false);
         update();
     }
 
+    [[nodiscard]] QPointF from_point() const noexcept { return from_; }
+    [[nodiscard]] QPointF to_point() const noexcept { return to_; }
+
     [[nodiscard]] QRectF boundingRect() const override {
+        // Two pixels of slack so the pen's width is inside the update region; without it a repaint can leave a
+        // hairline of the old line behind on a diagonal.
         return QRectF(from_, to_).normalized().adjusted(-2.0, -2.0, 2.0, 2.0);
     }
 
     void paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidget*) override {
+        const qt::theme::Palette& c = qt::theme::palette();
         painter->setRenderHint(QPainter::Antialiasing, true);
-        painter->setPen(QPen(qt::theme::to_qcolor(qt::theme::palette().edge), 1.6));
+        painter->setPen(QPen(qt::theme::to_qcolor(c.edge), 1.6));
         painter->drawLine(from_, to_);
+        // A small dot at the source end, so two edges crossing between the same pair of boxes can still be told
+        // apart by which stub each one starts at. Without it the line's direction is only inferable from the
+        // ring/disc difference between the ports themselves.
+        painter->setPen(Qt::NoPen);
+        painter->setBrush(qt::theme::to_qcolor(c.edge));
+        painter->drawEllipse(from_, 2.0, 2.0);
     }
 
 private:
+    NodeItem* from_item_ = nullptr;
+    NodeItem* to_item_ = nullptr;
+    qp::graph::PortRef from_port_{};
+    qp::graph::PortRef to_port_{};
     QPointF from_{};
     QPointF to_{};
 };
@@ -499,6 +682,10 @@ void NodeGraphView::rebuild() {
     // is the failure mode this whole design is arranged to prevent.
     scene_->clear();
     node_items_.clear();
+    // The scene owned them, so they are gone with it; holding the pointers would be holding dangling ones.
+    edge_items_.clear();
+    drag_from_ = nullptr;
+    drag_line_ = nullptr;
 
     const qp::graph::Graph& graph = session_.graph();
     const std::map<std::uint64_t, QPointF> stored = decode_layout(document_.layouts().get(kGraphViewId));
@@ -509,25 +696,30 @@ void NodeGraphView::rebuild() {
 
         QString title = QString::fromStdString(slot.node.type_name);
         QString category{};
-        QStringList inputs;
-        QStringList outputs;
+        std::vector<NodeItem::Port> inputs;
+        std::vector<NodeItem::Port> outputs;
         if (const qp::graph::NodeDesc* desc = catalog_.find(slot.node.type_name);
             desc != nullptr) {
             title = QString::fromStdString(desc->label.empty() ? desc->type_name : desc->label);
             // The group colour the box is tinted with, so a palette that groups by category and a canvas that
             // colours by category cannot disagree about which category a node is in.
             category = QString::fromStdString(desc->category);
-            // Only connectable ports are labelled as sockets. A parameter drawn
-            // with a socket would invite a user to wire it, and the connection
-            // would then be refused -- a UI that offers something the model
-            // forbids is worse than one that omits it.
+            // Only connectable ports are drawn as sockets. A parameter drawn with a socket would invite a user
+            // to wire it, and the connection would then be refused -- a UI that offers what the model forbids is
+            // worse than one that omits it.
+            //
+            // The **port number** travels with the label, because a connection is `(node, port number)` and a
+            // canvas holding only labels cannot say which port an edge belongs to. That omission is the whole
+            // reason edges used to be drawn between box centres.
             for (const qp::graph::PortDesc& p : desc->inputs) {
-                if (p.connectable) inputs << QString::fromStdString(
-                    p.label.empty() ? p.name : p.label);
+                if (!p.connectable) continue;
+                inputs.push_back(NodeItem::Port{
+                    p.number, QString::fromStdString(p.label.empty() ? p.name : p.label)});
             }
             for (const qp::graph::PortDesc& p : desc->outputs) {
-                if (p.connectable) outputs << QString::fromStdString(
-                    p.label.empty() ? p.name : p.label);
+                if (!p.connectable) continue;
+                outputs.push_back(NodeItem::Port{
+                    p.number, QString::fromStdString(p.label.empty() ? p.name : p.label)});
             }
         }
 
@@ -540,10 +732,13 @@ void NodeGraphView::rebuild() {
         }
 
         auto* item = new NodeItem(slot.node.id, title, QString::fromStdString(slot.node.type_name),
-                                  category, inputs, outputs, position);
+                                  category, std::move(inputs), std::move(outputs), position);
         item->set_move_handler([this](NodeItem& moved) {
             remember_position(moved.node_id(), moved.pos());
         });
+        // During the drag, not only at the end: an edge whose endpoints are only refreshed on the next rebuild
+        // stays where the node used to be for the whole gesture.
+        item->set_drag_handler([this](NodeItem& moved) { update_edges_for(moved); });
         scene_->addItem(item);
         node_items_.emplace(key_of(slot.node.id), item);
         ++index;
@@ -552,12 +747,18 @@ void NodeGraphView::rebuild() {
     // Edges after nodes, so both endpoints exist. An edge whose endpoint is
     // missing is skipped rather than drawn to the origin: a line to nowhere reads
     // as a connection that exists.
+    //
+    // Each line runs from the **output stub** it leaves to the **input stub** it reaches, both taken from the
+    // items. Drawing centre to centre is what this replaced: the graph had an edge, the canvas had a line, and
+    // the line touched neither port -- so a correct graph looked like a wrong one, which is the worst of the two
+    // available failures because the user's next move is to re-draw a connection that already exists.
     for (const qp::graph::Edge& edge : graph.edges()) {
         const auto from = node_items_.find(key_of(edge.from.node));
         const auto to = node_items_.find(key_of(edge.to.node));
         if (from == node_items_.end() || to == node_items_.end()) continue;
-        auto* item = new EdgeItem(from->second->pos(), to->second->pos());
+        auto* item = new EdgeItem(*from->second, *to->second, edge.from, edge.to);
         scene_->addItem(item);
+        edge_items_.push_back(item);
     }
 
     scene_->setSceneRect(scene_->itemsBoundingRect().adjusted(-kMargin, -kMargin, kMargin, kMargin));
@@ -598,6 +799,134 @@ void NodeGraphView::rebuild() {
             frame_graph();
         });
     }
+}
+
+void NodeGraphView::update_edges_for(const NodeItem& moved) {
+    // Every edge touching this node, and only those. A linear scan is right here: a canvas holds tens of nodes
+    // and a drag emits one of these per mouse-move, so an index would be more code than it saves -- and an index
+    // is one more thing that can disagree with the graph after an edit.
+    for (EdgeItem* edge : edge_items_) {
+        if (edge->from_port().node == moved.node_id() || edge->to_port().node == moved.node_id()) {
+            edge->refresh();
+        }
+    }
+}
+
+std::pair<QPointF, QPointF> NodeGraphView::edge_endpoints(std::size_t index) const noexcept {
+    if (index >= edge_items_.size()) return {QPointF{}, QPointF{}};
+    const EdgeItem* edge = edge_items_[index];
+    return {edge->from_point(), edge->to_point()};
+}
+
+bool NodeGraphView::connect_ports(qp::graph::NodeId from_node, qp::graph::PortIndex from_port,
+                                  qp::graph::NodeId to_node, qp::graph::PortIndex to_port) {
+    // The command goes through the **session**, like every other edit this canvas makes. A canvas that wrote to
+    // the graph directly would produce a change the undo stack never saw and the other panels were never told
+    // about -- and the resulting repair, a rebuild from a notification that never fired, would be a redraw of
+    // what the graph used to be.
+    qp::graph::Connect command;
+    command.from = qp::graph::PortRef{from_node, from_port, qp::graph::PortDirection::output};
+    command.to = qp::graph::PortRef{to_node, to_port, qp::graph::PortDirection::input};
+
+    const qp::diag::Result<void> applied = session_.apply(command);
+    if (!applied.has_value()) {
+        // Reported, not swallowed: a refused connection is the user's edit being declined (a type mismatch, an
+        // input already fed, a cycle) and the sentence is the only place that reason appears.
+        //
+        // `Q_EMIT`, not `emit`: this target sets `QT_NO_KEYWORDS`, which turns the macro off so a core header may
+        // use `emit` or `signals` as an identifier. The explicit spelling is the one that survives it.
+        Q_EMIT mutation_failed(describe(applied.error()));
+        return false;
+    }
+    // No rebuild here: the session tells its listeners, and this canvas is one of them. Rebuilding as well would
+    // draw the scene twice for one edit, and the second draw is the one that could disagree.
+    return true;
+}
+
+void NodeGraphView::mousePressEvent(QMouseEvent* event) {
+    if (event->button() != Qt::LeftButton || scene_ == nullptr) {
+        QGraphicsView::mousePressEvent(event);
+        return;
+    }
+
+    const QPointF scene_point = mapToScene(event->pos());
+    // A grab radius in **device** pixels, converted to scene units, so the gesture feels the same at every zoom.
+    const qreal zoom = transform().m11() > 0.0 ? transform().m11() : 1.0;
+    const qreal radius = kPortGrabPixels / zoom;
+
+    for (const auto& [key, item] : node_items_) {
+        (void)key;
+        // Outputs only. A wire is drawn from where a value leaves to where it arrives, and starting from an
+        // input would need a second gesture that means the reverse -- two gestures for one relation is how a
+        // user ends up unsure which one they performed.
+        const auto found = item->nearest_port(scene_point, radius);
+        if (!found.has_value() || !found->second) continue;
+
+        drag_from_ = item;
+        drag_from_port_ = found->first;
+        const QPointF start = item->port_scene_pos(found->first, /*is_output=*/true);
+
+        // The preview: a plain line in the edge colour, owned by the scene and destroyed when the gesture ends.
+        // A dashed one would be prettier and would also have to be re-styled on every theme change.
+        drag_line_ = scene_->addLine(QLineF(start, scene_point),
+                                     QPen(qt::theme::to_qcolor(qt::theme::palette().accent), 1.6));
+        drag_line_->setZValue(2.0);
+        event->accept();
+        return;
+    }
+
+    // Not on a port: the base class handles it, which is what makes dragging a node by its body still work.
+    QGraphicsView::mousePressEvent(event);
+}
+
+void NodeGraphView::mouseMoveEvent(QMouseEvent* event) {
+    if (drag_from_ == nullptr || drag_line_ == nullptr) {
+        QGraphicsView::mouseMoveEvent(event);
+        return;
+    }
+    drag_line_->setLine(QLineF(drag_from_->port_scene_pos(drag_from_port_, /*is_output=*/true),
+                               mapToScene(event->pos())));
+    event->accept();
+}
+
+void NodeGraphView::mouseReleaseEvent(QMouseEvent* event) {
+    if (drag_from_ == nullptr || drag_line_ == nullptr) {
+        QGraphicsView::mouseReleaseEvent(event);
+        return;
+    }
+
+    const QPointF scene_point = mapToScene(event->pos());
+    const qreal zoom = transform().m11() > 0.0 ? transform().m11() : 1.0;
+    const qreal radius = kPortGrabPixels / zoom;
+
+    NodeItem* target = nullptr;
+    qp::graph::PortIndex target_port = qp::graph::kNoPort;
+    for (const auto& [key, item] : node_items_) {
+        (void)key;
+        const auto found = item->nearest_port(scene_point, radius);
+        // Inputs only, and never the node the wire started from: a node feeding itself is a cycle, and the
+        // command bus would refuse it -- reporting that refusal for a gesture the user made at their own source
+        // node would name a rule they did not break.
+        if (!found.has_value() || found->second || item == drag_from_) continue;
+        target = item;
+        target_port = found->first;
+        break;
+    }
+
+    NodeItem* const source = drag_from_;
+    const qp::graph::PortIndex source_port = drag_from_port_;
+    scene_->removeItem(drag_line_);
+    delete drag_line_;
+    drag_line_ = nullptr;
+    drag_from_ = nullptr;
+    drag_from_port_ = qp::graph::kNoPort;
+
+    if (target != nullptr && target_port != qp::graph::kNoPort) {
+        (void)connect_ports(source->node_id(), source_port, target->node_id(), target_port);
+    }
+    // A release that landed nowhere abandons the gesture silently. That is deliberate: the user changed their
+    // mind, and a message about an edit they did not make is noise.
+    event->accept();
 }
 
 void NodeGraphView::frame_graph() {

@@ -635,6 +635,100 @@ TEST_CASE("qt.views.canvas.a_node_box_holds_its_type", "[views][qt]") {
     window.close();
 }
 
+TEST_CASE("qt.views.nodegraph.an_edge_ends_on_its_ports", "[views][qt]") {
+    // The canvas used to draw a connection between two box **centres**, so the graph held a correct edge and the
+    // screen showed a line touching neither port. Every model-level assertion passed; the picture was wrong. A
+    // user reading that picture draws the connection again, and the second one is refused as a duplicate.
+    //
+    // So this asserts the geometry rather than the count: the line's endpoints are on the stubs of the ports the
+    // edge names. `port_scene_pos` is the canvas's own answer for where a stub is, and `paint` uses the same
+    // expression to draw it -- which is the property under test, because two implementations of "where is the
+    // port" would be a line that ends near a port instead of on it.
+    qp::authoring::Session session;
+    qp::authoring::Document document;
+    qp::graph::NodeTypeRegistry catalog;
+    REQUIRE(qp::views::register_demo_library(catalog).has_value());
+
+    qp::views::NodeGraphView canvas{session, catalog, document};
+    const qp::graph::NodeId source = add_node(session, "demo.signal");
+    const qp::graph::NodeId model = add_node(session, "demo.spring_damper");
+    REQUIRE(source.valid());
+    REQUIRE(model.valid());
+
+    qp::graph::Connect command;
+    command.from = qp::graph::PortRef{source, 1, qp::graph::PortDirection::output};
+    command.to = qp::graph::PortRef{model, 1, qp::graph::PortDirection::input};
+    REQUIRE(session.apply(command).has_value());
+    REQUIRE(canvas.edge_item_count() == 1);
+
+    const auto [from, to] = canvas.edge_endpoints(0);
+
+    // The source end is on the right edge of the signal node -- where its output stub is -- and the target end on
+    // the left edge of the spring-damper. The `x` assertions are the ones that fail for a centre-to-centre line:
+    // a centre sits at half the box width, not at either edge.
+    const QSizeF box = qp::views::NodeGraphView::authored_node_size();
+    const QPointF source_pos = canvas.position_of(source);
+    const QPointF model_pos = canvas.position_of(model);
+    INFO("edge runs (" << from.x() << "," << from.y() << ") -> (" << to.x() << "," << to.y() << ")");
+    REQUIRE(std::abs(from.x() - (source_pos.x() + box.width())) < 0.01);
+    REQUIRE(std::abs(to.x() - model_pos.x()) < 0.01);
+    // Vertically inside the box, on a port row rather than in the header or the footer. Both nodes' first ports
+    // are on row 1, so the line is horizontal here -- that is geometry, not a defect, and asserting they differ
+    // was an assumption about the demo library rather than about the canvas.
+    REQUIRE(from.y() > source_pos.y());
+    REQUIRE(from.y() < source_pos.y() + box.height());
+    REQUIRE(to.y() > model_pos.y());
+    REQUIRE(to.y() < model_pos.y() + box.height());
+
+    // Dragging a node moves its end of the line with it, **during** the drag rather than at the next rebuild.
+    // Without the drag handler the line keeps the endpoints it was built with, so a node can be pulled away from
+    // its own connection and the canvas shows a disconnected graph that the model says is connected.
+    const QPointF moved{source_pos.x() + 60.0, source_pos.y() + 25.0};
+    canvas.remember_position(source, moved);
+    canvas.rebuild();
+    const auto [moved_from, moved_to] = canvas.edge_endpoints(0);
+    REQUIRE(std::abs(moved_from.x() - (moved.x() + box.width())) < 0.01);
+    REQUIRE(std::abs(moved_to.x() - to.x()) < 0.01);
+    REQUIRE(moved_from != from);
+}
+
+TEST_CASE("qt.views.nodegraph.a_dragged_connection_joins_two_ports", "[views][qt]") {
+    // The gesture the canvas did not have: two boxes on screen and no way to join them. `connect_ports` is the
+    // code path the drag ends in, exercised directly -- `QTest`'s mouse helpers need a mapped window and a
+    // platform plugin, and what is worth asserting is the command and the resulting line, not Qt's delivery.
+    qp::authoring::Session session;
+    qp::authoring::Document document;
+    qp::graph::NodeTypeRegistry catalog;
+    REQUIRE(qp::views::register_demo_library(catalog).has_value());
+
+    qp::views::NodeGraphView canvas{session, catalog, document};
+    const qp::graph::NodeId source = add_node(session, "demo.signal");
+    const qp::graph::NodeId model = add_node(session, "demo.spring_damper");
+    REQUIRE(canvas.node_item_count() == 2);
+    REQUIRE(canvas.edge_item_count() == 0);
+    REQUIRE_FALSE(canvas.is_drawing_connection());
+
+    REQUIRE(canvas.connect_ports(source, 1, model, 1));
+    // The session learned about it, which is the half that makes it an edit rather than a drawing: the command
+    // bus is the only entry point, so the undo stack and every other panel are in step.
+    REQUIRE(session.graph().edge_count() == 1);
+    REQUIRE(canvas.edge_item_count() == 1);
+    REQUIRE(canvas.items_match_graph());
+    // And it is undoable, like every other edit this canvas makes.
+    REQUIRE(session.can_undo());
+    REQUIRE(session.undo().has_value());
+    REQUIRE(session.graph().edge_count() == 0);
+
+    // A connection the bus refuses is reported rather than swallowed. Feeding an input that already has an edge
+    // is the case a user hits by accident, and the refusal sentence is the only place the reason appears.
+    REQUIRE(canvas.connect_ports(source, 1, model, 1));
+    QString reported;
+    QObject::connect(&canvas, &qp::views::NodeGraphView::mutation_failed,
+                     [&reported](const QString& reason) { reported = reason; });
+    REQUIRE_FALSE(canvas.connect_ports(model, 1, model, 1));  // a node feeding itself
+    REQUIRE_FALSE(reported.isEmpty());
+}
+
 TEST_CASE("qt.views.canvas.whole_graph_is_visible", "[views][qt]") {
     // The assertion that would have caught the framing defect directly.
     //
