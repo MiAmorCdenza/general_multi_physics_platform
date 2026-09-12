@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "第九类内容 `plugins/experiments`（教师层实验包），以及一个被实测推翻的重新开启条件：第二个格式消费者可以委派而不必抽取编组",
+  "updated": "粒子域执行路径接通：新模块 `core/graph/particles`，使 `IBatchAdvancer` / `KernelRegistry` 第一次有了生产消费者",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -81,7 +81,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 734,
+    "ctest_registered": 747,
     "compilers_green": [
       "gcc-15.2.0-i686",
       "msvc-19.51-x64"
@@ -164,7 +164,7 @@
       "path": "core/graph/kernels",
       "layer": "L1",
       "state": "verified",
-      "note": "原生算子契约 + 注册表。**本模块不含任何积分器**：Boris / 蛙跳 / RK4 / Verlet 是插件，契约留在地基。形状由性能要求决定——宿主每个计划操作解析一次 IBatchAdvancer，然后每步调用一次 advance，因此虚调用是每算子每帧 5 次而不是每粒子一次；接口刻意不提供『每粒子回调宿主』，那种形状无法做快。确定性是契约而非质量目标：advance 不得分配/抛出/阻塞，随机性只能来自注入的 RNG（splitmix64 而非标准分布适配器——同一引擎在 libstdc++ 与 MSVC 上序列不同）。注册表两阶段提交：declare 预留、commit 安装、drop 释放，插件加载失败不留痕迹。重名拒绝而不是覆盖，因为覆盖会静默改掉所有按名引用它的已存图。"
+      "note": "原生算子契约 + 注册表。**本模块不含任何积分器**：Boris / 蛙跳 / RK4 / Verlet 是插件，契约留在地基。形状由性能要求决定——宿主每个计划操作解析一次 IBatchAdvancer，然后每步调用一次 advance，因此虚调用是每算子每帧 5 次而不是每粒子一次；接口刻意不提供『每粒子回调宿主』，那种形状无法做快。确定性是契约而非质量目标：advance 不得分配/抛出/阻塞，随机性只能来自注入的 RNG（splitmix64 而非标准分布适配器——同一引擎在 libstdc++ 与 MSVC 上序列不同）。注册表两阶段提交：declare 预留、commit 安装、drop 释放，插件加载失败不留痕迹。重名拒绝而不是覆盖，因为覆盖会静默改掉所有按名引用它的已存图。【本轮：粒子域的执行路径接通了。】`IBatchAdvancer` / `BatchView` / `ParamBlock` / `AdvanceContext` / `ClampPolicy` / `KernelRegistry` 在本轮之前**没有任何生产代码调用过**，而 `graph/domain` 只算到“哪些节点、什么顺序”就停了；新模块 `core/graph/particles` 是那个缺掉的一环，也是本模块契约的**第一个真实消费者**。该模块刻意不依赖 `domain`：把一份计划翻译成 `StepPlan` 是**内容**，属于组合根——与 `IOperatorBinder` 为何住在插件里是同一个理由。"
     },
     {
       "path": "core/graph/field",
@@ -267,6 +267,12 @@
       "layer": "L0+",
       "state": "verified",
       "note": "插件宿主（组合根）：唯一允许同时依赖 ir/kernels/instrument/io/capability/file 的模块。装载真实 MODULE 库、按 manifest 位协商能力、把插件注册量记入 ledger 以便精确卸载；7 个用例、5 个真实插件夹具。 **端到端验收用了 loader 自己的夹具**（本阶段）：`tests/fixtures/plugin/` 是手写字节、**不链宿主**，因此它们是本仓库里唯一「宿主没有参与构建」的插件——正是宿主存在的场景。`host.mounts_and_refuses_the_loaders_own_fixtures` 把 good / bad_tag / bad_version / no_entry 走一遍 `PluginHost`，并钉住一条只有两个真插件相遇才会出现的约束：`good` 与 `second` 各自都正确、都声明 `node_types`，而能力注册表一个 id 只服务一个 provider，所以第二个被 `duplicate_provider` 拒——这是插件作者必须知道的规则，不是可以绕过的缺陷。"
+    },
+    {
+      "path": "core/graph/particles",
+      "layer": "L1",
+      "state": "verified",
+      "note": "粒子域的执行路径：从一份计划到一个真正步进的循环。它是 `IBatchAdvancer` 与 `KernelRegistry` 的**第一个真实消费者**。`ParticleState` 把批次描述为四个全 f64 槽位（位置 m、速度 m/s、荷质比 C/kg、状态），每个槽位都带自己的 `abi::LatticeDesc` 量纲描述——四个槽位而不是一个合并数组，因为合并的七分量缓冲区说不出自己装的是什么。**四个槽位全部是 f64，这是平台所有者拍的**：Boris 累积几十万步后，守恒检查的差在 f32 里与舍入同阶，“能量守恒”与“能量漂移等于舍入”就无法区分。`ParticleExecutor` 持有一份 `StepPlan` 列表（内核 + 参数块 + 三个场槽位 b/e/drag），准备一次后每步依次推进，对内核写的每个分量套用 `ClampPolicy` 并**计数**（C2 要求不爆炸，本仓库要求不静默钳位），并把运算变成非数的粒子退役为 `escaped`。12 个用例全部用**已知闭式答案的桩内核**：幂等内核验证循环本身，对顺序敏感的级联内核验证就地与非就地一致，写 NaN 与两个方向无穷的内核验证钳位计数与符号。"
     }
   ],
   "licence": {

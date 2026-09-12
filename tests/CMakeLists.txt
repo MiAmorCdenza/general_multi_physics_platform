@@ -469,6 +469,13 @@ qp_add_test(qp_test_graph_kernels
     SOURCES unit/graph/test_kernels.cpp
             unit/graph/test_kernel_clamp.cpp
     LIBS qp::graph_kernels)
+
+# The bridge from a plan to a batch. It links particles alone: the cases drive stub kernels whose answers are
+# known in closed form, because the thing under test is the **loop** and not the physics -- a failure in a case
+# that also integrated a real field would have two possible causes and no way to tell them apart.
+qp_add_test(qp_test_graph_particles
+    SOURCES unit/graph/test_particles.cpp
+    LIBS qp::graph_particles qp::graph_kernels qp::field qp::abi)
 qp_add_test(qp_test_plugin
     SOURCES unit/plugin/test_plugin.cpp
     LIBS qp::plugin)

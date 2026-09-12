@@ -8,6 +8,7 @@
 #   core/graph/eval/      evaluation scheduling + content-addressed cache
 #   core/graph/domain/    the three domain semantics: field / particle / render
 #   core/graph/kernels/   native operator contract (implemented in plugins)
+#   core/graph/particles/ where a particle batch lives, and the loop that drives kernels over it
 #   core/graph/field/     minimal contract for field semantics
 
 add_subdirectory(ir)
@@ -18,4 +19,5 @@ add_subdirectory(eval)
 add_subdirectory(domain)
 add_subdirectory(field)
 add_subdirectory(kernels)
+add_subdirectory(particles)
 add_subdirectory(execution)

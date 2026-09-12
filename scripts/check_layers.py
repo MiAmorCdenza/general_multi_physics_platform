@@ -91,6 +91,17 @@ ALLOWED: dict[str, set[str]] = {
     "execution": {"units", "diag", "ir", "structure",
                   "run", "store", "trace", "plugin", "validate"},
     "kernels": {"units", "diag", "abi", "field", "domain"},
+    # particles is the bridge between a plan and a batch: it owns where particle state lives and the loop that
+    # drives kernels over it. It needs `field` for the same reason `kernels` does -- a batch is handed to an
+    # operator in the field vocabulary, so a state buffer is described as one -- and `kernels` because the thing
+    # it drives *is* an `IBatchAdvancer`.
+    #
+    # It deliberately does **not** depend on `domain`. A `DomainPlan` says which nodes belong to the particle
+    # domain and in what order, and something has to turn that order into a `StepPlan`; that something is the
+    # composition root, because the mapping from a node's parameters to a kernel's parameter block is content --
+    # the same reason `IOperatorBinder` lives in the plugin that ships the operator rather than in `execution`.
+    # A `particles -> domain` edge here would put "which node type is which kernel" inside the loop.
+    "particles": {"units", "diag", "abi", "field", "kernels"},
     # L2 runs and data
     "run": {"units", "diag", "abi", "ports"},
     "store": {"units", "diag", "ports"},
