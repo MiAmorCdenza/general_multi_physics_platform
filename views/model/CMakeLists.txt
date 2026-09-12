@@ -42,4 +42,5 @@ target_compile_features(qp_views_model PUBLIC cxx_std_20)
 target_link_libraries(qp_views_model
     PUBLIC qp::graph_ir qp::ports qp::units qp::authoring_portui
            qp::runtime_store qp::runtime_trace qp::runtime_run qp::runtime_io
+           qp::graph_structure qp::graph_eval qp::graph_execution
     PRIVATE qp_warnings qp_sanitize)

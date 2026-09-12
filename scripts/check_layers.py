@@ -73,6 +73,17 @@ ALLOWED: dict[str, set[str]] = {
     # descriptor inside kernels, which would give the platform two incompatible
     # answers to "what is a described span".
     "field": {"units", "diag", "abi"},
+    # execution owns the run loop's contracts: an operator, a state buffer, and the binder that
+    # turns a node into an operator. It was written in the view layer first and did not compile --
+    # the binder must live in the plugin that ships the operator, and views already links plugins,
+    # so `plugins -> views -> plugins` was a cycle. That is the layering saying the interfaces were
+    # in the wrong place, and they were: driving an operator over time is mechanism.
+    #
+    # It deliberately does not depend on `kernels`. An `IStateOperator` is two methods, and binding
+    # this to `IBatchAdvancer` would give a run loop that can only drive batch advancers; the
+    # adapter presenting one as the other belongs to the plugin, next to the code it adapts.
+    "execution": {"units", "diag", "ir", "structure",
+                  "run", "store", "trace"},
     "kernels": {"units", "diag", "abi", "field", "domain"},
     # L2 runs and data
     "run": {"units", "diag", "abi", "ports"},

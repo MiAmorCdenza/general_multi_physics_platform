@@ -127,6 +127,7 @@ if(Python3_Interpreter_FOUND)
                     ${CMAKE_SOURCE_DIR}/scripts/check_contracts.py
                     --headers ${CMAKE_SOURCE_DIR}/plugins
                     --tests   ${CMAKE_SOURCE_DIR}/tests
+                    --exclude unit/graph
                     --only    plugins
                     --quiet)
         set_tests_properties(gate.contracts.plugins PROPERTIES
@@ -370,6 +371,26 @@ qp_add_test(qp_test_graph_domain
 qp_add_test(qp_test_graph_field
     SOURCES unit/graph/test_field.cpp
     LIBS qp::field)
+# The run loop, driven through a real plugin node.
+#
+# The test lives under `unit/plugins/` rather than `unit/graph/` because it owns contracts declared in
+# **two** modules -- the loop in `core/graph/execution` and the binder in `plugins/mechanics` -- and the
+# contract gate attributes cases per invocation. A case under `unit/graph/` is invisible to the plugins
+# gate, so the plugin headers' `@tests` fields were reported as referencing cases that do not exist.
+# The file also genuinely needs the plugin: every case builds a spring-damper node and binds it.
+if(QP_BUILD_PLUGINS)
+    qp_add_test(qp_test_plugins_execution
+        SOURCES unit/plugins/test_execution_binding.cpp
+        LIBS qp::graph_execution qp::plugins::mechanics qp::graph_kernels)
+endif()
+
+# The run loop. Qt-free and graph-only: every case drives a stub operator, so it belongs to the loop's
+# module rather than to a plugin. The binding cases -- which node becomes which operator -- live in
+# tests/unit/plugins/, because those genuinely need the plugin.
+qp_add_test(qp_test_graph_execution
+    SOURCES unit/graph/test_execution.cpp
+    LIBS qp::graph_execution)
+
 qp_add_test(qp_test_graph_kernels
     SOURCES unit/graph/test_kernels.cpp
             unit/graph/test_kernel_clamp.cpp

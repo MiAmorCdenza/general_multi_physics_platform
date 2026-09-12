@@ -16,7 +16,9 @@
 add_library(qp_plugins_mechanics STATIC
     src/rk4_oscillator.cpp
     src/incline.cpp
-    src/collision.cpp)
+    src/collision.cpp
+    src/batch_operator.cpp
+    src/mechanics_binder.cpp)
 
 add_library(qp::plugins::mechanics ALIAS qp_plugins_mechanics)
 
@@ -28,5 +30,5 @@ target_include_directories(qp_plugins_mechanics
 target_compile_features(qp_plugins_mechanics PUBLIC cxx_std_20)
 
 target_link_libraries(qp_plugins_mechanics
-    PUBLIC qp::graph_kernels qp::field qp::diag
+    PUBLIC qp::graph_kernels qp::graph_execution qp::field qp::diag
     PRIVATE qp_warnings qp_sanitize)
