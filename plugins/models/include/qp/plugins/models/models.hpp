@@ -173,7 +173,8 @@ public:
      * @complexity  O(1)
      * @nondet      none
      * @frozen      no
-     * @tests       models.the_projectile_stops_at_the_ground
+     * @tests       models.the_projectile_stops_at_the_ground,
+ *              examples.the_projectile_stops_at_the_ground_and_the_check_says_so
      */
     void set_post_step(PostStep post) noexcept { post_ = std::move(post); }
 

@@ -432,6 +432,13 @@ if(QP_BUILD_PLUGINS)
     qp_add_test(qp_test_plugins_models
         SOURCES unit/plugins/test_models.cpp
         LIBS qp::plugins::models qp::host qp::graph_execution qp::graph_ir qp::ports)
+
+    # The worked experiments. It links the models because an example **is** a model driven by the loop, and the
+    # examples library itself for the closed forms the trajectories are measured against -- two libraries that do
+    # not know about each other, which is what makes agreement between them evidence.
+    qp_add_test(qp_test_plugins_examples
+        SOURCES unit/plugins/test_examples.cpp
+        LIBS qp::plugins::examples qp::plugins::models qp::graph_execution qp::graph_ir)
 endif()
 
 # The run loop. Qt-free and graph-only: every case drives a stub operator, so it belongs to the loop's

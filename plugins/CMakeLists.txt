@@ -41,4 +41,9 @@ if(QP_BUILD_PLUGINS)
     # projectile with linear drag. They are `models/` and not more entries in `mechanics/` because what they own
     # is a **node type and its parameters**, which is a different kind of contribution from an integrator.
     add_subdirectory(models)
+
+    # The worked experiments, and the closed forms they are checked against. Last, because it consumes the
+    # other three: an example is a model, driven by the loop, with a reading taken by an instrument and a fit
+    # run over the results. See its CMakeLists for why examples are code rather than saved documents.
+    add_subdirectory(examples)
 endif()
