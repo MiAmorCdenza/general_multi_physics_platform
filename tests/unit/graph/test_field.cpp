@@ -398,3 +398,194 @@ TEST_CASE("field.value_is_trivially_copyable", "[field]") {
     REQUIRE(empty.point_count() == 1);   // "point" kind, but no data
     REQUIRE(get_component(empty, 0, 0) == 0.0);
 }
+
+/// @brief A self-consistent volume of f64 vectors on a `3 x 2 x 2` grid: 12 points, 36 values.
+[[nodiscard]] qp::abi::LatticeDesc volume_desc(std::uint32_t nx = 3, std::uint32_t ny = 2,
+                                               std::uint32_t nz = 2) {
+    qp::abi::FieldDim tesla;
+    tesla.M = 1;
+    tesla.T = -2;
+    tesla.I = -1;
+    return qp::abi::make_lattice(qp::abi::LatticeKind::volume, qp::abi::ComponentKind::vector,
+                                 qp::abi::ElementType::f64, tesla, nx, ny, nz);
+}
+
+TEST_CASE("field.set.publishes_and_reads_back", "[field]") {
+    // **The gap this type closes.** A `field_handle` port value carries a `LatticeDesc` and no data, by design;
+    // without a publisher, nothing anywhere could turn a handle into samples. So the case that matters is the
+    // round trip: publish, then read the same numbers back through the field vocabulary -- not through the
+    // store's own API, because a store that returned its own idea of the data would prove nothing about what a
+    // kernel would see.
+    FieldSet fields;
+    REQUIRE(fields.size() == 0);
+    REQUIRE(fields.bytes() == 0);
+    REQUIRE_FALSE(fields.contains(FieldKey{1, 1}));
+
+    const auto desc = volume_desc();
+    std::vector<double> samples(36);
+    for (std::size_t i = 0; i < samples.size(); ++i) samples[i] = static_cast<double>(i) * 0.5;
+
+    REQUIRE(fields.publish(FieldKey{1, 1}, desc, samples));
+    REQUIRE(fields.size() == 1);
+    REQUIRE(fields.contains(FieldKey{1, 1}));
+
+    const FieldValue view = fields.view(FieldKey{1, 1});
+    REQUIRE(is_readable(view));
+    REQUIRE(view.kind() == Kind::Volume);
+    REQUIRE(view.is_vector());
+    REQUIRE(view.desc.element == qp::abi::ElementType::f64);
+    REQUIRE(view.point_count() == 12);
+    REQUIRE(view.required_bytes() == 36 * sizeof(double));
+    // The dimension survives the round trip, because it is what makes the samples a magnetic field rather than
+    // twelve vectors of nothing in particular.
+    REQUIRE(view.dimension().M == 1);
+    REQUIRE(view.dimension().T == -2);
+    REQUIRE(view.dimension().I == -1);
+    // And the values, at both ends of the layout: point `(i * ny + j) * nz + k`, then component.
+    REQUIRE(get_component(view, 0, 0) == 0.0);
+    REQUIRE(get_component(view, 0, 2) == 1.0);
+    REQUIRE(get_component(view, 11, 0) == 16.5);
+    REQUIRE(get_component(view, 11, 2) == 17.5);
+
+    REQUIRE(fields.bytes() == 36 * sizeof(double));
+
+    // The store is the owner, so the caller's vector may go away. That is the property `abi::FieldBuffer`'s
+    // "the publisher keeps it alive" sentence delegates, and the one a store that kept a pointer would fail
+    // while passing every assertion above.
+    samples.clear();
+    samples.shrink_to_fit();
+    REQUIRE(get_component(fields.view(FieldKey{1, 1}), 11, 2) == 17.5);
+
+    // An absent key is an **unreadable** value, not an error and not a zero field: "no field was baked here" and
+    // "the field is zero" are the same force and different experiments.
+    const FieldValue absent = fields.view(FieldKey{9, 9});
+    REQUIRE_FALSE(is_readable(absent));
+
+    // The set is keyed by publisher, so two nodes with the same grid shape do not collide -- the failure a
+    // descriptor-keyed store would have, and the one that would silently run one node's field twice.
+    std::vector<double> other(36, 7.0);
+    REQUIRE(fields.publish(FieldKey{2, 1}, desc, std::move(other)));
+    REQUIRE(fields.size() == 2);
+    REQUIRE(get_component(fields.view(FieldKey{1, 1}), 0, 0) == 0.0);
+    REQUIRE(get_component(fields.view(FieldKey{2, 1}), 0, 0) == 7.0);
+
+    // A default-constructed key names nothing and is never publishable: node index zero is the graph's own
+    // invalid slot, and a store that accepted it would have an entry nobody could name.
+    REQUIRE_FALSE(kNoField.valid());
+    REQUIRE_FALSE(fields.publish(kNoField, desc, std::vector<double>(36, 1.0)));
+    REQUIRE_FALSE(fields.contains(kNoField));
+}
+
+TEST_CASE("field.set.refuses_what_it_cannot_own", "[field]") {
+    // Every refusal is a shape that would otherwise hand a kernel a view it reads past the end of, or a
+    // precision nobody chose. A store that "took what it was given" would be a corruption path rather than a
+    // container, which is the same reasoning `abi::is_consistent` exists for one layer down.
+    FieldSet fields;
+    const auto desc = volume_desc();
+    std::vector<double> right_size(36, 1.0);
+
+    // A descriptor that is not self-consistent: a volume whose byte stride contradicts its component type.
+    qp::abi::LatticeDesc broken = desc;
+    broken.spacing_bytes = 4;
+    REQUIRE_FALSE(fields.publish(FieldKey{1, 1}, broken, right_size));
+    REQUIRE(fields.size() == 0);
+
+    // The wrong element type. ADR-0005 makes f32 the field default and the particle path uses f64; a store that
+    // narrowed silently here would decide the precision of a run in a fallback nobody wrote down.
+    qp::abi::LatticeDesc single = desc;
+    single.element = qp::abi::ElementType::f32;
+    single.spacing_bytes = qp::abi::expected_spacing(single);
+    REQUIRE_FALSE(fields.publish(FieldKey{1, 1}, single, right_size));
+
+    // A sample count that is not the descriptor's own, in both directions: too few is a read past the end and
+    // too many is a claim about data the descriptor will never describe. Neither is a "close enough".
+    REQUIRE_FALSE(fields.publish(FieldKey{1, 1}, desc, std::vector<double>(35, 1.0)));
+    REQUIRE_FALSE(fields.publish(FieldKey{1, 1}, desc, std::vector<double>(37, 1.0)));
+    REQUIRE_FALSE(fields.publish(FieldKey{1, 1}, desc, std::vector<double>{}));
+    REQUIRE(fields.size() == 0);
+
+    // The count is `points x components`, not `points`: a scalar-sized vector for a vector field is exactly the
+    // off-by-three a hand-written check gets wrong.
+    REQUIRE_FALSE(fields.publish(FieldKey{1, 1}, desc, std::vector<double>(12, 1.0)));
+
+    // And the shape it does accept comes up, so the refusals above are not a store that refuses everything.
+    REQUIRE(fields.publish(FieldKey{1, 1}, desc, right_size));
+    REQUIRE(fields.size() == 1);
+}
+
+TEST_CASE("field.set.a_rebake_replaces_the_samples", "[field]") {
+    // A re-bake is the ordinary case rather than the exception: a parameter changed, the field domain recomputed,
+    // and the run that follows must read the new samples. A store that refused the second publish would make
+    // "turn the tilt knob" a no-op after the first bake, which is the kind of failure a user reports as "the
+    // simulation is stuck" with nothing in any log.
+    FieldSet fields;
+    const auto desc = volume_desc();
+    const FieldKey key{4, 1};
+
+    REQUIRE(fields.publish(key, desc, std::vector<double>(36, 1.0)));
+    REQUIRE(get_component(fields.view(key), 0, 0) == 1.0);
+    REQUIRE(fields.size() == 1);
+
+    REQUIRE(fields.publish(key, desc, std::vector<double>(36, 2.0)));
+    REQUIRE(get_component(fields.view(key), 0, 0) == 2.0);
+    REQUIRE(get_component(fields.view(key), 11, 2) == 2.0);
+    // Replaced, not appended: a store that kept both would grow without bound across a knob's worth of edits.
+    REQUIRE(fields.size() == 1);
+
+    // A re-bake may also change the **shape**, which is why the entry's descriptor is replaced and not only its
+    // samples: a user who made the grid finer must get the grid they asked for, and a stale descriptor would
+    // describe the new samples with the old counts.
+    const auto finer = volume_desc(5, 2, 2);
+    REQUIRE(fields.publish(key, finer, std::vector<double>(60, 3.0)));
+    REQUIRE(fields.view(key).desc.count[0] == 5);
+    REQUIRE(fields.view(key).point_count() == 20);
+    REQUIRE(get_component(fields.view(key), 19, 2) == 3.0);
+    REQUIRE(fields.bytes() == 60 * sizeof(double));
+}
+
+TEST_CASE("field.set.keys_are_ordered_and_distinct", "[field]") {
+    // The order is not cosmetic: a report that enumerated a run's baked fields, or a cache that walked them,
+    // would be a different report on every run if the container's iteration order were unspecified. The entries
+    // are kept sorted by key for that reason, and this case is what pins it.
+    FieldSet fields;
+    const auto desc = volume_desc();
+    const std::vector<double> samples(36, 1.0);
+
+    REQUIRE(fields.publish(FieldKey{3, 2}, desc, samples));
+    REQUIRE(fields.publish(FieldKey{1, 1}, desc, samples));
+    REQUIRE(fields.publish(FieldKey{3, 1}, desc, samples));
+    REQUIRE(fields.publish(FieldKey{2, 7}, desc, samples));
+
+    const std::vector<FieldKey> keys = fields.keys();
+    REQUIRE(keys.size() == 4);
+    REQUIRE(keys[0] == (FieldKey{1, 1}));
+    REQUIRE(keys[1] == (FieldKey{2, 7}));
+    REQUIRE(keys[2] == (FieldKey{3, 1}));
+    REQUIRE(keys[3] == (FieldKey{3, 2}));
+    for (std::size_t i = 1; i < keys.size(); ++i) REQUIRE(keys[i - 1] < keys[i]);
+
+    // The comparisons are a total order on distinct keys and an equivalence on equal ones, which is what the
+    // binary search above assumes and what a hand-written `==` alone would not give.
+    REQUIRE(FieldKey{1, 1} == FieldKey{1, 1});
+    REQUIRE(FieldKey{1, 1} != FieldKey{1, 2});
+    REQUIRE(FieldKey{1, 2} != FieldKey{2, 1});
+    REQUIRE_FALSE(FieldKey{1, 1} < FieldKey{1, 1});
+    REQUIRE(FieldKey{1, 1} < FieldKey{1, 2});
+    REQUIRE(FieldKey{1, 9} < FieldKey{2, 1});   // node dominates port, so the order is a sweep over publishers
+
+    // Erase removes one entry and leaves the rest readable, which is the half a `clear`-only store would fail:
+    // a user who deletes one field node must not have the whole run's bake disappear.
+    REQUIRE(fields.erase(FieldKey{3, 1}));
+    REQUIRE_FALSE(fields.contains(FieldKey{3, 1}));
+    REQUIRE(fields.size() == 3);
+    REQUIRE(is_readable(fields.view(FieldKey{3, 2})));
+    REQUIRE(is_readable(fields.view(FieldKey{1, 1})));
+    REQUIRE_FALSE(fields.erase(FieldKey{3, 1}));   // erasing twice is not an error, it is a false
+    REQUIRE_FALSE(fields.erase(FieldKey{99, 1}));
+
+    fields.clear();
+    REQUIRE(fields.size() == 0);
+    REQUIRE(fields.keys().empty());
+    REQUIRE(fields.bytes() == 0);
+    REQUIRE_FALSE(is_readable(fields.view(FieldKey{1, 1})));
+}

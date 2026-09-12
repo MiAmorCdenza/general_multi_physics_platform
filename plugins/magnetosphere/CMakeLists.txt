@@ -22,20 +22,27 @@
 # field-domain bake and the composition root that binds a field node to a particle slot follow; they are separate
 # commits because each has a real consumer to satisfy and folding them together would make a failure ambiguous.
 #
-# **What `boris.cpp` costs in dependencies, and why that is the point.** It links `qp::graph_kernels`,
-# `qp::graph_particles`, `qp::field` and `qp::abi`, because a pusher **is** an `IBatchAdvancer` reading a bound
-# `field::FieldValue` out of the batch the executor builds. The alternative -- a private particle loop with its own
-# field sampling and its own state arrays -- is the parallel implementation this platform exists to not have, and
-# it is exactly what would keep a kit from using the trace, the store or the uncertainty chain.
+# `boris.cpp` costs `qp::graph_kernels`, `qp::graph_particles`, `qp::field` and `qp::abi`, because a pusher **is**
+# an `IBatchAdvancer` reading a bound `field::FieldValue` out of the batch the executor builds. The alternative --
+# a private particle loop with its own field sampling and its own state arrays -- is the parallel implementation
+# this platform exists to not have, and it is exactly what would keep a kit from using the trace, the store or the
+# uncertainty chain.
 #
-# Nothing here includes a Qt header, and nothing here depends on `core/` beyond `units` and the graph.
+# `field_nodes.cpp` and `plan.cpp` add `qp::graph_eval`, `qp::graph_ir`, `qp::graph_structure` and `qp::host`:
+# the first because a field node is an `INodeEvaluator` and the second because the composition root reads the
+# graph. Those are the widest dependencies any plugin in this tree has, and they are the price of being a
+# **domains** kit rather than a model: a node type is a graph citizen, so it needs the graph's vocabulary.
+#
+# Nothing here includes a Qt header, and nothing here depends on `core/` beyond the graph and the host.
 #
 # Dependency rule: plugins may depend on core, core may never depend on plugins.
 
 add_library(qp_plugins_magnetosphere STATIC
     src/baked_field.cpp
     src/boris.cpp
-    src/dipole.cpp)
+    src/dipole.cpp
+    src/field_nodes.cpp
+    src/plan.cpp)
 
 add_library(qp::plugins::magnetosphere ALIAS qp_plugins_magnetosphere)
 
@@ -52,4 +59,5 @@ target_compile_features(qp_plugins_magnetosphere PUBLIC cxx_std_20)
 # signatures, so anyone using this library needs their headers.
 target_link_libraries(qp_plugins_magnetosphere
     PUBLIC qp::units qp::diag qp::abi qp::field qp::graph_kernels qp::graph_particles
+           qp::graph_eval qp::graph_ir qp::graph_structure qp::host
     PRIVATE qp_warnings qp_sanitize)

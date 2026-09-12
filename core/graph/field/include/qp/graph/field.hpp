@@ -2,14 +2,14 @@
  * @file qp/graph/field.hpp
  * @brief The single entry point of the field module.
  *
- * The minimal semantics of "a field": is this one, what shape is it, which
- * components exist. Physical models are plugins.
+ * The minimal semantics of "a field" -- is this one, what shape is it, which components exist -- plus the store
+ * a bake publishes its samples into. Physical models are plugins.
  *
- * @ownership   pure
+ * @ownership   pure (describes the module; the store it pulls in owns sample buffers)
  * @thread      any
  * @pre         none
  * @post        none
- * @invariant   This module owns no state and allocates nothing
+ * @invariant   No physical model is implemented in this module
  * @errors      noexcept
  * @complexity  --
  * @nondet      none
@@ -19,6 +19,7 @@
 #pragma once
 
 #include <qp/graph/field/field.hpp>
+#include <qp/graph/field/field_set.hpp>
 
 namespace qp::graph::field {
 
