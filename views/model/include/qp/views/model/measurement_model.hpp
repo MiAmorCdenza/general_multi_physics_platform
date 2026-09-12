@@ -462,6 +462,36 @@ public:
      */
     [[nodiscard]] qp::runtime::ExportRequest export_request(std::string path) const;
 
+    /**
+     * @brief Empties the session: no readings, no samples, and a trace belonging to `run`.
+     *
+     * Called when the document changes -- a new one, or one opened from a file. The readings were taken
+     * while a **different** experiment was on screen, and this panel does not say which graph a reading came
+     * from, so leaving them would attribute them to the document now being edited. The same reasoning as
+     * `reset_trace`, one record further: a session's two records are emptied together or the panel shows
+     * two experiments at once.
+     *
+     * The dataset's quantity and dimension survive, because they are what this session measures rather than
+     * what it has measured.
+     *
+     * @param run The run the new, empty trace belongs to; a default-constructed id means "no run yet".
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         none
+     * @post        `dataset().readings().empty()` and `trace().empty()`, with `trace().run() == run`
+     * @invariant   The quantity and the dimension are unchanged
+     * @errors      noexcept
+     * @complexity  O(readings)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.clear_session_empties_both_records
+     */
+    void clear_session(qp::runtime::RunId run) noexcept {
+        dataset_.clear();
+        trace_ = qp::runtime::Trace{run};
+    }
+
 private:
     qp::runtime::RunLedger& ledger_;
     qp::runtime::Dataset dataset_;

@@ -118,6 +118,37 @@ TEST_CASE("store.uncertainty.states", "[store]") {
 // Dataset statistics
 // ===========================================================================
 
+TEST_CASE("store.dataset.clear_removes_readings", "[store]") {
+    // The record starts over, and the **identity does not**: the name and the dimension are what the session
+    // is measuring, not what it has measured, so a caller that wants a different quantity constructs a
+    // different dataset rather than re-labelling this one.
+    Dataset d{"length", dim_of(0, 0, 1)};
+    d.add(1.5, 0.01);
+    d.add(1.7, 0.02);
+    d.add(2.0, 0.0);   // a counted value: valid but unquantified
+    REQUIRE(d.size() == 3);
+    REQUIRE(d.mean().has_value());
+
+    d.clear();
+
+    REQUIRE(d.empty());
+    REQUIRE(d.size() == 0);
+    REQUIRE(d.valid_count() == 0);
+    // Every statistic is **absent**, not zero -- the same rule the panel's report follows, one layer down: a
+    // mean of 0.0 for a series nobody measured is a number a report would print without complaint.
+    REQUIRE_FALSE(d.mean().has_value());
+    REQUIRE_FALSE(d.sample_stddev().has_value());
+    REQUIRE_FALSE(d.weighted_mean().has_value());
+    // The identity survives, so the panel still says what it is measuring.
+    REQUIRE(d.name() == "length");
+    REQUIRE(d.dim() == dim_of(0, 0, 1));
+
+    // And it is reusable: readings added afterwards behave as they did before.
+    d.add(3.0, 0.5);
+    REQUIRE(d.size() == 1);
+    REQUIRE(d.mean().has_value());
+    REQUIRE(*d.mean() == 3.0);
+}
 TEST_CASE("store.dataset.statistics", "[store]") {
     SECTION("an empty dataset has no statistics at all") {
         const Dataset d{"empty", dim_of(0, 0, 1)};

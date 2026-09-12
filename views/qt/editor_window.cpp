@@ -260,6 +260,9 @@ void EditorWindow::file_new() {
 void EditorWindow::new_document() {
     report_document(document_controller_.new_document());
     next_node_index_ = 1;
+    // Same reasoning as a load: the readings and the trace were taken while another experiment was on screen.
+    measurements_.clear_session(qp::runtime::RunId{});
+    refresh_panels();
     refresh_status();
 }
 
@@ -298,16 +301,21 @@ bool EditorWindow::open_document(const std::string& path) {
 
     const qp::views::model::DocumentReport report = document_controller_.open(*selected, path);
     report_document(report);
-    refresh_status();
 
     // The readings belong to the experiment that produced them, not to the file that was just opened, so a
     // freshly opened document starts from an empty measurement session rather than showing another
     // experiment's numbers beside its graph. The run identity goes with it: those samples were not this
     // document's, and a trace labelled with somebody else's run is worse than an empty one.
+    //
+    // Readings **and** trace, through one call: emptying one and not the other is how a panel ends up showing
+    // two experiments at once -- which is what the interactive pass caught, the confidence panel still
+    // reporting the previous trace's energy drift after a load.
     if (report.ok) {
-        measurements_.reset_trace(qp::runtime::RunId{});
+        measurements_.clear_session(qp::runtime::RunId{});
         next_node_index_ = static_cast<int>(report.nodes) + 1;
     }
+    refresh_panels();
+    refresh_status();
     return report.ok;
 }
 
@@ -717,9 +725,16 @@ void EditorWindow::run_once() {
     // is an artefact of the mismatch. `omega_was_declared` is what lets the panel say which it is.
     confidence_.set_omega(qp::views::model::RunController::kOmega);
 
+    refresh_panels();
+    refresh_status();
+}
+
+void EditorWindow::refresh_panels() {
+    // The panels re-read the session; neither is told what changed. That is the rule this window exists to
+    // demonstrate, and it is also why this has to be called from every site that changes the session's data:
+    // a panel that is not asked keeps showing the numbers it last computed.
     measurements_panel_->refresh();
     confidence_panel_->refresh();
-    refresh_status();
 }
 
 }  // namespace qp::views

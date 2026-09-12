@@ -331,6 +331,42 @@ TEST_CASE("measurement.model.reset_trace_starts_a_new_recording", "[measurement]
     REQUIRE(m.trace().size() == 1);
 }
 
+TEST_CASE("measurement.model.clear_session_empties_both_records", "[measurement][model]") {
+    // A session has two records -- the readings and the time axis -- and they are emptied **together** when
+    // the document changes. Emptying one and not the other is exactly how a panel ends up showing two
+    // experiments at once; the interactive pass caught the confidence panel still reporting the previous
+    // trace's energy drift after a file was opened, which is the same defect one record over.
+    Session session;
+    MeasurementModel& m = session.model();
+    REQUIRE(m.add_channel("x", qp::units::dims::length).has_value());
+    m.add_reading(1.0, rt::UncertaintyKind::standard, 0.05);
+    m.add_reading(1.1, rt::UncertaintyKind::standard, 0.05);
+    REQUIRE(m.add_sample(0.0, std::vector<double>{1.0}, 0.05).has_value());
+    REQUIRE(m.add_sample(0.01, std::vector<double>{1.1}, 0.05).has_value());
+    REQUIRE(m.report_line().count == 2);
+
+    const rt::RunId next{42};
+    m.clear_session(next);
+
+    REQUIRE(m.dataset().readings().empty());
+    REQUIRE(m.dataset().size() == 0);
+    REQUIRE(m.trace().empty());
+    REQUIRE(m.trace().channel_count() == 0);
+    // The new trace carries the identity it was given rather than the previous run's, so a trace cannot be
+    // filed under a run that did not produce it.
+    REQUIRE(m.trace().run() == next);
+
+    // The report says "no data" rather than showing the previous numbers, and the quantity survives: what
+    // this session measures is not what it has measured.
+    REQUIRE(m.report_line().count == 0);
+    REQUIRE_FALSE(m.report_line().mean.has_value());
+    REQUIRE(m.dataset().name() == "length");
+    REQUIRE(m.dataset().dim() == qp::units::dims::length);
+
+    // Readiness follows the records: nothing to export until something is measured again.
+    const DeclaringExporter keeps{true, false};
+    REQUIRE(m.export_readiness(keeps) == rt::ExportRefusal::nothing_to_write);
+}
 TEST_CASE("measurement.model.export_request_carries_the_policy", "[measurement][model]") {
     // The request is the **question**, and two callers ask it: the panel's readiness check and a real
     // export. If they built their own, one could require the uncertainty and the other need not, and the

@@ -306,9 +306,28 @@ TEST_CASE("qt.views.editor_window.file_menu_follows_the_document", "[views][qt]"
     // through the registered format. Asserted through the window rather than the controller, because the
     // wiring -- which session, which format, and the pre-flight before either -- is what this case covers.
     window.seed_demo_measurement();
+    REQUIRE_FALSE(window.measurements().dataset().readings().empty());
     const std::string csv = (std::filesystem::temp_directory_path() / "qp_caption_test.csv").string();
     REQUIRE(window.export_document(csv));
     REQUIRE(std::filesystem::exists(csv));
+
+    // Opening a document empties the measurement session, both records at once. The interactive pass found
+    // the confidence panel still reporting the **previous** trace's energy drift after a load: the readings
+    // were cleared and the trace was not, and the panel showed two experiments at once. Asserted here on the
+    // session's own state, which is what the panels read.
+    REQUIRE(window.open_document(path));
+    REQUIRE(window.measurements().dataset().readings().empty());
+    REQUIRE(window.measurements().trace().empty());
+    REQUIRE_FALSE(window.measurements().trace().run().valid());
+
+    // A new document does the same, so the panel cannot show one experiment's numbers beside another's graph.
+    window.seed_demo_measurement();
+    REQUIRE_FALSE(window.measurements().dataset().readings().empty());
+    window.new_document();
+    REQUIRE(window.measurements().dataset().readings().empty());
+    REQUIRE(window.measurements().trace().empty());
+    REQUIRE(window.session().graph().node_count() == 0);
+    REQUIRE_FALSE(window.isWindowModified());
 
     std::error_code ignored;
     std::filesystem::remove(path, ignored);

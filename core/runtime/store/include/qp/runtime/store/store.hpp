@@ -350,6 +350,31 @@ public:
     /// @brief The uncertainty of the weighted mean: `1 / sqrt(sum(1/u^2))`.
     [[nodiscard]] std::optional<double> weighted_mean_uncertainty() const noexcept;
 
+    /**
+     * @brief Drops every reading, keeping the dataset's identity.
+     *
+     * For a session that has moved on to a different experiment: those readings were taken of another
+     * system, and a panel showing them beside the new graph would attribute them to it -- the panel does
+     * not say which graph a reading came from, so the only honest answer is that they are not part of this
+     * record any more.
+     *
+     * The name and the dimension **survive**, because they are what the session is measuring rather than
+     * what was measured: a caller that wants a different quantity constructs a different dataset, which is
+     * why the constructor takes both and there is no setter for the dimension.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        `readings().empty()`, every statistic is absent, and `name()`/`dim()` are unchanged
+     * @invariant   The dimension of a dataset never changes
+     * @errors      noexcept
+     * @complexity  O(readings)
+     * @nondet      none
+     * @frozen      no
+     * @tests       store.dataset.clear_removes_readings
+     */
+    void clear() noexcept { items_.clear(); }
+
 private:
     std::string name_{};
     units::Dim dim_{};

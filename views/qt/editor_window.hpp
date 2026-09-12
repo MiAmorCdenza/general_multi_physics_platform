@@ -201,6 +201,14 @@ private:
     void report_document(const qp::views::model::DocumentReport& report);
     /// @brief Sets the caption from the document's title and path, and the modified marker.
     void refresh_caption();
+    /// @brief Tells the two data panels to re-read the measurement session.
+    ///
+    /// One function rather than a pair of calls at every site, and that is a correction rather than tidiness:
+    /// the panels were refreshed inside `run_once` when that was the only thing changing the session's data,
+    /// so opening a document emptied the trace and left the confidence panel showing the **previous**
+    /// experiment's diagnostics. The interactive pass found it. Three call sites is exactly where one gets
+    /// forgotten.
+    void refresh_panels();
     /// @brief Builds the File menu's actions and shortcuts.
     void build_file_menu();
 
