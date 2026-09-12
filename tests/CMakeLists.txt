@@ -302,6 +302,96 @@ qp_add_test(qp_test_graph_kernels
 qp_add_test(qp_test_plugin
     SOURCES unit/plugin/test_plugin.cpp
     LIBS qp::plugin)
+
+# -- Plugin loader fixtures ---------------------------------------------------
+#
+# The only tests in this repository that map real shared libraries into the test
+# process, because the loader's subject is the part that cannot be tested from a
+# value: whether two separately-built binaries agree on the ABI they both think
+# they have.
+#
+# One target per fixture rather than one library with several entry points. A
+# library exports exactly one `qp_plugin_entry`, so several fixtures in one binary
+# would collide -- and each fixture has to be malformed in exactly one way for a
+# failure to be attributable.
+#
+# MODULE, not SHARED: no import library is generated, which is what a plugin is.
+# Nothing links against these; they are only ever opened by name at runtime.
+#
+# They deliberately do **not** link qp::plugin. A fixture that linked the host's
+# library and used its `Manifest` would agree with the host by construction, so the
+# tag, version, and layout checks it exists to exercise could never fire. They
+# include only the hand-written layout in tests/support/plugin_fixture_abi.hpp.
+set(QP_PLUGIN_FIXTURES
+    good
+    second
+    no_entry
+    declines
+    bad_tag
+    bad_version
+    no_manifest
+    no_unregister
+    rejects
+    counting)
+
+set(QP_PLUGIN_FIXTURE_TARGETS "")
+foreach(fixture IN LISTS QP_PLUGIN_FIXTURES)
+    set(target "qp_fixture_plugin_${fixture}")
+    add_library(${target} MODULE fixtures/plugin/${fixture}.cpp)
+    target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    # Position-independent regardless of platform, because on Linux a MODULE library
+    # that is not PIC fails to link -- and the failure names the linker, not the
+    # missing flag.
+    set_target_properties(${target} PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+        POSITION_INDEPENDENT_CODE ON)
+    list(APPEND QP_PLUGIN_FIXTURE_TARGETS ${target})
+endforeach()
+
+# The loader's entries are renamed so the symbol the host looks for is unambiguous:
+# an unreferenced `qp_plugin_declines_entry` would never be looked up by name, and
+# the mapping from "which fixture" to "which entry point" would be invisible.
+#
+# `declines` and `no_entry` are handled by their own source files, which export the
+# real name and a misspelled one respectively -- that pair is the whole distinction
+# between "the plugin refused" and "the build is wrong", so neither can be renamed.
+
+add_executable(qp_test_plugin_loader unit/plugin/test_loader.cpp ${QP_TEST_MAIN})
+target_include_directories(qp_test_plugin_loader PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(qp_test_plugin_loader PRIVATE qp::plugin Catch2::Catch2)
+add_dependencies(qp_test_plugin_loader ${QP_PLUGIN_FIXTURE_TARGETS})
+
+# The fixture paths are handed to the test as **generator expressions naming the real
+# target files**, one per fixture, rather than as a directory the test appends names
+# to.
+#
+# The first version did the latter, and it failed on the first run: MinGW prefixes a
+# MODULE library with `lib` (`libqp_fixture_plugin_good.dll`), MSVC does not, and
+# neither matches the name a reader would predict. Every test that loaded a fixture
+# then reported `file_missing`, which looks like a fixture that was not built. A test
+# that reconstructs a toolchain's output name is testing its own guess.
+#
+# `file(TO_CMAKE_PATH)` is not cosmetic either: on Windows these expand with
+# backslashes, and embedding that in a C++ string literal turns each separator into
+# an escape sequence -- `build\test` contains `\t`. Forward slashes work in every
+# Windows API used here.
+set(QP_PLUGIN_FIXTURE_DEFS "")
+foreach(fixture IN LISTS QP_PLUGIN_FIXTURES)
+    file(TO_CMAKE_PATH "$<TARGET_FILE:qp_fixture_plugin_${fixture}>" _path)
+    list(APPEND QP_PLUGIN_FIXTURE_DEFS
+        "QP_FIXTURE_${fixture}=\"${_path}\"")
+endforeach()
+
+target_compile_definitions(qp_test_plugin_loader PRIVATE ${QP_PLUGIN_FIXTURE_DEFS})
+
+catch_discover_tests(qp_test_plugin_loader
+    TEST_PREFIX "qp_test_plugin_loader."
+    PROPERTIES LABELS "unit;loader"
+    ADD_TAGS_AS_LABELS)
+add_test(NAME "qp_test_plugin_loader.all" COMMAND qp_test_plugin_loader)
+set_tests_properties("qp_test_plugin_loader.all" PROPERTIES LABELS "unit;loader;aggregate")
+
 qp_add_test(qp_test_capability
     SOURCES unit/authoring/test_capability.cpp
     LIBS qp::authoring_capability)

@@ -37,7 +37,8 @@ function Invoke-Toolchain {
         [string]$BuildDir,
         [string]$Generator,
         [string]$Compiler,
-        [scriptblock]$EnvSetup
+        [scriptblock]$EnvSetup,
+        [string[]]$ExtraArgs = @()
     )
 
     Write-Step "$Name  ($BuildDir)"
@@ -79,6 +80,7 @@ function Invoke-Toolchain {
 
     $cfgArgs = @("-S", ".", "-B", $BuildDir, "-G", $Generator, "-DCMAKE_BUILD_TYPE=$BuildType")
     if ($Compiler) { $cfgArgs += "-DCMAKE_CXX_COMPILER=$Compiler" }
+    if ($ExtraArgs.Count -gt 0) { $cfgArgs += $ExtraArgs }
 
     & cmake @cfgArgs *> $cfgLog
     if ($LASTEXITCODE -ne 0) {
@@ -123,8 +125,43 @@ if ($Only -in @("all", "msvc")) {
     if (-not $vcvars) {
         Write-Bad "找不到 vcvars64.bat：MSVC 未安装？"
     } else {
+        # -- Build the Qt half too, whenever a Qt kit exists ---------------------
+        #
+        # QP_BUILD_VIEWS defaults to OFF, and this script never passed it. So
+        # "both compilers green" meant core/ only: views/qt/ (the canvas, the
+        # property panel, the editor window) was compiled by no gate, no matrix
+        # entry and no test run -- it could stop compiling and every signal in this
+        # repository would stay green. That is the worst kind of gap, because the
+        # GUI is the part a user actually touches, and it was verified only by
+        # someone remembering to configure by hand.
+        #
+        # views/model/ is deliberately *not* behind the flag and is already covered
+        # by both compilers; this is about the Qt-dependent half.
+        #
+        # Detection mirrors the CMake side (QP_QT_ROOT, then C:/Qt). If no kit is
+        # found, the build proceeds without views and says so, rather than failing:
+        # core/ is contractually buildable with no Qt present, and a missing Qt
+        # must not turn into a red build for someone working on core/.
+        $qtFound = @()
+        foreach ($root in @((Join-Path $repoRoot "external\Qt"), "C:\Qt")) {
+            if (Test-Path $root) {
+                $qtFound += Get-ChildItem $root -Directory -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -match '^\d+\.\d+' } |
+                    ForEach-Object { Get-ChildItem $_.FullName -Directory -ErrorAction SilentlyContinue } |
+                    Where-Object { $_.Name -like "msvc*_64" }
+            }
+        }
+
+        $msvcArgs = @()
+        if ($qtFound.Count -gt 0) {
+            $msvcArgs += "-DQP_BUILD_VIEWS=ON"
+            Write-Host "  Qt kit: $($qtFound[0].FullName) -- 同时构建并测试 Qt 视图层" -ForegroundColor DarkGray
+        } else {
+            Write-Host "  未找到 Qt 套件；跳过视图层（core/ 不依赖 Qt）" -ForegroundColor DarkGray
+        }
+
         Invoke-Toolchain -Name "MSVC (cl)" -BuildDir "build-msvc" -Generator "Ninja" `
-            -Compiler "cl" -EnvSetup {
+            -Compiler "cl" -ExtraArgs $msvcArgs -EnvSetup {
                 # vcvars only takes effect inside cmd, so wrap it in cmd /c before continuing
                 cmd /c "`"$($vcvars.FullName)`" >nul 2>&1 && set" | ForEach-Object {
                     if ($_ -match '^([^=]+)=(.*)$') {
