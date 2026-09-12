@@ -19,6 +19,7 @@
 #include <qp/views/model/export_controller.hpp>
 
 #include "confidence_panel.hpp"
+#include "fit_panel.hpp"
 #include "measurement_panel.hpp"
 #include "property_panel.hpp"
 
@@ -186,6 +187,20 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
     // trusted. Putting them in different corners is how a user reads one and not the other.
     addDockWidget(Qt::RightDockWidgetArea, confidence_dock);
     splitDockWidget(dock, confidence_dock, Qt::Vertical);
+
+    fit_panel_ = new FitPanel(fit_, this);
+    // The same maximum, for the same reason: the fit is a three-column table and a summary line, and neither
+    // gets more useful when it is wider. The width comes straight out of the canvas.
+    fit_panel_->setMaximumWidth(kDockWidth);
+    auto* fit_dock = new QDockWidget(tr("Fit"), this);
+    fit_dock->setWidget(fit_panel_);
+    fit_dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
+    // Tabbed behind the confidence dock rather than stacked a third time: three panels in one column leaves the
+    // canvas too narrow to frame a graph at the size its fonts need (see the note above), and the fit is read
+    // after a run rather than during one. Tabs keep it one click away and give the canvas its width back.
+    addDockWidget(Qt::RightDockWidgetArea, fit_dock);
+    tabifyDockWidget(confidence_dock, fit_dock);
+    confidence_dock->raise();
 
     // An explicit width, applied after the first layout pass. A table of readings has no opinion
     // about how wide it should be, and letting `sizeHint` decide is how the dock took 420 of the
@@ -820,6 +835,12 @@ void EditorWindow::seed_demo_measurement() {
     confidence_.set_omega(kOmega);
     clamps_noted_ = true;
     confidence_panel_->refresh();
+
+    // The fit panel reads a **trace** whose channels do not exist until this function declared them, so the
+    // channel list is rebuilt here rather than only in `refresh_panels`. Without this the seed left the fit tab
+    // offering no channel at all -- which reads as "this run has nothing to fit" about a run with two channels
+    // and two hundred samples in it.
+    fit_panel_->show_channels();
 }
 
 
@@ -975,6 +996,13 @@ void EditorWindow::refresh_panels() {
     // a panel that is not asked keeps showing the numbers it last computed.
     measurements_panel_->refresh();
     confidence_panel_->refresh();
+    // The channel list is rebuilt first, because a run is what declares channels: a fit panel that only
+    // re-rendered its table would keep offering the channels of the previous run, and after the first run it
+    // would offer none at all.
+    if (fit_panel_ != nullptr) {
+        fit_panel_->show_channels();
+        fit_panel_->refresh();
+    }
 }
 
 }  // namespace qp::views

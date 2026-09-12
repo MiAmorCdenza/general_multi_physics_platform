@@ -738,6 +738,7 @@ if(TARGET qp::views_model AND TARGET qp::plugins::mechanics)
         SOURCES model/test_views_model.cpp
                 model/test_measurement_model.cpp
                 model/test_confidence_model.cpp
+                model/test_fit_session.cpp
         LIBS qp::views_model qp::runtime_io qp::runtime_store qp::runtime_trace qp::runtime_run qp::plugins::mechanics)
 
     # The window's Run action, in this partition rather than the plugin one, because its
@@ -811,6 +812,15 @@ if(QP_BUILD_VIEWS)
     # that saves and reopens a document needs the real one, because a stub would only prove that the window
     # can call a stub. Guarded on the target rather than on a variable, like the model test: with plugins off
     # there is nothing to link and the case is not compiled, which is the honest outcome.
+    # The fit: the panel calls `plugins/analysis` behind this definition, so the case that asserts a coefficient
+    # comes with its uncertainty needs the real fitter rather than a stub. The definition itself arrives from
+    # `qp::views`, which is what makes the library and the test agree about whether a fitter exists -- defining it
+    # here as well would give the two files an opinion each, and the test's opinion is the one that can be wrong
+    # without anything failing.
+    if(TARGET qp::plugins::analysis)
+        target_link_libraries(qp_test_views_qt PRIVATE qp::plugins::analysis)
+    endif()
+
     if(TARGET qp::plugins::qpjson)
         target_link_libraries(qp_test_views_qt PRIVATE qp::plugins::qpjson qp::plugins::csv)
         target_compile_definitions(qp_test_views_qt PRIVATE QP_HAS_QPJSON_FORMAT)

@@ -71,6 +71,7 @@
 #include <QStringList>
 
 #include "confidence_panel.hpp"
+#include "fit_panel.hpp"
 #include "measurement_panel.hpp"
 #include "node_graph_view.hpp"
 #include "property_panel.hpp"
@@ -1015,6 +1016,155 @@ TEST_CASE("qt.views.confidence.unmeasurable_is_not_zero", "[views][qt]") {
 
     // And the model explains which channel is missing rather than only that something is.
     REQUIRE_FALSE(panel.note_lines().isEmpty());
+}
+
+TEST_CASE("qt.views.fit.shows_the_models_report", "[views][qt]") {
+    // The panel renders `FitSession`'s report. Every number on screen has to come from the model, because the
+    // model is asserted on both compilers and this file is not: a panel that recomputed a count, or that decided
+    // for itself what "not enough points" means, would move the tested arithmetic into the untested half.
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
+    window.seed_demo();
+
+    qp::views::FitPanel* panel = window.fit_panel();
+    REQUIRE(panel != nullptr);
+
+    // The demo's two channels are what the panel offers, in the trace's own order.
+    panel->show_channels();
+    const std::vector<std::string> offered = panel->offered_channels();
+    REQUIRE(offered.size() == 2);
+    REQUIRE(offered[0] == "displacement");
+    REQUIRE(offered[1] == "velocity");
+    REQUIRE(panel->chosen_channel() == "displacement");
+    REQUIRE(window.fit().trace().channel_count() == 2);
+    panel->choose_channel("velocity");
+    REQUIRE(panel->chosen_channel() == "velocity");
+    // The session is what the panel writes to, not a copy of it: this is the same object the window exposes.
+    REQUIRE(window.fit().request().channel == "velocity");
+    panel->choose_channel("displacement");
+    REQUIRE(window.fit().request().channel == "displacement");
+
+    // The summary is built from the report: the point count is the model's, and it is the demo trace's own size.
+    REQUIRE_FALSE(panel->summary_text().isEmpty());
+    REQUIRE(panel->summary_text().contains(QStringLiteral("points")));
+    REQUIRE(panel->summary_text().contains(
+        QString::number(window.fit().report().points.size())));
+
+    // The degree control is carried into the request, and the session's own clamp is what limits it -- the panel
+    // does not decide the maximum.
+    panel->choose_degree(2);
+    REQUIRE(panel->chosen_degree() == 2);
+    REQUIRE(window.fit().request().degree == 2);
+    panel->choose_degree(1);
+    REQUIRE(window.fit().report().request.degree == 1);
+
+    // A channel the trace does not have leaves the selection alone rather than emptying it, which is the safe
+    // answer for a trace that changed under the panel.
+    panel->choose_channel("nonesuch");
+    REQUIRE(panel->chosen_channel() == "displacement");
+}
+
+TEST_CASE("qt.views.fit.a_refusal_is_shown_by_name", "[views][qt]") {
+    // The negative fixture, and the one that pins the platform's central rule at the rendering layer.
+    //
+    // A trace whose samples carry no stated uncertainty cannot be fitted, and the panel must say **which**
+    // readings were left out and why rather than showing an empty table. An empty table reads as "the fit
+    // failed"; the exclusion line reads as "go and quantify your readings", and only the second is actionable.
+    //
+    // The reading kind here is the one `MeasurementModel::add_sample`'s default produces, and that is worth
+    // stating rather than hiding: a caller who does not say how well a reading is known gets `exact`, because
+    // that is what `UncertainValue` is constructed with when nothing else is claimed. `exact` is a true statement
+    // about a counted quantity and a false one about a sampled signal -- and either way it carries no weight, so
+    // it is excluded by name rather than given a sigma.
+    qp::runtime::RunLedger ledger;
+    qp::views::model::MeasurementModel measurements{ledger, "length", qp::units::dims::length};
+    REQUIRE(measurements.add_channel("displacement", qp::units::dims::length).has_value());
+    for (int i = 0; i < 5; ++i) {
+        REQUIRE(measurements.add_sample(0.1 * i, std::vector<double>{0.01 * i}).has_value());
+    }
+
+    qp::views::model::FitSession session{measurements.trace()};
+    qp::views::FitPanel panel{session};
+    panel.show_channels();
+
+    // Five samples, none of them carrying a usable uncertainty: no fit, and the report says so.
+    const qp::views::model::FitReport report = session.report();
+    REQUIRE_FALSE(report.fittable());
+    REQUIRE(report.excluded_count(qp::views::model::FitExclusion::uncertainty_zero) == 5);
+    REQUIRE(report.points.empty());
+
+    // And the widget says it with the model's own words, not with its own.
+    const QString summary = panel.summary_text();
+    REQUIRE_FALSE(summary.isEmpty());
+    REQUIRE(summary.contains(QString::fromLatin1(qp::views::model::to_string(*report.refusal))));
+
+    const QStringList exclusions = panel.exclusion_lines();
+    REQUIRE(exclusions.size() == 1);
+    REQUIRE(exclusions.first().contains(QStringLiteral("5")));
+    REQUIRE(exclusions.first().contains(
+        QString::fromLatin1(qp::views::model::to_string(qp::views::model::FitExclusion::uncertainty_zero))));
+    // No coefficient rows at all: an empty table is right here, and it is the **exclusion line** that carries the
+    // reason. A panel that invented a row of zeros would be the failure this whole platform is about.
+    REQUIRE(panel.coefficient_rows().empty());
+
+    // Declaring an uncertainty for the same samples makes the same panel fit them, which is the half that shows
+    // the refusal came from the readings rather than from the trace having nothing in it.
+    qp::runtime::RunLedger quantified_ledger;
+    qp::views::model::MeasurementModel quantified{quantified_ledger, "length", qp::units::dims::length};
+    REQUIRE(quantified.add_channel("displacement", qp::units::dims::length).has_value());
+    for (int i = 0; i < 5; ++i) {
+        REQUIRE(quantified.add_sample(0.1 * i, std::vector<double>{0.01 * i}, 0.001).has_value());
+    }
+    qp::views::model::FitSession quantified_session{quantified.trace()};
+    qp::views::FitPanel quantified_panel{quantified_session};
+    quantified_panel.show_channels();
+    const qp::views::model::FitReport quantified_report = quantified_session.report();
+    REQUIRE(quantified_report.fittable());
+    REQUIRE(quantified_report.points.size() == 5);
+    REQUIRE(quantified_report.degrees_of_freedom() == 3);
+    REQUIRE(quantified_panel.exclusion_lines().isEmpty());
+}
+
+TEST_CASE("qt.views.fit.coefficients_come_with_their_uncertainties", "[views][qt]") {
+    // The positive half, and the property a lab report is graded on. The demo's trace **is** quantified -- the
+    // window's seed records every sample with an uncertainty -- so the fit runs, and what this case pins is that
+    // no coefficient is ever shown without its error bar.
+    //
+    // A gradient printed alone is the single commonest way a report overstates its own precision, and it is
+    // invisible in a diff: the number is right, the column beside it is missing.
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
+    window.seed_demo();
+
+    qp::views::FitPanel* panel = window.fit_panel();
+    REQUIRE(panel != nullptr);
+    panel->show_channels();
+    panel->choose_degree(2);
+
+    const qp::views::model::FitReport report = window.fit().report();
+#if defined(QP_HAS_ANALYSIS_PLUGIN)
+    REQUIRE(report.fittable());
+    REQUIRE(report.points.size() == 200);
+    // A quadratic has three terms, and every one of them is shown with an uncertainty beside it.
+    const std::vector<std::vector<QString>> rows = panel->coefficient_rows();
+    REQUIRE(rows.size() == 3);
+    for (const std::vector<QString>& row : rows) {
+        REQUIRE(row.size() == 3);
+        REQUIRE_FALSE(row[0].isEmpty());
+        REQUIRE_FALSE(row[1].isEmpty());
+        REQUIRE_FALSE(row[2].isEmpty());
+        REQUIRE(row[1] != qp::views::FitPanel::unavailable_text());
+        REQUIRE(row[2] != qp::views::FitPanel::unavailable_text());
+    }
+    // The degrees of freedom and the point count are the model's, not the panel's: 200 samples less three
+    // parameters.
+    REQUIRE(panel->summary_text().contains(QStringLiteral("197")));
+#else
+    // A build with no fitter says so, which is a different statement from "the fit failed" -- and the difference
+    // matters to a student who would otherwise go looking for the problem in their own data.
+    REQUIRE(panel->summary_text().contains(QStringLiteral("no fit plugin")));
+    REQUIRE(panel->coefficient_rows().empty());
+#endif
 }
 
 TEST_CASE("qt.views.editor_window.a_destroyed_window_reports_nothing", "[views][qt]") {

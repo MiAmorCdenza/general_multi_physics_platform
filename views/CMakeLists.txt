@@ -69,6 +69,8 @@ add_library(qp_views STATIC
     qt/measurement_panel.hpp
     qt/confidence_panel.cpp
     qt/confidence_panel.hpp
+    qt/fit_panel.cpp
+    qt/fit_panel.hpp
     qt/editor_window.cpp
     qt/editor_window.hpp
     qt/theme.cpp
@@ -110,6 +112,24 @@ target_link_libraries(qp_views
            qp::runtime_run qp::runtime_store
            qp::graph_kernels qp::field
     PRIVATE qp_warnings qp_sanitize)
+
+# The fit, and the one place a **view** links a plugin.
+#
+# `views/model/fit_session` decides which readings may enter a fit and is built unconditionally; the fit itself is
+# `plugins/analysis`, so the call sits in `views/qt/fit_panel.cpp` behind this definition. The alternative --
+# linking the Qt-free half of the view layer against a plugin -- would make a plugins-off build fail to configure,
+# and `check_core_standalone.py` exists to keep that configuration real.
+#
+# Guarded on the target rather than on the option, like every other plugin link in this project: the two can
+# disagree, and the target set is what the linker will actually see.
+if(TARGET qp::plugins::analysis)
+    target_link_libraries(qp_views PRIVATE qp::plugins::analysis)
+    # PUBLIC, not PRIVATE, and the difference is not cosmetic: the definition decides whether the **test** that
+    # asserts a coefficient arrives with its uncertainty compiles that assertion at all. A PRIVATE definition left
+    # the test in the branch for a build with no fitter, and that branch passes -- so the case reported success
+    # while asserting nothing about a fit. A green test that cannot fail is worse than a missing one.
+    target_compile_definitions(qp_views PUBLIC QP_HAS_ANALYSIS_PLUGIN)
+endif()
 
 # The shell: the editor wired to the demonstrator library. Still not the finished
 # application, but it now exercises the canvas and the property panel rather than

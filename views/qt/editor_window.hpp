@@ -48,6 +48,7 @@
 #include <qp/runtime/run/run.hpp>
 #include <qp/views/model/confidence_model.hpp>
 #include <qp/views/model/document_controller.hpp>
+#include <qp/views/model/fit_session.hpp>
 #include <qp/views/model/run_controller.hpp>
 #include <qp/views/model/measurement_model.hpp>
 
@@ -59,6 +60,7 @@ class QLabel;
 namespace qp::views {
 
 class ConfidencePanel;
+class FitPanel;
 class MeasurementPanel;
 class NodeGraphView;
 class PropertyPanel;
@@ -131,6 +133,15 @@ public:
     /// Exposed so a test can assert the panel shows **this** model's values rather than its own
     /// arithmetic, which is the property most likely to rot in a thin rendering layer.
     [[nodiscard]] qp::views::model::ConfidenceModel& confidence() noexcept { return confidence_; }
+
+    /// @brief The fit session over the same trace.
+    ///
+    /// Exposed so a test can drive the panel's path without reaching through its widgets, which is the same
+    /// argument `measurements()` and `confidence()` give: the window's job is to hold **one** of each thing.
+    [[nodiscard]] qp::views::model::FitSession& fit() noexcept { return fit_; }
+
+    /// @brief The fit panel, so a test can assert what is displayed.
+    [[nodiscard]] FitPanel* fit_panel() noexcept { return fit_panel_; }
 
     /// @brief The session's run ledger.
     ///
@@ -304,6 +315,12 @@ private:
     // once with two run ledgers.
     qp::views::model::ConfidenceModel confidence_{measurements_.trace()};
     ConfidencePanel* confidence_panel_ = nullptr;
+
+    // One fit session per window, over the same trace, for the same borrowing reason. The **fit** is not
+    // performed here or in `views/model`: it is a plugin, and this layer is built where no plugin exists. The
+    // session decides what may be fitted; `views::FitPanel` calls the fitter behind a compile-time check.
+    qp::views::model::FitSession fit_{measurements_.trace()};
+    FitPanel* fit_panel_ = nullptr;
 
     // The run action. The binders are **not** owned here: `views` must not depend on `plugins`, so the
     // application mounts them through `views::model::mount_execution_binder` and the window consults

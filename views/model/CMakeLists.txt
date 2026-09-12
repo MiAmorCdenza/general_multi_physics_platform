@@ -24,6 +24,7 @@ add_library(qp_views_model STATIC
     editor_choice.cpp
     measurement_model.cpp
     confidence_model.cpp
+    fit_session.cpp
     run_controller.cpp
     execution_binders.cpp
     document_controller.cpp
