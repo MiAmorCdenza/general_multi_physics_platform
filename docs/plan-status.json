@@ -13,7 +13,7 @@
     "contract_completeness": {
       "tool": "scripts/check_contracts.py",
       "state": "passing",
-      "detail": "271 个契约 / 433 个用例 / 0 违规 / 0 孤儿（core/）。扫描加了 `--exclude`，把 views 的用例交给另一次调用管辖——用例归属是**全局**判据（既查每个 @tests id 存在，也查每个 TEST_CASE 被认领），所以两次调用必须看到互不相交的用例集合，否则一方的合规用例在另一方看来全是孤儿。views/model 的契约门禁尚未接入：还缺一个只含模型测试的测试根，已记在测试文件里的说明中。"
+      "detail": "两次调用，用例集合互不相交。`gate.contracts` 扫 core/（271 契约），`gate.contracts.views` 扫 views/model（10 契约）。两次调用都必须看到**不相交**的用例集合——门禁的判据是全局的（既查每个 @tests id 存在，也查每个 TEST_CASE 被认领），所以任何一个目录落进两次调用里，就会在另一方看来全是孤儿。为此外层加了 `--exclude`（支持目录名与路径片段），并且它必须同时作用于**孤儿统计**和**测试文件里的模块级契约块扫描**——只作用于前者时，被交出去的子树仍会用自己的模块契约去认领另一方才能看到的用例。这个不一致是真实踩到的：views 门禁当时报 fp.* 不存在。模型测试也因此从 tests/unit/views/ 挪到 tests/model/。"
     },
     "gate_self_test": {
       "tool": "tests/meta/check_contract_checker.py",

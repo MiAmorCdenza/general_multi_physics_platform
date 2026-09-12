@@ -438,8 +438,19 @@ def main(argv: list[str] | None = None) -> int:
 
     # A test file may also carry a module-level contract block (declaring the contract surface it
     # covers). Its cases are not re-reported as orphans, because filing cases is exactly its purpose.
+    #
+    # The exclusion list applies here too. Without it, `--exclude` would remove a
+    # subtree from the orphan count while still reading that subtree's module
+    # contracts -- so a file the caller deliberately handed to another invocation
+    # would keep claiming cases this one cannot see, and report them as
+    # unsatisfied references. That mismatch is how the second gate ended up
+    # complaining about `fp.*`, whose cases belong to the first gate's test root.
     if args.scan_tests:
+        skip = set(args.exclude)
         for path in sorted(tests_root.rglob("*.cpp")):
+            rel = path.relative_to(tests_root).as_posix()
+            if any(term in path.parts or term in rel for term in skip):
+                continue
             contracts, _ = parse_header(path)
             all_contracts.extend(c for c in contracts if c.signature == "<module>")
 

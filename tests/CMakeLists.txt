@@ -41,22 +41,40 @@ if(Python3_Interpreter_FOUND)
                 ${CMAKE_SOURCE_DIR}/scripts/check_contracts.py
                 --headers ${CMAKE_SOURCE_DIR}/core
                 --tests   ${CMAKE_SOURCE_DIR}/tests
-                --exclude views
+                --exclude unit/views
+                --exclude model
                 --quiet)
     set_tests_properties(gate.contracts PROPERTIES
         LABELS "gate"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
-    # The Qt-free half of the view layer has contract blocks of its own, and they
-    # are NOT covered by the gate above: that scan's header root is core/.
-    #
-    # Wiring them in needs one more thing first -- a test root containing only the
-    # model tests -- because the gate judges orphan-freedom globally, so any other
-    # directory in scope makes every core test case look unclaimed. The model tests
-    # currently share tests/unit/views/ with the Qt-side file, which the gate cannot
-    # see at all (Qt does not compile there). Recorded as follow-up rather than
-    # approximated with a scope that would report hundreds of false orphans.
-    message(STATUS "gate.contracts covers core/; views/model contracts are not yet gated")
+    # The complement of the gate above. This invocation owns exactly the test cases
+    # under tests/model/, so every other directory is excluded -- including the
+    # Qt-side file, whose ids live in headers this gate cannot see because they need
+    # Qt to compile.
+    add_test(NAME gate.contracts.views
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/scripts/check_contracts.py
+                --headers ${CMAKE_SOURCE_DIR}/views/model
+                --tests   ${CMAKE_SOURCE_DIR}/tests
+                --exclude unit/views
+                --exclude unit/graph
+                --exclude unit/diag
+                --exclude unit/ports
+                --exclude unit/runtime
+                --exclude unit/plugin
+                --exclude unit/authoring
+                --exclude unit/units
+                --exclude golden
+                --exclude glue
+                --exclude abi
+                --exclude meta
+                --exclude smoke
+                --exclude support
+                --quiet)
+    set_tests_properties(gate.contracts.views PROPERTIES
+        LABELS "gate"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 
 else()
     message(WARNING "未找到 Python3，跳过 gate.contracts（契约门禁未启用）")
@@ -303,8 +321,13 @@ qp_add_test(qp_test_runtime_store
 # precisely because it does not need Qt: that is what lets the properties panel's
 # editor-selection rule be asserted on both compilers, including GCC, which cannot
 # link Qt at all.
+# tests/model/, not tests/unit/views/: the contract gate needs a test root holding
+# exactly these cases. It judges orphan-freedom globally, so two invocations must
+# see disjoint sets of test cases or each reports the other's legitimate cases as
+# orphans -- and the Qt-side file in tests/unit/views/ is one the gate cannot see at
+# all, because it needs a toolkit to compile.
 qp_add_test(qp_test_views_model
-    SOURCES unit/views/test_views_model.cpp
+    SOURCES model/test_views_model.cpp
     LIBS qp::views_model)
 
 # The Qt half of the view layer is tested only when Qt is in the build. Guarded
