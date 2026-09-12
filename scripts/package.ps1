@@ -299,12 +299,12 @@ MSVCP140.dll / VCRUNTIME140.dll / VCRUNTIME140_1.dll 放入包中。
     # The run instructions are part of the package, not a message in a chat window:
     # whoever receives the folder will not have this conversation. `docs/` is not
     # copied wholesale -- most of it is design material for developers.
-    $runbook = Join-Path $repoRoot "packaging/运行说明.md"
+    $runbook = Join-Path $repoRoot "packaging/RUNNING.md"
     if (Test-Path $runbook) {
         Copy-Item $runbook $OutDir
         Ok "运行说明已复制"
     } else {
-        Write-Host "  [warn] 缺少 packaging/运行说明.md，包内将没有运行说明" -ForegroundColor Yellow
+        Write-Host "  [warn] 缺少 packaging/RUNNING.md，包内将没有运行说明" -ForegroundColor Yellow
     }
 
     foreach ($name in @("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md")) {
@@ -366,7 +366,51 @@ $($lgplSources -join "`n")
         Ok "程序在去掉 Qt 目录的 PATH 下启动并保持运行"
     }
 
-    # -- 6. Summary ---------------------------------------------------------
+    # -- 6. Zip -------------------------------------------------------------------
+    #
+    # The archive is produced here rather than by hand, because by hand is how it went stale: after
+    # the Debug/Release repair the folder held a working package while dist/qp-0.1.0-win64.zip still
+    # held the broken Debug one from two hours earlier. One artefact that is sometimes right is worse
+    # than two artefacts, because the one someone picks is the one they find first.
+    #
+    # Written with ZipFile::CreateFromDirectory and an explicit UTF-8 entry-name encoding: entries
+    # include a Chinese-named runbook, and the default encoding on a Chinese Windows is the ANSI code
+    # page, which mangles that name for anyone extracting with a tool that assumes UTF-8.
+    Step "打包 zip"
+    #
+    # `ZipFile::CreateFromDirectory` with an explicit UTF-8 entry-name encoding, and **no non-ASCII
+    # entry names to encode**.
+    #
+    # Two corrections are folded into that sentence. The archive used to be produced by hand, which is
+    # how it went stale: after the Debug/Release repair the folder held a working package while
+    # dist/qp-0.1.0-win64.zip still held the broken Debug one from two hours earlier -- and one
+    # artefact that is sometimes right is worse than two, because the one someone picks is the one
+    # they find first.
+    #
+    # The runbook was then renamed from a Chinese filename to an ASCII one. The reason is a real
+    # limitation rather than tidiness: the ZIP format marks UTF-8 entry names with bit 11 of each
+    # entry's general-purpose field, and .NET Framework exposes no API to set it -- it writes the right
+    # bytes and leaves the flag clear, so a reader that follows the specification shows the name as
+    # mojibake. An attempt to set the bit by reflection over the entry's private field threw
+    # `InvalidCastException` on this runtime and produced a one-entry archive, which is worse than the
+    # problem. Rather than write the archive by hand or depend on a framework internal, the file is
+    # named RUNNING.md and every extraction tool gets it right.
+    #
+    # The runbook's **contents** remain Chinese, which is the point of it: it is read by whoever
+    # receives the package, and the project's rule that source files are ASCII does not extend to
+    # documentation.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zipPath = "$OutDir.zip"
+    $zipFull = Join-Path (Get-Location).Path ($zipPath -replace '/', '\')
+    if (Test-Path $zipFull) { Remove-Item $zipFull -Force }
+    [System.IO.Compression.ZipFile]::CreateFromDirectory(
+        (Resolve-Path $OutDir).Path,
+        $zipFull,
+        [System.IO.Compression.CompressionLevel]::Optimal,
+        $false,
+        [System.Text.UTF8Encoding]::new($false))
+    Write-Host "  [ok]   $zipPath（约 $([int]((Get-Item $zipFull).Length / 1MB)) MB）" -ForegroundColor Green
+    # -- 7. Summary ---------------------------------------------------------
     Step "完成"
     $size = [int](((Get-ChildItem $OutDir -Recurse -File | Measure-Object Length -Sum).Sum) / 1MB)
     Write-Host "  目录：$OutDir"
