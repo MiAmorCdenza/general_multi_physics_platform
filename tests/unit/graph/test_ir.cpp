@@ -19,6 +19,128 @@ using qp::ports::Value;
 // ids.hpp
 // ===========================================================================
 
+// ===========================================================================
+// The node-type registry: where a plugin's node types go
+// ===========================================================================
+
+TEST_CASE("graph.catalog.register_and_find", "[graph][ir][catalog]") {
+    // The registry a content plugin fills. Until it existed, the only catalog in the repository was
+    // `views::TypeCatalog` -- a container in the *consumer* layer -- so a node type (a plugin's main
+    // contribution) had nowhere in the foundation to be registered.
+    NodeTypeRegistry catalog;
+    REQUIRE(catalog.size() == 0);
+    REQUIRE(catalog.find("demo.thing") == nullptr);
+    REQUIRE(catalog.find("") == nullptr);
+
+    NodeDesc desc;
+    desc.type_name = "demo.thing";
+    desc.label = "Thing";
+    desc.category = "mechanics";
+    PortDesc in;
+    in.number = 1;
+    in.name = "in";
+    PortDesc out;
+    out.number = 1;
+    out.name = "out";
+    desc.inputs.push_back(in);
+    desc.outputs.push_back(out);
+
+    REQUIRE(catalog.register_type(desc).has_value());
+    REQUIRE(catalog.size() == 1);
+    const NodeDesc* found = catalog.find("demo.thing");
+    REQUIRE(found != nullptr);
+    REQUIRE(found->label == "Thing");
+    REQUIRE(found->inputs.size() == 1);
+    // A registry *is* an `INodeCatalog`, so evaluation and validation can be handed it without knowing which
+    // implementation it is -- which is what makes swapping the consumer-layer catalog for this one a change in
+    // one place.
+    const INodeCatalog& as_interface = catalog;
+    REQUIRE(as_interface.find("demo.thing") != nullptr);
+    REQUIRE(as_interface.size() == 1);
+
+    // A second type keeps the first, and registration order is the order a palette shows.
+    desc.type_name = "demo.other";
+    desc.category = "signal";
+    REQUIRE(catalog.register_type(desc).has_value());
+    REQUIRE(catalog.size() == 2);
+    REQUIRE(catalog.all().front().type_name == "demo.thing");
+    REQUIRE(catalog.in_category("signal").size() == 1);
+    REQUIRE(catalog.in_category("nothing").empty());
+
+    // Removal is by name and leaves the rest in order.
+    REQUIRE(catalog.remove_type("demo.thing").has_value());
+    REQUIRE(catalog.size() == 1);
+    REQUIRE(catalog.find("demo.thing") == nullptr);
+    REQUIRE(catalog.all().front().type_name == "demo.other");
+    REQUIRE_FALSE(catalog.remove_type("demo.thing").has_value());
+}
+
+TEST_CASE("graph.catalog.refuses_unusable_descriptions", "[graph][ir][catalog]") {
+    // Refusing at registration is the whole job: a plugin's mistake caught here is reportable as "type Y of
+    // plugin X is malformed", while the same mistake accepted becomes a node that cannot be wired, or a lookup
+    // that returns one of two descriptors.
+    NodeTypeRegistry catalog;
+
+    // No name: nothing could ever address it.
+    NodeDesc unnamed;
+    REQUIRE_FALSE(catalog.register_type(unnamed).has_value());
+    REQUIRE(catalog.size() == 0);
+
+    NodeDesc zero_port;
+    zero_port.type_name = "demo.zero";
+    PortDesc p;
+    p.number = 0;   // the "no port" sentinel: addressable by no edge and no parameter
+    zero_port.inputs.push_back(p);
+    REQUIRE_FALSE(catalog.register_type(zero_port).has_value());
+    REQUIRE(catalog.size() == 0);
+
+    NodeDesc repeated;
+    repeated.type_name = "demo.repeat";
+    PortDesc a;
+    a.number = 2;
+    PortDesc b;
+    b.number = 2;   // `find_port` would return one of the two, silently
+    repeated.outputs.push_back(a);
+    repeated.outputs.push_back(b);
+    REQUIRE_FALSE(catalog.register_type(repeated).has_value());
+    REQUIRE(catalog.size() == 0);
+}
+
+TEST_CASE("graph.catalog.duplicate_name_is_refused", "[graph][ir][catalog]") {
+    // A graph stores the type *name*, so two descriptors under one name would make which one describes a node
+    // depend on registration order -- and the answer would differ between the run that saved a document and the
+    // run that opened it.
+    NodeTypeRegistry catalog;
+    NodeDesc first;
+    first.type_name = "demo.same";
+    first.label = "First";
+    REQUIRE(catalog.register_type(first).has_value());
+
+    NodeDesc second;
+    second.type_name = "demo.same";
+    second.label = "Second";
+    REQUIRE_FALSE(catalog.register_type(second).has_value());
+    REQUIRE(catalog.size() == 1);
+    REQUIRE(catalog.find("demo.same")->label == "First");
+}
+
+TEST_CASE("graph.catalog.unload_removes_the_type", "[graph][ir][catalog]") {
+    // A plugin that cannot take its contributions back cannot be unloaded -- the same requirement the loader's
+    // `unregister` exists for, one layer up.
+    NodeTypeRegistry catalog;
+    NodeDesc desc;
+    desc.type_name = "demo.gone";
+    REQUIRE(catalog.register_type(desc).has_value());
+    REQUIRE(catalog.find("demo.gone") != nullptr);
+
+    REQUIRE(catalog.remove_type("demo.gone").has_value());
+    REQUIRE(catalog.find("demo.gone") == nullptr);
+    REQUIRE(catalog.size() == 0);
+
+    // And the name is free again, so a reloaded plugin can register it.
+    REQUIRE(catalog.register_type(desc).has_value());
+    REQUIRE(catalog.size() == 1);
+}
 TEST_CASE("graph.ids.node_default_is_invalid", "[graph][ir]") {
     const NodeId n;
     REQUIRE_FALSE(n.valid());

@@ -127,6 +127,22 @@ ALLOWED: dict[str, set[str]] = {
     # widened that module for a job its own file comment says it does not do --
     # "a document describes a graph; it does not hold a second one".
     "persist": {"units", "diag", "ir", "structure", "document"},
+    # host is the composition root, and the **only** module allowed a fan-in this wide. Every other module is
+    # written so that it does not know what its neighbours are -- `plugin` judges a manifest without knowing
+    # what a plugin contributes, `ir` owns descriptors without knowing who fills the catalog, `io` owns the
+    # format registry without knowing who registers a format. Something has to know all of it, and the
+    # alternative to naming it here is that the application does the wiring, which works only while content is
+    # linked statically.
+    #
+    # The edge is one-way by construction: nothing depends on host except the application, so a new registry
+    # costs one line in this table rather than a change to the plugin foundation. `kernels` is the one entry
+    # that looks surprising -- host does not call a kernel, it only carries the registry a plugin registers
+    # into -- and it is listed because the registry type appears in host's own interface.
+    #
+    # `file` is here for one function: scanning a directory needs a `std::filesystem::path` made from UTF-8
+    # bytes, and `runtime::to_path` is the single place that conversion is written. The alternative was to
+    # repeat the `char8_t` conversion in host, which is how a second, subtly different answer appears.
+    "host": {"units", "diag", "plugin", "capability", "ir", "kernels", "instrument", "io", "file"},
 }
 
 # Nothing outside core may be depended on by core

@@ -13,3 +13,6 @@ add_subdirectory(plugin)
 add_subdirectory(graph)
 add_subdirectory(runtime)
 add_subdirectory(authoring)
+# `host` is last because it depends on all of them: it is the composition root, and building it after every
+# registry owner mirrors the dependency direction in the build.
+add_subdirectory(host)

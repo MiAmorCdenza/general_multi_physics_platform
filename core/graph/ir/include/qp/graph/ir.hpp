@@ -51,6 +51,7 @@
 #include <qp/graph/ir/edge.hpp>
 #include <qp/graph/ir/ids.hpp>
 #include <qp/graph/ir/node.hpp>
+#include <qp/graph/ir/node_type_registry.hpp>
 
 namespace qp::graph {
 

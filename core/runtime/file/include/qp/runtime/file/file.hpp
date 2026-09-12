@@ -37,10 +37,35 @@
 #pragma once
 
 #include <cstdint>
+#include <filesystem>
 #include <string>
 #include <string_view>
 
 namespace qp::runtime {
+
+/**
+ * @brief Converts a UTF-8 path into the filesystem's own path type -- the one place this conversion happens.
+ *
+ * Public because a caller that needs a `std::filesystem::path` rather than a whole-file read has no business
+ * writing the conversion again, and every repetition of it is a chance to reach for `path{std::string}`, which
+ * on Windows reads the bytes in the process code page. The plugin host scans a directory and needs exactly
+ * this; before it was exported, the choice was between duplicating the `char8_t` dance and depending on a
+ * module whose subject is whole-file I/O for a path helper.
+ *
+ * @param utf8_path The path as UTF-8 bytes.
+ *
+ * @ownership   owns the returned path
+ * @thread      any
+ * @pre         none
+ * @post        The result names the same file the UTF-8 path does, on every platform
+ * @invariant   An empty input yields an empty path rather than a path to the current directory
+ * @errors      May allocate
+ * @complexity  O(length)
+ * @nondet      none
+ * @frozen      no
+ * @tests       file.a_path_that_is_not_ascii_still_names_the_file
+ */
+[[nodiscard]] std::filesystem::path to_path(const std::string& utf8_path);
 
 /**
  * @brief Why a whole-file read or write did not happen.

@@ -3,7 +3,8 @@
 # Dependency rule: ir depends only on L0 and ports, never on another core/graph submodule.
 
 add_library(qp_graph_ir STATIC
-    src/descriptor.cpp)
+    src/descriptor.cpp
+    src/node_type_registry.cpp)
 
 add_library(qp::graph_ir ALIAS qp_graph_ir)
 

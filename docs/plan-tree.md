@@ -93,6 +93,44 @@ L0 是本项目唯一不可插件化的部分，也是接口面必须最小的�
 | 依赖 | `units` |
 | 为什么在地基 | C++ / YAML / 脚本必须共用**同一份**名字来源，否则三处会漂移 |
 
+### 2.7 `core/host/` —— 插件宿主（组合根）
+
+| 项 | 内容 |
+|---|---|
+| 职责 | 把插件**装进**注册表：扫目录、映射动态库、按 manifest 协商能力、记录贡献、可撤销地卸载 |
+| 关键类型 | `IPluginHost`（插件看到的全部表面，即插件 ABI）、`PluginHost`（应用看到的那一半）、`PluginOutcome` / `LoadReport` |
+| 依赖 | `plugin`、`capability`、`ir`、`kernels`、`instrument`、`io`、`file` |
+| 为什么必须存在 | `plugin` 只做「判断一份 manifest 值」，它自己的头文件写明**不**决定插件贡献什么；不写这一层，就从来没有任何代码调用过 `load_plugins` |
+
+**它不是一个层，而是地基的边。** 其余每个模块都被写成「不知道邻居是谁」：`plugin` 判断 manifest 却不知道
+插件贡献什么，`ir` 拥有描述符却不知道谁填充目录，`io` 拥有格式注册表却不知道谁注册格式。总得有人知道全部，
+而在此之前那个「人」是应用本身——靠把内容静态链进去。那对一个「内容是库」的平台不是答案。
+
+**为什么 ledger 不是多余的一层记账。** 注册表持有的是**非拥有**指针，指向插件自己拥有的对象，所以卸载
+必须在动态库被释放**之前**把表清空。插件自己的 `unregister` 该做这件事，但它不够：`LoadedPlugin::unload`
+无论 `unregister` 有没有清干净都会释放映射，于是漏掉一个节点类型的插件会留下悬空描述符，失败点离卸载点
+任意远。所以宿主不信回调的完备性——每个 `add_*` 都记一笔，`unload` 自己按记录撤除。记录同时回答了别处
+问不出的问题：**这是哪个插件贡献的**（`origin_of`）。`NodeDesc::source` 答不了，那是插件自己填的字符串，
+它可以填错。夹具 `content.cpp` 的 `unregister` **故意是空的**，就是为了让这条记录可测。
+
+**门禁在这里是什么、不是什么。** manifest 声明的是能力**位**，宿主在 `register_into` 之前比对授权。那是
+声明检查，不是沙箱：接口是一个对象而不是按能力切分的门面，声明了 `kernels` 的插件照样能调 `add_node_type`。
+明写出来，是因为不写就会有读者以为存在实际隔离——进程内插件是可信代码，这道门是为了抓**错误**（manifest
+与代码不一致），不是为了关住恶意库。
+
+**string 键的细粒度能力在宿主里被组合起来，而不是闲置。** `authoring/capability` 的 `ICapabilityProvider`
+需要插件提供一个虚接口，而 `PluginExports` 只带位和回调——所以细粒度能力**目前无法由动态插件提供**。
+宿主改为**自己合成** provider：offers 是声明位的名字，`needs` 就是那份声明，授权方是宿主。这消掉了
+「插件对自己的描述决定了自己的权限」这个缺口，也把「动态插件拿不到细粒度能力」这件事记在这里而不是掩盖。
+代价是：两个插件声明同一位就**互斥**（`Registry` 一个 id 只收一个 provider），
+`needy` 夹具因此声明 `view_items` 而不是与 `content` 相同的位——这条约束对插件作者是真的，写在这里而不是
+等他们自己撞上。
+
+**测试用真库。** `tests/fixtures/host_plugin/` 五个夹具（content / refuses / hungry / empty / needy），
+每个只偏离一处：注册内容、自带理由拒绝、声明未授权能力、声明空能力、依赖另一个插件。与 loader 的夹具
+**故意不同**——那些不链宿主，才能就 ABI 与宿主产生分歧；这些必须链宿主，因为 `NodeDesc` / `KernelDesc` /
+`IExporter` 本来就是宿主侧 C++。
+
 ---
 
 ## 3. L1 —— 图与执行（`core/graph/`）
@@ -392,6 +430,9 @@ units ← diag ← ports ← reflect
 runtime → authoring
             ↑
         persist（document + structure：格式是插件，契约是地基）
+─────────────────────────
+host  ← plugin + capability + ir + kernels + instrument + io + file
+        （组合根：唯一允许扇入这么宽的模块；除应用外无人依赖它）
 ─────────────────────────
 views, plugins        （消费者，core 不得 include）
 ```

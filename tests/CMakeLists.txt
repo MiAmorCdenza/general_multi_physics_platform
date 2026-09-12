@@ -521,6 +521,66 @@ catch_discover_tests(qp_test_plugin_loader
 add_test(NAME "qp_test_plugin_loader.all" COMMAND qp_test_plugin_loader)
 set_tests_properties("qp_test_plugin_loader.all" PROPERTIES LABELS "unit;loader;aggregate")
 
+# -- Host fixtures -------------------------------------------------------------
+#
+# A second fixture set, and the difference from the one above is the whole reason it exists.
+#
+# Those fixtures deliberately do **not** link the host, because their subject is the loader: a fixture that
+# agreed with the host by construction could never exercise the tag, exports-version or layout checks. These
+# fixtures test the other half -- what happens after a library judged cleanly -- and the content a plugin
+# contributes (`NodeDesc`, `KernelDesc`, `IExporter`) is host-side C++ by definition. So they link `qp::host`
+# and are built by the same toolchain as the test, which is exactly the in-process plugin model this project
+# documents. The ABI checks that matter for a plugin remain the loader's.
+#
+# `content.cpp` registers two node types, a kernel and an export format; `refuses.cpp` installs one type and
+# then refuses with its own sentence; `hungry.cpp` declares a capability the test host does not grant;
+# `empty.cpp` declares none at all, which `judge` refuses. One deviation per fixture, so a failing test names
+# one defect.
+set(QP_HOST_FIXTURES content refuses hungry empty needy)
+
+set(QP_HOST_FIXTURE_TARGETS "")
+foreach(fixture IN LISTS QP_HOST_FIXTURES)
+    set(target "qp_fixture_host_${fixture}")
+    add_library(${target} MODULE fixtures/host_plugin/${fixture}.cpp)
+    target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(${target} PRIVATE qp::host)
+    set_target_properties(${target} PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+        # Position-independent regardless of platform: on Linux a MODULE library that is not PIC fails to
+        # link, and the failure names the linker rather than the missing flag.
+        POSITION_INDEPENDENT_CODE ON)
+    list(APPEND QP_HOST_FIXTURE_TARGETS ${target})
+endforeach()
+
+# A separate executable from the loader's, because the two need different fixtures and different link lines.
+# Merging them would make one failure mode look like the other's.
+add_executable(qp_test_host unit/host/test_host.cpp ${QP_TEST_MAIN})
+target_include_directories(qp_test_host PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(qp_test_host PRIVATE qp::host qp::runtime_file Catch2::Catch2)
+add_dependencies(qp_test_host ${QP_HOST_FIXTURE_TARGETS})
+
+# The real target files, as generator expressions, exactly as the loader's fixtures are handed over -- and for
+# the same reason: reconstructing a toolchain's output name from a directory listing is testing a guess. MinGW
+# prefixes a MODULE library with `lib`, MSVC does not.
+set(QP_HOST_FIXTURE_DEFS "")
+foreach(fixture IN LISTS QP_HOST_FIXTURES)
+    file(TO_CMAKE_PATH "$<TARGET_FILE:qp_fixture_host_${fixture}>" _path)
+    list(APPEND QP_HOST_FIXTURE_DEFS "QP_HOST_FIXTURE_${fixture}=\"${_path}\"")
+endforeach()
+# The directory the fixtures are built into, so a scan can be pointed at real libraries rather than at copies.
+file(TO_CMAKE_PATH "$<TARGET_FILE_DIR:qp_fixture_host_content>" _host_fixture_dir)
+list(APPEND QP_HOST_FIXTURE_DEFS "QP_HOST_FIXTURE_DIR=\"${_host_fixture_dir}\"")
+
+target_compile_definitions(qp_test_host PRIVATE ${QP_HOST_FIXTURE_DEFS})
+
+catch_discover_tests(qp_test_host
+    TEST_PREFIX "qp_test_host."
+    PROPERTIES LABELS "unit;host"
+    ADD_TAGS_AS_LABELS)
+add_test(NAME "qp_test_host.all" COMMAND qp_test_host)
+set_tests_properties("qp_test_host.all" PROPERTIES LABELS "unit;host;aggregate")
+
 # -- Plugin content -----------------------------------------------------------
 #
 # Built only with QP_BUILD_PLUGINS, so core/ configures and its whole suite passes

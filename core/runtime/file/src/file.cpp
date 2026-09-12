@@ -10,25 +10,21 @@
 #include <system_error>
 
 namespace qp::runtime {
-namespace {
 
-/// @brief The destination as a filesystem path.
-///
-/// The conversion is explicit because a path here is UTF-8 and the underlying open call is not: on
-/// Windows a narrow path is interpreted in the process code page, so a directory name that is not ASCII
-/// (the common case for this platform's users) would open something else, or nothing. Constructing the
-/// path from the UTF-8 bytes -- `std::filesystem::path` from a `char8_t` string, which is the C++20 form
-/// rather than the deprecated `u8path` -- is what makes the stream open the file the user chose.
-[[nodiscard]] std::filesystem::path to_path(const std::string& utf8) {
+std::filesystem::path to_path(const std::string& utf8_path) {
+    if (utf8_path.empty()) return std::filesystem::path{};
+    // The conversion is explicit because a path here is UTF-8 and the underlying open call is not: on
+    // Windows a narrow path is interpreted in the process code page, so a directory name that is not ASCII
+    // (the common case for this platform's users) would open something else, or nothing. Constructing the
+    // path from the UTF-8 bytes -- `std::filesystem::path` from a `char8_t` string, which is the C++20 form
+    // rather than the deprecated `u8path` -- is what makes the stream open the file the user chose.
 #if defined(__cpp_char8_t)
-    const auto* begin = reinterpret_cast<const char8_t*>(utf8.data());
-    return std::filesystem::path{std::u8string{begin, begin + utf8.size()}};
+    const auto* begin = reinterpret_cast<const char8_t*>(utf8_path.data());
+    return std::filesystem::path{std::u8string{begin, begin + utf8_path.size()}};
 #else
-    return std::filesystem::path{utf8};
+    return std::filesystem::path{utf8_path};
 #endif
 }
-
-}  // namespace
 
 FileOutcome read_whole_file(const std::string& utf8_path, std::string& bytes) noexcept {
     // Cleared first, and that is the contract rather than tidiness: a caller that handed in a buffer
