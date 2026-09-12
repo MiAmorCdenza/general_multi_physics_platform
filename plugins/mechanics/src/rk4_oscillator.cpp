@@ -53,6 +53,13 @@ kernels::Capability Rk4Oscillator::capabilities() const noexcept {
     return kernels::Capability::none;
 }
 
+kernels::ClampPolicy Rk4Oscillator::clamp_policy() const noexcept {
+    // 1e12 is a magnitude no physical amplitude approaches and one where squaring the value
+    // in the energy expression is still exact in double. See the header for why this is
+    // `bounded` rather than `finite`.
+    return kernels::ClampPolicy::bounded(1.0e12);
+}
+
 diag::Result<void> Rk4Oscillator::prepare(const kernels::ParamBlock& params) {
     const double omega = params.real(kOmegaSlot);
     // `isfinite` and the sign are checked separately rather than as `omega > 0`
@@ -64,6 +71,10 @@ diag::Result<void> Rk4Oscillator::prepare(const kernels::ParamBlock& params) {
 
     omega_ = omega;
     prepared_ = true;
+    // The count describes the current configuration, not the process's history: a parameter
+    // change is a new experiment, and carrying the previous run's clamp count into it would
+    // make a clean run look like it had been clamped.
+    clamps_fired_ = 0;
     return {};
 }
 
@@ -146,8 +157,21 @@ diag::Result<void> Rk4Oscillator::advance(const kernels::BatchView& batch,
         const double k4v = -w2 * x4;
 
         const double sixth = dt / 6.0;
-        out[base + kPosition] = x + sixth * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
-        out[base + kVelocity] = v + sixth * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
+        const double x_next = x + sixth * (k1x + 2.0 * k2x + 2.0 * k3x + k4x);
+        const double v_next = v + sixth * (k1v + 2.0 * k2v + 2.0 * k3v + k4v);
+
+        // Clamped through the foundation's policy rather than by an inline bound, so this
+        // operator cannot differ from the others on the case that matters: a NaN compares
+        // false against every bound, and a hand-written `if (v > limit)` would write it on
+        // while reporting that nothing happened. See kernel.clamp_policy.applies.
+        const kernels::ClampPolicy policy = clamp_policy();
+        const kernels::ClampResult rx = kernels::apply(policy, x_next);
+        const kernels::ClampResult rv = kernels::apply(policy, v_next);
+        if (rx.changed) ++clamps_fired_;
+        if (rv.changed) ++clamps_fired_;
+
+        out[base + kPosition] = rx.value;
+        out[base + kVelocity] = rv.value;
 
         // The third component is written as zero, not left alone.
         //

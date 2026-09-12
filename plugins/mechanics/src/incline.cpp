@@ -48,6 +48,11 @@ constexpr std::size_t kKineticSlot = 2;
 
 }  // namespace
 
+kernels::ClampPolicy InclineFriction::clamp_policy() const noexcept {
+    // See the header: the bound catches divergence, not the end of a slope.
+    return kernels::ClampPolicy::bounded(1.0e12);
+}
+
 std::string_view InclineFriction::name() const noexcept { return "incline_friction"; }
 
 kernels::Capability InclineFriction::capabilities() const noexcept {
@@ -75,6 +80,9 @@ diag::Result<void> InclineFriction::prepare(const kernels::ParamBlock& params) {
     mu_static_ = mu_s;
     mu_kinetic_ = mu_k;
     prepared_ = true;
+    // A parameter change is a new experiment: carrying the previous run's clamp count into
+    // it would make a clean run look as though it had been clamped.
+    clamps_fired_ = 0;
     return {};
 }
 
@@ -160,8 +168,18 @@ diag::Result<void> InclineFriction::advance(const kernels::BatchView& batch,
         // that samples the force at intermediate velocities cannot make that decision
         // cleanly. The cost is a linear error term, and it is stated here rather than
         // discovered by whoever compares the graph against a closed form.
-        out[base + kPosition] = s + v * dt;
-        out[base + kVelocity] = v;
+        // Clamped through the foundation's policy rather than by an inline bound, so this
+        // operator cannot differ from the others on the case that matters: a NaN compares
+        // false against every bound, and a hand-written `if (v > limit)` writes it on while
+        // reporting that nothing happened. See kernel.clamp_policy.applies.
+        const kernels::ClampPolicy policy = clamp_policy();
+        const kernels::ClampResult rs = kernels::apply(policy, s + v * dt);
+        const kernels::ClampResult rv = kernels::apply(policy, v);
+        if (rs.changed) ++clamps_fired_;
+        if (rv.changed) ++clamps_fired_;
+
+        out[base + kPosition] = rs.value;
+        out[base + kVelocity] = rv.value;
         // The angle is an input and nothing here changes it, so it is carried through. It
         // is part of the state rather than a parameter because it is per particle: one
         // graph can compare two inclines side by side, which a global value cannot express.

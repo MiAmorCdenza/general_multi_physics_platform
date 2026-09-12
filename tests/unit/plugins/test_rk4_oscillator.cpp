@@ -463,3 +463,56 @@ TEST_CASE("plugin.mechanics.oscillator_is_deterministic", "[plugin][mechanics]")
     REQUIRE(a.x() == b.x());
     REQUIRE(a.v() == b.v());
 }
+
+TEST_CASE("plugin.mechanics.oscillator_clamps_and_reports_it", "[plugin][mechanics]") {
+    // Charter C2 requires that a kernel declare its clamping policy, and C8 requires that
+    // numerical error not be mistaken for physics. Those two together mean the interesting
+    // property is not that values get bounded -- it is that the operator can **say** it
+    // clamped. A silent clamp leaves a run that keeps drawing and is wrong.
+    Rk4Oscillator op;
+    REQUIRE(op.clamps_fired() == 0);
+
+    // The declaration exists and refuses non-finite state, because a harmonic oscillator's
+    // conserved energy bounds |x| for all time: a component above 1e12 is a symptom, not a
+    // state.
+    const kernels::ClampPolicy policy = op.clamp_policy();
+    REQUIRE(policy.finite_only);
+    REQUIRE(policy.limit > 0.0);
+
+    // A clean run reports nothing, which is the majority case and the one that must stay
+    // honest: a counter that incremented on every step would be useless as evidence.
+    prepare(op, 1.0);
+    State state = State::one(1.0, 0.0);
+    run(op, state, 1.0e-3, 1000);
+    REQUIRE(op.clamps_fired() == 0);
+
+    // A parameter change is a new experiment, so the count starts over. Carrying the
+    // previous configuration's count into the next run would make a clean run look clamped.
+    prepare(op, 2.0);
+    REQUIRE(op.clamps_fired() == 0);
+
+    // And a state that does diverge is caught and counted. The oscillator is stable, so this
+    // needs a state the operator would not reach on its own: an enormous velocity combined
+    // with a step large enough that one RK4 stage overflows.
+    {
+        Rk4Oscillator wild;
+        prepare(wild, 1.0);
+        State extreme = State::one(1.0e308, 1.0e308);
+        field::FieldValue out = extreme.view();
+        kernels::BatchView batch;
+        batch.in = &out;
+        batch.out = &out;
+        batch.count = 1;
+        kernels::AdvanceContext ctx;
+        ctx.dt = 1.0e10;
+        const auto result = wild.advance(batch, ctx);
+        // The step still reports success: clamping is the operator keeping its contract to
+        // return a finite state, not a failure to report. What the caller gets instead is the
+        // count, which is the honest signal.
+        REQUIRE(result.has_value());
+        REQUIRE(wild.clamps_fired() > 0);
+        REQUIRE(std::isfinite(extreme.x()));
+        REQUIRE(std::isfinite(extreme.v()));
+        REQUIRE(std::abs(extreme.x()) <= wild.clamp_policy().limit);
+    }
+}

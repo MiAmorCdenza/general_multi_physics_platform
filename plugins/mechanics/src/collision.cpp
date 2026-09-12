@@ -40,6 +40,12 @@ constexpr std::size_t kRestitutionSlot = 0;
 
 }  // namespace
 
+kernels::ClampPolicy MergeCollision::clamp_policy() const noexcept {
+    // See the header: a weighted average cannot exceed its inputs, so the only thing worth
+    // refusing here is a non-finite value.
+    return kernels::ClampPolicy::finite();
+}
+
 std::string_view MergeCollision::name() const noexcept { return "merge_collision"; }
 
 kernels::Capability MergeCollision::capabilities() const noexcept {
@@ -61,6 +67,7 @@ diag::Result<void> MergeCollision::prepare(const kernels::ParamBlock& params) {
     if (restitution != 0.0) return diag::ErrorCode::not_implemented;
 
     prepared_ = true;
+    clamps_fired_ = 0;
     return {};
 }
 
@@ -118,9 +125,20 @@ diag::Result<void> MergeCollision::advance(const kernels::BatchView& batch,
     // coalescence does not move the positions it started from.
     for (std::size_t i = 0; i < batch.count; ++i) {
         const std::uint64_t base = static_cast<std::uint64_t>(i) * stride;
-        out[base + kPosition] = in[base + kPosition];
-        out[base + kVelocity] = common;
-        out[base + kMass] = in[base + kMass];
+        // Clamped through the foundation's policy. The input components are copied through
+        // the same path: a NaN that arrived in a position would otherwise be written onward
+        // uncounted, which is exactly the silent case C8 exists to prevent.
+        const kernels::ClampPolicy policy = clamp_policy();
+        const kernels::ClampResult rx = kernels::apply(policy, in[base + kPosition]);
+        const kernels::ClampResult rv = kernels::apply(policy, common);
+        const kernels::ClampResult rm = kernels::apply(policy, in[base + kMass]);
+        if (rx.changed) ++clamps_fired_;
+        if (rv.changed) ++clamps_fired_;
+        if (rm.changed) ++clamps_fired_;
+
+        out[base + kPosition] = rx.value;
+        out[base + kVelocity] = rv.value;
+        out[base + kMass] = rm.value;
     }
 
     (void)ctx.step;

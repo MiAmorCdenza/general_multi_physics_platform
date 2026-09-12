@@ -64,6 +64,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <string_view>
 
 namespace qp::graph::kernels {
@@ -136,6 +137,184 @@ enum class Capability : std::uint32_t {
 /// @brief Whether every bit of `f` is set in `caps`.
 [[nodiscard]] constexpr bool has_capability(Capability caps, Capability f) noexcept {
     return (static_cast<std::uint32_t>(caps) & static_cast<std::uint32_t>(f)) != 0;
+}
+
+/**
+ * @brief What an operator does when its state leaves the range it can represent.
+ *
+ * ## Why this is a declaration and not a private choice
+ *
+ * Charter C2 requires that a run never explodes numerically, and names "clamping before
+ * accuracy" as the means. The requirement cannot be satisfied by each operator deciding
+ * quietly, because the two available answers are **not** equivalent and the difference is
+ * visible in the physics:
+ *
+ *   - A clamped run stays finite and is **wrong** past the clamp. The user sees a
+ *     simulation that keeps running, which is what makes it dangerous.
+ *   - An unclamped run produces a non-finite value, which the host can refuse to record
+ *     and can report. The user sees a failure.
+ *
+ * Both are legitimate; which one is right depends on the experiment. A demonstration of
+ * a pendulum at large amplitude wants the clamp, because the alternative is a blank
+ * screen. A measurement wants the refusal, because a number past the clamp is
+ * indistinguishable from a number before it. So the policy is **declared** so the host can
+ * tell the user which one is in force, and so C8's confidence panel has something to
+ * report when a clamp has actually fired.
+ *
+ * What the platform must never do is let an operator clamp silently. A silent clamp is a
+ * wrong answer wearing a right answer's clothes, and `clamps_fired()` exists so that
+ * "this run was clamped 41 000 times" can be shown rather than inferred.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        none
+ * @invariant   `limit` is finite and positive for every policy except `none`
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       kernel.clamp_policy.presets, kernel.clamp_policy.applies,
+ *              kernel.clamp_policy.counts_what_it_changed
+ */
+struct ClampPolicy final {
+    /// Whether to clamp at all. False means a non-finite state is passed on as-is.
+    bool finite_only = true;
+    /// Largest permitted absolute value of any state component a step writes.
+    ///
+    /// A magnitude rather than a per-component bound because "how big can this get before
+    /// it is meaningless" is a question about the quantity, and answering it per component
+    /// would need the operator to know which component means what -- which the host does,
+    /// and it does not want to.
+    double limit = 1.0e12;
+
+    /// @brief Clamp nothing. A non-finite value is the caller's problem.
+    ///
+    /// @ownership   pure
+    /// @thread      any
+    /// @pre         none
+    /// @post        `finite_only` is false
+    /// @invariant   The identity policy: applying it never changes a value
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       kernel.clamp_policy.presets
+    [[nodiscard]] static constexpr ClampPolicy none() noexcept {
+        ClampPolicy p;
+        p.finite_only = false;
+        p.limit = 0.0;
+        return p;
+    }
+
+    /// @brief Refuse to write a non-finite value, with no magnitude bound.
+    ///
+    /// `limit` is set to 0 explicitly, and `apply` reads 0 as "no bound". Returning a
+    /// default-constructed policy instead would inherit the member initialiser `1.0e12` and
+    /// silently impose a magnitude bound on a policy documented as having none -- so a large
+    /// but perfectly finite value would come back altered while the caller had every reason
+    /// to expect it untouched. The default exists for callers who construct the struct
+    /// directly; it is not a decision either preset should inherit by accident.
+    ///
+    /// @ownership   pure
+    /// @thread      any
+    /// @pre         none
+    /// @post        `finite_only` is true and no finite value is altered
+    /// @invariant   Finite inputs pass through unchanged, bit for bit
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       kernel.clamp_policy.presets
+    [[nodiscard]] static constexpr ClampPolicy finite() noexcept {
+        ClampPolicy p;
+        p.finite_only = true;
+        p.limit = 0.0;
+        return p;
+    }
+
+    /// @brief Refuse non-finite values and bound the magnitude.
+    ///
+    /// @ownership   pure
+    /// @thread      any
+    /// @pre         `max_abs` is finite and positive
+    /// @post        `limit == max_abs`
+    /// @invariant   A value within `[-max_abs, max_abs]` passes through unchanged
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       kernel.clamp_policy.presets
+    [[nodiscard]] static constexpr ClampPolicy bounded(double max_abs) noexcept {
+        ClampPolicy p;
+        p.finite_only = true;
+        p.limit = max_abs;
+        return p;
+    }
+};
+
+/**
+ * @brief Outcome of applying a `ClampPolicy` to one value.
+ *
+ * Returned rather than written through a pointer so the caller **cannot** ignore it
+ * without saying so, and so a hot loop can accumulate the flag into an integer and inspect
+ * it once per batch instead of once per sample.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        none
+ * @invariant   `changed` is true exactly when `value != original`
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       kernel.clamp_policy.applies, kernel.clamp_policy.counts_what_it_changed
+ */
+struct ClampResult final {
+    /// The value to write.
+    double value = 0.0;
+    /// Whether the policy altered it. The evidence C8's panel reports.
+    bool changed = false;
+};
+
+/**
+ * @brief Applies `policy` to one value, reporting whether anything changed.
+ *
+ * Placed in the foundation rather than in each operator because C2 makes it a platform
+ * guarantee, and three operators with three copies of this arithmetic is three chances for
+ * one of them to differ on the NaN case -- which is the case that matters, because a NaN
+ * compares false against every bound and a clamp written as
+ * `if (v > limit) v = limit;` lets it through.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        For a `finite_only` policy, `value` is finite
+ * @invariant   A value already inside the permitted range is returned unchanged, bit for bit
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       kernel.clamp_policy.applies, kernel.clamp_policy.counts_what_it_changed
+ */
+[[nodiscard]] constexpr ClampResult apply(const ClampPolicy& policy, double value) noexcept {
+    // `finite_only` is false only for `ClampPolicy::none()`, whose whole purpose is to
+    // report a non-finite state rather than hide it.
+    if (!policy.finite_only) return ClampResult{value, false};
+
+    // The finite test comes **first**, and that ordering is the point. A NaN compares false
+    // against every bound, so a magnitude test written before this one would fall through,
+    // write the NaN onward, and report that nothing had changed.
+    //
+    // `value != value` is the NaN test, written this way rather than as `std::isnan` because
+    // this function is `constexpr` and `std::isnan` is not. The self-comparison is the
+    // standard spelling the standard library itself uses for exactly this reason.
+    constexpr double kInf = std::numeric_limits<double>::infinity();
+    if (value != value || value > kInf || value < -kInf) {
+        return ClampResult{0.0, true};
+    }
+    if (policy.limit > 0.0) {
+        if (value > policy.limit) return ClampResult{policy.limit, true};
+        if (value < -policy.limit) return ClampResult{-policy.limit, true};
+    }
+    return ClampResult{value, false};
 }
 
 /**

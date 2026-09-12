@@ -48,7 +48,8 @@
  *              plugin.mechanics.merge_loses_kinetic_energy,
  *              plugin.mechanics.merge_refuses_partial_restitution,
  *              plugin.mechanics.merge_refuses_unusable_state,
- *              plugin.mechanics.merge_registers_under_its_name
+ *              plugin.mechanics.merge_registers_under_its_name,
+ *              plugin.mechanics.merge_clamps_and_reports_it
  */
 #pragma once
 
@@ -106,7 +107,8 @@ namespace qp::plugins::mechanics {
  *              plugin.mechanics.merge_loses_kinetic_energy,
  *              plugin.mechanics.merge_refuses_partial_restitution,
  *              plugin.mechanics.merge_refuses_unusable_state,
- *              plugin.mechanics.merge_registers_under_its_name
+ *              plugin.mechanics.merge_registers_under_its_name,
+ *              plugin.mechanics.merge_clamps_and_reports_it
  */
 class MergeCollision final : public graph::kernels::IBatchAdvancer {
 public:
@@ -191,6 +193,54 @@ public:
     [[nodiscard]] diag::Result<void> advance(const graph::kernels::BatchView& batch,
                                              graph::kernels::AdvanceContext& ctx) override;
 
+
+    /**
+     * @brief The clamping policy this operator applies to every value it writes.
+     *
+     * Charter C2 requires a kernel to **declare** its policy rather than choose quietly,
+     * because the two available answers are not equivalent and the difference is visible in
+     * the physics: a clamped run stays finite and is wrong past the clamp, while an
+     * unclamped run produces a non-finite value the host can refuse to record.
+     *
+     * `finite` rather than `bounded`, and the difference is a real property of
+     * this operator. It computes a weighted **average** of the incoming velocities, and an
+     * average of bounded values is bounded by them -- large inputs cannot produce a larger
+     * output. What it can produce is a NaN, from a mass total that overflowed to infinity so
+     * that `inf/inf` is undefined. So the declaration that says something true is "refuse
+     * non-finite", and adding a magnitude bound would assert a limit on the physics that this
+     * operator has no basis for.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        `finite_only` is true for the returned policy
+     * @invariant   Constant for the lifetime of the object
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.mechanics.merge_clamps_and_reports_it
+     */
+    [[nodiscard]] graph::kernels::ClampPolicy clamp_policy() const noexcept;
+
+    /// @brief How many values this operator has clamped since it was prepared.
+    ///
+    /// C8 requires that numerical error not be mistaken for physics, and a run that has been
+    /// clamped looks exactly like one that has not unless somebody says so. Reset by
+    /// `prepare`, so the count describes the current configuration.
+    ///
+    /// @ownership   pure
+    /// @thread      eval (read after a run)
+    /// @pre         none
+    /// @post        none
+    /// @invariant   Zero immediately after a successful `prepare`
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       plugin.mechanics.merge_clamps_and_reports_it
+    [[nodiscard]] std::uint64_t clamps_fired() const noexcept { return clamps_fired_; }
+
     /// @brief Whether `prepare` has succeeded at least once.
     ///
     /// @ownership   pure
@@ -207,6 +257,7 @@ public:
 
 private:
     bool prepared_ = false;
+    std::uint64_t clamps_fired_ = 0;
 };
 
 }  // namespace qp::plugins::mechanics

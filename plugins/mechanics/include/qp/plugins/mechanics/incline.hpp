@@ -54,7 +54,8 @@
  *              plugin.mechanics.incline_handles_every_block_in_the_batch,
  *              plugin.mechanics.incline_rejects_impossible_surfaces,
  *              plugin.mechanics.incline_rejects_unusable_input,
- *              plugin.mechanics.incline_registers_under_its_name
+ *              plugin.mechanics.incline_registers_under_its_name,
+ *              plugin.mechanics.incline_clamps_and_reports_it
  */
 #pragma once
 
@@ -112,7 +113,8 @@ namespace qp::plugins::mechanics {
  *              plugin.mechanics.incline_handles_every_block_in_the_batch,
  *              plugin.mechanics.incline_rejects_impossible_surfaces,
  *              plugin.mechanics.incline_rejects_unusable_input,
- *              plugin.mechanics.incline_registers_under_its_name
+ *              plugin.mechanics.incline_registers_under_its_name,
+ *              plugin.mechanics.incline_clamps_and_reports_it
  */
 class InclineFriction final : public graph::kernels::IBatchAdvancer {
 public:
@@ -192,6 +194,52 @@ public:
     [[nodiscard]] diag::Result<void> advance(const graph::kernels::BatchView& batch,
                                              graph::kernels::AdvanceContext& ctx) override;
 
+
+    /**
+     * @brief The clamping policy this operator applies to every value it writes.
+     *
+     * Charter C2 requires a kernel to **declare** its policy rather than choose quietly,
+     * because the two available answers are not equivalent and the difference is visible in
+     * the physics: a clamped run stays finite and is wrong past the clamp, while an
+     * unclamped run produces a non-finite value the host can refuse to record.
+     *
+     * `bounded` rather than `finite`: a block's position along a slope does grow
+     * without limit under gravity -- that is the exercise -- so a magnitude bound is
+     * meaningful. `1e12` metres is absurd on purpose. The bound is there to catch a
+     * divergence, not to model a slope that ends, and a value that large means the step size
+     * or the angle is unusable rather than that the block has travelled a long way.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        `finite_only` is true for the returned policy
+     * @invariant   Constant for the lifetime of the object
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.mechanics.incline_clamps_and_reports_it
+     */
+    [[nodiscard]] graph::kernels::ClampPolicy clamp_policy() const noexcept;
+
+    /// @brief How many values this operator has clamped since it was prepared.
+    ///
+    /// C8 requires that numerical error not be mistaken for physics, and a run that has been
+    /// clamped looks exactly like one that has not unless somebody says so. Reset by
+    /// `prepare`, so the count describes the current configuration.
+    ///
+    /// @ownership   pure
+    /// @thread      eval (read after a run)
+    /// @pre         none
+    /// @post        none
+    /// @invariant   Zero immediately after a successful `prepare`
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       plugin.mechanics.incline_clamps_and_reports_it
+    [[nodiscard]] std::uint64_t clamps_fired() const noexcept { return clamps_fired_; }
+
     /// @brief Whether `prepare` has succeeded at least once.
     ///
     /// @ownership   pure
@@ -253,6 +301,7 @@ private:
     double mu_static_ = 0.0;
     double mu_kinetic_ = 0.0;
     bool prepared_ = false;
+    std::uint64_t clamps_fired_ = 0;
 };
 
 }  // namespace qp::plugins::mechanics

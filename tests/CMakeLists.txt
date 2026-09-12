@@ -347,6 +347,7 @@ qp_add_test(qp_test_graph_field
     LIBS qp::field)
 qp_add_test(qp_test_graph_kernels
     SOURCES unit/graph/test_kernels.cpp
+            unit/graph/test_kernel_clamp.cpp
     LIBS qp::graph_kernels)
 qp_add_test(qp_test_plugin
     SOURCES unit/plugin/test_plugin.cpp

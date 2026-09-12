@@ -46,7 +46,8 @@
  *              plugin.mechanics.oscillator_is_deterministic,
  *              plugin.mechanics.oscillator_advances_every_particle,
  *              plugin.mechanics.oscillator_rejects_bad_input,
- *              plugin.mechanics.oscillator_rejects_bad_batch
+ *              plugin.mechanics.oscillator_rejects_bad_batch,
+ *              plugin.mechanics.oscillator_clamps_and_reports_it
  */
 #pragma once
 
@@ -98,7 +99,8 @@ namespace qp::plugins::mechanics {
  *              plugin.mechanics.oscillator_advances_every_particle,
  *              plugin.mechanics.oscillator_rejects_bad_input,
  *              plugin.mechanics.oscillator_rejects_bad_batch,
- *              plugin.mechanics.oscillator_registers_under_its_name
+ *              plugin.mechanics.oscillator_registers_under_its_name,
+ *              plugin.mechanics.oscillator_clamps_and_reports_it
  */
 class Rk4Oscillator final : public graph::kernels::IBatchAdvancer {
 public:
@@ -195,6 +197,58 @@ public:
     /// @tests       plugin.mechanics.oscillator_rejects_bad_input
     [[nodiscard]] bool is_prepared() const noexcept { return prepared_; }
 
+    /**
+     * @brief The clamping policy this operator applies to every value it writes.
+     *
+     * Charter C2 requires that a run never explodes numerically and that a kernel
+     * **declare** its clamping policy rather than choosing quietly. The declaration is what
+     * lets the host tell the user which answer is in force, because the two answers differ
+     * in a way the physics shows:
+     *
+     *   - a clamped run stays finite and is *wrong* past the clamp;
+     *   - an unclamped run produces a non-finite value, which the host can refuse to record.
+     *
+     * A demonstration at large amplitude wants the clamp, because the alternative is a blank
+     * screen. A measurement wants the refusal, because a number past the bound cannot be told
+     * apart from a number before it.
+     *
+     * `bounded` rather than `finite` here: a harmonic oscillator's conserved energy bounds
+     * `|x|` by `sqrt(2E)/omega` for all time, so a value above `1e12` in *any* component is
+     * already a symptom rather than a state. `1e12` is chosen well above any physical
+     * amplitude a lab would use and well below the range where squaring loses precision.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        Returns a policy whose `finite_only` is true
+     * @invariant   Constant for the lifetime of the object
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.mechanics.oscillator_clamps_and_reports_it
+     */
+    [[nodiscard]] graph::kernels::ClampPolicy clamp_policy() const noexcept;
+
+    /// @brief How many values this operator has clamped since it was prepared.
+    ///
+    /// Exposed because C8 requires that numerical error not be mistaken for physics: a run
+    /// that has been clamped 41 000 times looks exactly like a run that has not, unless
+    /// somebody says so. The count is per operator and is reset by `prepare`, so it
+    /// describes the current configuration rather than the process's history.
+    ///
+    /// @ownership   pure
+    /// @thread      eval (read after a run)
+    /// @pre         none
+    /// @post        none
+    /// @invariant   Zero immediately after a successful `prepare`
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       plugin.mechanics.oscillator_clamps_and_reports_it
+    [[nodiscard]] std::uint64_t clamps_fired() const noexcept { return clamps_fired_; }
+
     /// @brief The prepared angular frequency, or 0 when unprepared.
     ///
     /// @ownership   pure
@@ -212,6 +266,7 @@ public:
 private:
     double omega_ = 0.0;
     bool prepared_ = false;
+    std::uint64_t clamps_fired_ = 0;
 };
 
 }  // namespace qp::plugins::mechanics

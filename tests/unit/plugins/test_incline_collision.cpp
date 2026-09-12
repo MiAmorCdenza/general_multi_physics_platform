@@ -543,3 +543,64 @@ TEST_CASE("plugin.mechanics.merge_refuses_unusable_state", "[plugin][mechanics]"
         REQUIRE(b.step_is_refused(fresh, 1.0e-3));
     }
 }
+
+TEST_CASE("plugin.mechanics.incline_clamps_and_reports_it", "[plugin][mechanics]") {
+    // Charter C2: a kernel declares its clamping policy, and C8: numerical error must not be
+    // mistaken for physics. The property is not that values get bounded -- it is that the
+    // operator can **say** it bounded one.
+    InclineFriction op;
+    REQUIRE(op.clamps_fired() == 0);
+
+    const kernels::ClampPolicy policy = op.clamp_policy();
+    REQUIRE(policy.finite_only);
+    // `bounded`, not `finite`: a block's position along a slope grows without limit under
+    // gravity -- that is the exercise -- so a magnitude bound is meaningful here in a way it
+    // is not for an operator that averages its inputs.
+    REQUIRE(policy.limit > 0.0);
+
+    // A clean run reports nothing, which is the majority case and the one that must stay
+    // honest.
+    prepare_incline(op, 9.81, 0.4, 0.3);
+    Batch block = Batch::one(0.0, 0.0, 20.0 * kPi / 180.0);
+    for (int i = 0; i < 1000; ++i) block.step(op, 1.0e-3);
+    REQUIRE(op.clamps_fired() == 0);
+
+    // A parameter change is a new experiment, so the count starts over.
+    prepare_incline(op, 9.81, 0.5, 0.4);
+    REQUIRE(op.clamps_fired() == 0);
+
+    // A NaN angle cannot be caught in `prepare` -- it is per-particle state -- so it reaches
+    // the write path. It is refused before that, but the clamp policy is what makes the
+    // refusal safe if a future change lets a non-finite value through: the policy is checked
+    // first and reports.
+    Batch bad = Batch::one(std::numeric_limits<double>::quiet_NaN(), 0.0, 0.1);
+    REQUIRE(bad.step_is_refused(op, 1.0e-3));
+}
+
+TEST_CASE("plugin.mechanics.merge_clamps_and_reports_it", "[plugin][mechanics]") {
+    MergeCollision op;
+    REQUIRE(op.clamps_fired() == 0);
+
+    const kernels::ClampPolicy policy = op.clamp_policy();
+    REQUIRE(policy.finite_only);
+    // `finite`, not `bounded`: this operator computes a weighted average, and an average of
+    // bounded inputs is bounded by them, so a magnitude bound would be a claim about the
+    // physics that the operator has no basis for. What it can produce is a NaN, from a mass
+    // total that overflowed.
+    REQUIRE(policy.limit == 0.0);
+
+    // A clean collision reports nothing.
+    prepare_merge(op);
+    REQUIRE(op.clamps_fired() == 0);
+    Batch two(2);
+    two.set(0, 1, 3.0);
+    two.set(0, 2, 2.0);
+    two.set(1, 1, -1.0);
+    two.set(1, 2, 1.0);
+    two.step(op, 1.0e-3);
+    REQUIRE(op.clamps_fired() == 0);
+
+    // And a non-finite input is refused before it can become a silent NaN in the output.
+    Batch poisoned = Batch::one(0.0, std::numeric_limits<double>::quiet_NaN(), 1.0);
+    REQUIRE(poisoned.step_is_refused(op, 1.0e-3));
+}
