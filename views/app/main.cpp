@@ -22,6 +22,12 @@
  *      opens, because a lab machine with a mistyped plugin path must still be able to open a saved document
  *      and read its numbers.
  *
+ * A fourth decision was added later and belongs to the same list: **what can measure.** The rack of devices goes
+ * into the host's registry before the window exists, because the measurement panel reads that registry while it
+ * is being built -- and a device registered afterwards would be missing from the list until something refreshed
+ * it, which nothing does. It is also the only way a build with no plugins loaded has any instrument at all, and
+ * without one the platform's central loop is unreachable rather than merely quiet.
+ *
  * @ownership   owns (the plugin host, the registered formats and the window)
  * @thread      ui
  * @pre         none
@@ -45,6 +51,10 @@
 #if defined(QP_HAS_FORMAT_PLUGINS)
 #include <qp/plugins/csv/csv_exporter.hpp>
 #include <qp/plugins/qpjson/qpjson_format.hpp>
+#endif
+
+#if defined(QP_HAS_INSTRUMENTS_PLUGIN)
+#include <qp/plugins/instruments/instruments.hpp>
 #endif
 
 #include <QApplication>
@@ -140,6 +150,25 @@ int main(int argc, char** argv) {
         // leave them reading the wrong file.
         qWarning().noquote() << QString::fromStdString(loaded.to_text()).trimmed();
     }
+
+    // The measuring devices. They go through `add_builtin_instrument` for the same reason the editor's
+    // demonstrator node types go through `add_builtin_node_type`: a contribution that bypassed the ledger would
+    // be the one thing `origin_of` could not answer for, and the one thing a session could not take back.
+    //
+    // Mounted **before** the window is built, because the window's measurement panel reads the registry during
+    // construction -- a device registered afterwards would be missing from the list until something refreshed it,
+    // and nothing does.
+    //
+    // The count is reported rather than asserted. A device whose id was taken is one device missing from the rack,
+    // which is a usable instrument list with something absent; refusing the whole rack would turn a name clash
+    // into "this build cannot measure anything at all".
+#if defined(QP_HAS_INSTRUMENTS_PLUGIN)
+    const std::size_t mounted_devices = qp::plugins::instruments::mount_instruments(content_host);
+    if (mounted_devices != qp::plugins::instruments::builtin_count()) {
+        qWarning().noquote() << "instruments: mounted" << mounted_devices << "of"
+                             << qp::plugins::instruments::builtin_count();
+    }
+#endif
 
     qp::views::EditorWindow window(content_host);
     // The application decides to seed itself; the window does not. One call, so the graph and

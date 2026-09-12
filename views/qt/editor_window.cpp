@@ -152,6 +152,10 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
     setCentralWidget(central);
 
     measurements_panel_ = new MeasurementPanel(measurements_, this);
+    // The device list comes from the host's registry, which is the composition root's answer to "what can
+    // measure" -- the same registry `plugins/instruments` registers into and a loaded plugin's devices would
+    // arrive in. The panel is handed the list rather than reaching for it, so there is one authority.
+    measurements_panel_->show_devices(content_->instruments());
     // An explicit **maximum** as well as the initial width below, and the maximum is what actually decides it: a
     // `QDockWidget` sizes itself from its child's size hint, and a `QTableWidget`'s hint grows with its content --
     // so a window that was resized wider handed the extra width to the dock rather than to the canvas, and the
@@ -884,21 +888,32 @@ void EditorWindow::measure_selection() {
         return;
     }
 
-    // The channel is chosen by **dimension**, not by position. A trace's first channel is whichever the
-    // operator happened to write first, and taking `values[0]` would make the reading depend on that
-    // ordering -- so a run that wrote velocity first would record a velocity into a length dataset and the
-    // dataset would normalise it into metres. The dimension is the only property that makes the reading
-    // belong to this session.
+    // The channel is chosen by **the instrument's dimension** where there is an instrument, and by the dataset's
+    // otherwise. That order is the point of this whole path: a caliper measures a length, so the channel it reads
+    // is the one measured in metres -- and choosing by the dataset's dimension instead would let a device whose
+    // quantity is time read a displacement, which `Dataset::add` would then silently normalise into metres.
+    //
+    // With no instrument chosen the dataset's dimension is the only answer available, and the fallback is
+    // explicit rather than silent: the status line says which route produced the reading.
+    const rt::UncertainValue* value = nullptr;
+    std::string measured_by;
+    const std::string device_id = measurements_panel_->chosen_device();
+    rt::IInstrument* device = device_id.empty() ? nullptr : content_->instruments().find(device_id);
+    const qp::units::Dim wanted = device != nullptr ? device->describe().dim : measurements_.dataset().dim();
+
     const std::vector<rt::Channel>& channels = trace.channels();
     std::size_t channel = channels.size();
     for (std::size_t i = 0; i < channels.size(); ++i) {
-        if (channels[i].dim == measurements_.dataset().dim()) {
+        if (channels[i].dim == wanted) {
             channel = i;
             break;
         }
     }
     if (channel == channels.size()) {
-        status_->setText(tr("The trace has no channel measured in this session's dimension"));
+        status_->setText(device != nullptr
+                             ? tr("The trace has no channel the %1 can measure")
+                                   .arg(QString::fromStdString(device->describe().label))
+                             : tr("The trace has no channel measured in this session's dimension"));
         return;
     }
 
@@ -910,17 +925,48 @@ void EditorWindow::measure_selection() {
         return;
     }
 
-    const rt::UncertainValue& value = last.values[channel];
-    measurements_.add_reading(value.value, value.kind, value.u,
+    if (device != nullptr) {
+        // **Through the fault barrier**, because a device is plugin code and a device that raises must not take
+        // the process with it -- the same rule the host applies when it calls one. The truth handed over is the
+        // model's own value with its own uncertainty discarded, and that is deliberate rather than sloppy: what
+        // this records is *a reading of that value*, so the error bar belongs to the instrument's graduations and
+        // not to the simulation. A student measuring a simulated length with a real caliper gets the caliper's
+        // uncertainty, which is the thing they are supposed to learn.
+        const auto reading = rt::measure_guarded(*device, last.values[channel].value, rt::MeasureContext{},
+                                                 device->describe().id, nullptr);
+        if (!reading.has_value()) {
+            status_->setText(tr("The %1 refused to measure that value")
+                                 .arg(QString::fromStdString(device->describe().label)));
+            return;
+        }
+        scratch_reading_ = reading.value();
+        value = &scratch_reading_;
+        measured_by = device->describe().label;
+    } else {
+        value = &last.values[channel];
+    }
+
+    measurements_.add_reading(value->value, value->kind, value->u,
                               rt::Measurement::Source{selected->index, selected->generation});
 
     // Refreshed **before** the status line, because the panel is what changed and a table that is
     // repainted a moment after the sentence describing it is the flicker that makes a window feel broken.
     refresh_panels();
-    status_->setText(tr("Recorded %1 from node %2 (%3)")
-                         .arg(value.value)
-                         .arg(selected->index)
-                         .arg(QString::fromStdString(channels[channel].name)));
+    // The sentence names the device when there was one, and says "the trace" when there was not. Which route
+    // produced a number is part of what the number claims -- a reading taken with a caliper and one copied out of
+    // a trace carry different uncertainties, and a status line that called both "recorded" would hide that.
+    if (measured_by.empty()) {
+        status_->setText(tr("Recorded %1 from node %2 (%3), as the trace has it")
+                             .arg(value->value)
+                             .arg(selected->index)
+                             .arg(QString::fromStdString(channels[channel].name)));
+    } else {
+        status_->setText(tr("Recorded %1 from node %2, measured with the %3 (+/- %4)")
+                             .arg(value->value)
+                             .arg(selected->index)
+                             .arg(QString::fromStdString(measured_by))
+                             .arg(value->u));
+    }
 }
 
 void EditorWindow::refresh_panels() {

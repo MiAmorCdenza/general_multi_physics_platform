@@ -128,13 +128,19 @@ target_link_libraries(qp_shell PRIVATE qp::views qp::host)
 # any. Defined here rather than in a header so the window cannot accidentally depend on it: `views`
 # must build with plugins absent, and a macro it could see would invite exactly that.
 #
-# Three mounts, because the application is the only place allowed to know which plugins exist: the
-# operators a run needs, the format a document is saved as, and the format a trace is exported as. The
-# window consults three lists it did not fill.
+# Four mounts, because the application is the only place allowed to know which plugins exist: the operators a run
+# needs, the format a document is saved as, the format a trace is exported as, and the devices a reading can be
+# taken with. The window consults four lists it did not fill.
 if(QP_BUILD_PLUGINS)
     target_compile_definitions(qp_shell PRIVATE QP_HAS_MECHANICS_PLUGIN)
     target_link_libraries(qp_shell PRIVATE qp::plugins::mechanics)
 
     target_compile_definitions(qp_shell PRIVATE QP_HAS_FORMAT_PLUGINS)
     target_link_libraries(qp_shell PRIVATE qp::plugins::qpjson qp::plugins::csv)
+
+    # The measuring devices, registered through the host's built-in path. Linked here rather than left to the
+    # plugin directory, so the device list is filled whether or not anything was loaded from disk -- which is the
+    # difference between "the platform can measure" and "the platform can measure once somebody ships a plugin".
+    target_compile_definitions(qp_shell PRIVATE QP_HAS_INSTRUMENTS_PLUGIN)
+    target_link_libraries(qp_shell PRIVATE qp::plugins::instruments)
 endif()

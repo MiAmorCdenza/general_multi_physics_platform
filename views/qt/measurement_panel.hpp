@@ -45,10 +45,13 @@
 #include <QWidget>
 
 #include <qp/graph/ir/ids.hpp>
+#include <qp/runtime/instrument/instrument.hpp>
 #include <qp/views/model/measurement_model.hpp>
 
 #include <optional>
+#include <string>
 
+class QComboBox;
 class QLabel;
 class QTableWidget;
 
@@ -71,6 +74,73 @@ class MeasurementPanel final : public QWidget {
 
 public:
     explicit MeasurementPanel(qp::views::model::MeasurementModel& model, QWidget* parent = nullptr);
+
+    /**
+     * @brief Fills the device list from a registry, and selects the first device.
+     *
+     * Separate from the constructor because the panel does not own the registry and must not: the devices, their
+     * descriptions and their lifetimes belong to the composition root, and a panel that reached for them itself
+     * would be deciding which registry is authoritative -- the same mistake the window already removed once by
+     * borrowing the host's node catalog instead of keeping its own.
+     *
+     * An **empty** registry is a legitimate state and the list says so rather than being empty: a build with no
+     * devices loaded cannot measure anything, and a blank combo box reads as a panel that failed to load.
+     *
+     * @param registry The devices to offer. Borrowed for the duration of the call only; the panel keeps **ids**,
+     *                 because a device's address is stable but its presence is not.
+     *
+     * @ownership   observes `registry` for the call
+     * @thread      ui
+     * @pre         none
+     * @post        The list shows one entry per registered device, in registration order
+     * @invariant   Selecting an entry changes nothing outside this widget
+     * @errors      Reports nothing: a widget cannot fail to be filled, and an empty registry is a state
+     * @complexity  O(devices)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.measurement.a_reading_comes_from_the_chosen_device
+     */
+    void show_devices(const qp::runtime::InstrumentRegistry& registry);
+
+    /**
+     * @brief The id of the device the user has chosen, or empty.
+     *
+     * An id rather than a pointer, and the difference is the point: a device may be unloaded while the panel still
+     * shows it, so a stored `IInstrument*` would be a dangling pointer the first time somebody took a reading. The
+     * caller resolves the id against the registry it borrowed the list from, which is the only place that knows
+     * whether the device is still there.
+     *
+     * @ownership   owns the returned string
+     * @thread      ui
+     * @pre         none
+     * @post        The chosen device's id, or empty when the list is empty
+     * @invariant   Empty exactly when no device is offered
+     * @errors      Reports nothing: a widget with no selection is a state, and asking for it is not a failure
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.measurement.a_reading_comes_from_the_chosen_device
+     */
+    [[nodiscard]] std::string chosen_device() const;
+
+    /**
+     * @brief Chooses a device by id, so a caller can drive the same path the list does.
+     *
+     * @param id The device id. An id not in the list leaves the choice unchanged.
+     *
+     * @ownership   observes `id` for the call
+     * @thread      ui
+     * @pre         none
+     * @post        `chosen_device() == id` when the list holds `id`
+     * @invariant   The model is not touched
+     * @errors      Reports nothing: an id the list does not hold leaves the choice as it was, which is the safe
+     *              answer for a device that was unloaded while the panel still showed it
+     * @complexity  O(devices)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.measurement.a_reading_comes_from_the_chosen_device
+     */
+    void choose_device(const std::string& id);
 
     /// @brief Rebuilds the table, the summary and the gap list from the model.
     ///
@@ -143,6 +213,7 @@ private:
 
     qp::views::model::MeasurementModel& model_;
     QTableWidget* table_ = nullptr;
+    QComboBox* devices_ = nullptr;
     QLabel* summary_ = nullptr;
     QLabel* gaps_ = nullptr;
 };

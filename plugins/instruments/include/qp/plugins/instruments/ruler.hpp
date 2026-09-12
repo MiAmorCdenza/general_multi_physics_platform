@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @file ruler.hpp
  * @brief A graduated scale: the simplest honest instrument, and the base every other one shares.
  *
@@ -253,7 +253,8 @@ public:
      * @frozen      no
      * @tests       instrument.ruler.reports_the_tick_it_can_see,
      *              instrument.ruler.a_reading_repeats_exactly,
-     *              instrument.ruler.a_broken_model_is_not_a_reading
+     *              instrument.ruler.a_broken_model_is_not_a_reading,
+     *              instrument.a_device_answers_through_the_fault_barrier
      */
     [[nodiscard]] qp::diag::Result<qp::runtime::UncertainValue> measure(
         double truth, const qp::runtime::MeasureContext& ctx) override;

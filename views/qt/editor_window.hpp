@@ -334,6 +334,13 @@ private:
     /// than during one. Tracked here so the seed can note it exactly once without the window having
     /// to ask an operator it does not own.
     bool clamps_noted_ = false;
+    /// @brief Storage for a reading an instrument produced, so the recorded value has a stable address.
+    ///
+    /// `measure_selection` builds the reading in one of two places -- an instrument's answer, or a sample's value
+    /// already inside the trace -- and then records it. A `const UncertainValue*` into the trace is fine because
+    /// the trace outlives the call; an instrument's answer is a temporary, so it lives here for the duration of
+    /// the call rather than being copied into a second local that a pointer could outlive.
+    qp::runtime::UncertainValue scratch_reading_{};
     QLabel* status_ = nullptr;
     std::unique_ptr<StatusBridge> status_bridge_;
     int next_node_index_ = 1;

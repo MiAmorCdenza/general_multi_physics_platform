@@ -7,6 +7,7 @@
 #include "theme.hpp"
 
 #include <QFont>
+#include <QComboBox>
 #include <QHeaderView>
 #include <QLabel>
 #include <QStringList>
@@ -66,6 +67,17 @@ MeasurementPanel::MeasurementPanel(model::MeasurementModel& model, QWidget* pare
     title_font.setBold(true);
     title->setFont(title_font);
     layout->addWidget(title);
+
+    // The device list, above the table because it decides what a reading **is**: the number in the first column
+    // is only a measurement when the instrument that produced it is named, and a table of values with the device
+    // out of sight is the artefact this platform exists to replace.
+    //
+    // The panel is filled by `show_devices` rather than here. It does not own the registry, and a panel that
+    // reached for one would be deciding whose devices are authoritative -- the same mistake the window already
+    // removed once when it kept a second node catalog.
+    devices_ = new QComboBox(this);
+    devices_->setToolTip(tr("The instrument a new reading is taken with"));
+    layout->addWidget(devices_);
 
     table_ = new QTableWidget(this);
     table_->setColumnCount(4);
@@ -189,6 +201,40 @@ void MeasurementPanel::refresh() {
     }
     gaps_->setText(lines.join(QStringLiteral("\n")));
     gaps_->setVisible(!lines.isEmpty());
+}
+
+void MeasurementPanel::show_devices(const qp::runtime::InstrumentRegistry& registry) {
+    devices_->clear();
+    for (qp::runtime::IInstrument* device : registry.all()) {
+        if (device == nullptr) continue;
+        const qp::runtime::InstrumentDesc& desc = device->describe();
+        // The **label**, not the id: a user chooses "Vernier caliper" from a bench, and the id is the record's
+        // business. Both are kept -- the label is what is shown, the id is what `chosen_device()` returns -- so a
+        // renamed label never breaks a caller and a caller never has to parse a display string.
+        devices_->addItem(QString::fromStdString(desc.label.empty() ? desc.id : desc.label),
+                          QString::fromStdString(desc.id));
+    }
+
+    // A build with no devices says so. A blank list is indistinguishable from a panel that failed to fill, and
+    // "there are no instruments" is a fact the user can act on: it means this build was assembled without them.
+    if (devices_->count() == 0) {
+        devices_->addItem(tr("no instruments in this build"), QString{});
+    }
+    devices_->setCurrentIndex(0);
+}
+
+std::string MeasurementPanel::chosen_device() const {
+    return devices_->currentData().toString().toStdString();
+}
+
+void MeasurementPanel::choose_device(const std::string& id) {
+    const QString wanted = QString::fromStdString(id);
+    for (int i = 0; i < devices_->count(); ++i) {
+        if (devices_->itemData(i).toString() == wanted) {
+            devices_->setCurrentIndex(i);
+            return;
+        }
+    }
 }
 
 QString MeasurementPanel::summary_text() const { return summary_->text(); }

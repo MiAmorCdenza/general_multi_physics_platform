@@ -760,6 +760,14 @@ if(QP_BUILD_VIEWS)
         ${CMAKE_SOURCE_DIR}/views/qt)
     target_link_libraries(qp_test_views_qt PRIVATE qp::views Catch2::Catch2)
 
+    # The instrument rack, because one case takes a reading **through** a real device: a stub would only prove
+    # that the window can call a stub, and what is under test is that the uncertainty in the table is the one the
+    # graduations imply. Guarded on the target, like the formats below, so a build without plugins omits it.
+    if(TARGET qp::plugins::instruments)
+        target_link_libraries(qp_test_views_qt PRIVATE qp::plugins::instruments)
+        target_compile_definitions(qp_test_views_qt PRIVATE QP_HAS_INSTRUMENTS)
+    endif()
+
     # The Qt-side cases cover the window's **wiring**, and the file menu's wiring ends in a format: the case
     # that saves and reopens a document needs the real one, because a stub would only prove that the window
     # can call a stub. Guarded on the target rather than on a variable, like the model test: with plugins off

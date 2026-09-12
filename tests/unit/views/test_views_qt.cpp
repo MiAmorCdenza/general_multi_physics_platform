@@ -62,6 +62,9 @@
 #include <qp/views/model/measurement_model.hpp>
 #include <qp/graph/ir/node_type_registry.hpp>
 #include <qp/host/host.hpp>
+#if defined(QP_HAS_INSTRUMENTS)
+#include <qp/plugins/instruments/instruments.hpp>
+#endif
 
 #include "editor_window.hpp"
 #include <QString>
@@ -1255,6 +1258,91 @@ TEST_CASE("qt.views.measurement.a_reading_points_at_its_node", "[views][qt]") {
     REQUIRE(canvas->prominence_of(scope) == 1.0);
 
     window.close();
+}
+
+TEST_CASE("qt.views.measurement.a_reading_comes_from_the_chosen_device", "[views][qt]") {
+#if !defined(QP_HAS_INSTRUMENTS)
+    // With no instrument plugin there is no device to choose, and the case is not compiled rather than being
+    // compiled against a stub: what it asserts is that the uncertainty in the table is the one the graduations
+    // imply, and a stub's graduations are the test's own opinion.
+    SUCCEED("built without the instruments plugin");
+#else
+    // **The loop with an instrument in it.** Without this, "Measure" was a button that copied a number out of the
+    // trace: the reading carried the trace's own uncertainty, which is the simulation's, and the device that a
+    // lab session is actually about never appeared. With it, the number is what the chosen instrument **reads**
+    // and the error bar is what its graduations imply -- the difference between 0.29 mm from a ruler and 0.014 mm
+    // from a caliper, which is the whole lesson.
+    //
+    // The devices are mounted by hand here rather than by the application, because a window has no opinion about
+    // which instruments exist: it reads whatever the host's registry holds. That is the property this also
+    // checks -- the panel is driven by the registry, so a loaded plugin's devices would appear in it unchanged.
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    REQUIRE(qp::plugins::instruments::mount_instruments(window_content) ==
+            qp::plugins::instruments::builtin_count());
+
+    qp::views::EditorWindow window{window_content};
+    window.seed_demo();
+
+    auto* canvas = window.findChild<qp::views::NodeGraphView*>();
+    auto* panel = window.findChild<qp::views::MeasurementPanel*>();
+    REQUIRE(canvas != nullptr);
+    REQUIRE(panel != nullptr);
+
+    // The list holds one entry per registered device, by id -- and the label is what is shown, so a renamed
+    // device never breaks a caller that selects by id.
+    REQUIRE(panel->chosen_device() == "builtin.rule");
+    panel->choose_device("builtin.caliper");
+    REQUIRE(panel->chosen_device() == "builtin.caliper");
+    // An id the list does not hold leaves the choice alone rather than clearing it: a device unloaded while the
+    // panel still showed it must not silently turn the next reading into an unattributed one.
+    panel->choose_device("no.such.device");
+    REQUIRE(panel->chosen_device() == "builtin.caliper");
+
+    const qp::graph::NodeId scope = window.session().graph().find_node_by_name("n3");
+    REQUIRE(scope.valid());
+    canvas->select_node(scope);
+
+    // The caliper's dimension is length, and the seeded trace's first channel is a displacement -- so the reading
+    // comes out of the trace, through the device's graduations.
+    const double truth = window.measurements().trace().samples().back().values[0].value;
+    window.measure_selection();
+
+    const std::size_t added = window.measurements().dataset().readings().size() - 1;
+    REQUIRE(added == 3);
+    const qp::runtime::UncertainValue& reading = window.measurements().dataset().readings()[added].reading;
+
+    // The **reading is the truth on a 0.05 mm tick**, and its uncertainty is the caliper's -- not zero, and not
+    // the trace's own. Both halves matter: a device that returned the truth unchanged would be claiming a
+    // precision it does not have, and one that returned the trace's uncertainty would be reporting the
+    // simulation's error as the instrument's.
+    const qp::plugins::instruments::GraduatedInstrument* caliper =
+        dynamic_cast<qp::plugins::instruments::GraduatedInstrument*>(
+            window_content.instruments().find("builtin.caliper"));
+    REQUIRE(caliper != nullptr);
+    const double tick = caliper->resolution();
+    REQUIRE(reading.value == std::round(reading.value / tick) * tick);
+    REQUIRE(reading.u == qp::runtime::resolution_uncertainty(tick));
+    REQUIRE(reading.kind == qp::runtime::UncertaintyKind::standard);
+    REQUIRE(reading.dim == window.measurements().dataset().dim());
+    // The tick is what makes it a measurement rather than a copy: the device moved the value.
+    REQUIRE(std::abs(reading.value - truth) <= tick);
+
+    // The reading still names its node, so the device tells us **with what** and the source tells us **where**.
+    const auto source = window.measurements().source_of(added);
+    REQUIRE(source.has_value());
+    REQUIRE(source->index == scope.index);
+
+    // And a second device measures the same truth to a different precision, which is the comparison a student is
+    // supposed to be able to make.
+    panel->choose_device("builtin.rule");
+    window.measure_selection();
+    const qp::runtime::UncertainValue& coarse =
+        window.measurements().dataset().readings().back().reading;
+    REQUIRE(coarse.u == qp::runtime::resolution_uncertainty(1.0e-3));
+    REQUIRE(coarse.u > reading.u);
+
+    window.close();
+#endif
 }
 
 int main(int argc, char** argv) {
