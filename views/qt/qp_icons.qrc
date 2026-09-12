@@ -1,0 +1,17 @@
+<!DOCTYPE RCC>
+<!--
+  The icon sheet, packaged as a Qt resource.
+
+  One file, not one per glyph, and that is the pixel-art shape rather than an economy: five glyphs on one 44x8
+  strip is what a sprite sheet is, and a resource with five images in it would be five chances for one to be
+  missed. `views/qt/icons.cpp` holds the bitmaps it was built from; `theme.icons_match_the_shipped_sheet`
+  rasterises the table and compares it against this file pixel for pixel, so the two cannot drift.
+
+  The prefix is `qp/icons` rather than empty: an empty prefix puts the file at the resource root, where a name
+  from any library could collide with it.
+-->
+<RCC>
+  <qresource prefix="/qp/icons">
+    <file alias="icons.png">resources/icons.png</file>
+  </qresource>
+</RCC>

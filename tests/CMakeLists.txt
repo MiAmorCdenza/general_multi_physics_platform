@@ -558,7 +558,8 @@ endforeach()
 add_executable(qp_test_host unit/host/test_host.cpp ${QP_TEST_MAIN})
 target_include_directories(qp_test_host PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(qp_test_host PRIVATE qp::host qp::runtime_file Catch2::Catch2)
-add_dependencies(qp_test_host ${QP_HOST_FIXTURE_TARGETS})
+# Both fixture sets: the host's own, and the loader's (see below).
+add_dependencies(qp_test_host ${QP_HOST_FIXTURE_TARGETS} ${QP_PLUGIN_FIXTURE_TARGETS})
 
 # The real target files, as generator expressions, exactly as the loader's fixtures are handed over -- and for
 # the same reason: reconstructing a toolchain's output name from a directory listing is testing a guess. MinGW
@@ -571,6 +572,17 @@ endforeach()
 # The directory the fixtures are built into, so a scan can be pointed at real libraries rather than at copies.
 file(TO_CMAKE_PATH "$<TARGET_FILE_DIR:qp_fixture_host_content>" _host_fixture_dir)
 list(APPEND QP_HOST_FIXTURE_DEFS "QP_HOST_FIXTURE_DIR=\"${_host_fixture_dir}\"")
+
+# The **loader's** fixtures are handed to the host test as well, and that is not redundancy.
+#
+# Those libraries are built from hand-written bytes that never link `qp::host`, so they are the only plugins in
+# this repository that a host did not build itself -- which is exactly the situation the host exists for. One
+# case in `test_host.cpp` mounts them through `PluginHost` and checks that a real, unmodified plugin library
+# reaches the mount table and is reported honestly.
+foreach(fixture IN LISTS QP_PLUGIN_FIXTURES)
+    file(TO_CMAKE_PATH "$<TARGET_FILE:qp_fixture_plugin_${fixture}>" _loader_path)
+    list(APPEND QP_HOST_FIXTURE_DEFS "QP_LOADER_FIXTURE_${fixture}=\"${_loader_path}\"")
+endforeach()
 
 target_compile_definitions(qp_test_host PRIVATE ${QP_HOST_FIXTURE_DEFS})
 

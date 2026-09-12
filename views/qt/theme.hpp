@@ -490,7 +490,7 @@ namespace qp::views::qt {
  * @complexity  O(size^2)
  * @nondet      none
  * @frozen      no
- * @tests       theme.icons_are_well_formed, theme.icons_use_palette_ink
+ * @tests       theme.icons_are_well_formed, theme.icons_match_the_shipped_sheet
  */
 [[nodiscard]] QIcon to_icon(icons::Glyph glyph, int size = 16) noexcept;
 

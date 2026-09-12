@@ -345,6 +345,92 @@ TEST_CASE("host.a_builtin_type_is_attributed_and_removable", "[host]") {
     CHECK(contains(h.mounted_ids(), kContentId));
 }
 
+TEST_CASE("host.mounts_and_refuses_the_loaders_own_fixtures", "[host]") {
+    // End to end with the fixtures this repository already had, and they are the right subject for a reason
+    // that is easy to miss: `tests/fixtures/plugin/` is built from **hand-written bytes** and deliberately does
+    // not link `qp::host`, so those libraries are the only plugins here that the host did not build itself.
+    //
+    // `good` is a well-formed plugin whose `register_into` returns ok and registers nothing -- which is a
+    // legitimate plugin, and the host has to say so rather than reporting a failure or inventing a contribution.
+    {
+        host::PluginHost h{kGrant};
+        const host::PluginOutcome good = h.load(QP_LOADER_FIXTURE_good);
+        INFO(good.detail);
+        REQUIRE(good.ok());
+        CHECK(good.id == "org.qp.fixture.good");
+        CHECK(good.name == "Fixture Good");
+        // Zero contributions, and reported as zero rather than omitted: "it loaded" and "it did something" are
+        // different claims, and a plugin that exists only to be depended on is a real arrangement.
+        CHECK(good.contributions == 0);
+        CHECK(contains(h.mounted_ids(), "org.qp.fixture.good"));
+        // It declared `node_types`, so it is a capability provider -- the host synthesises that from the
+        // manifest, which is the only thing a dynamically loaded plugin can offer today.
+        CHECK(h.capabilities().is_registered("org.qp.fixture.good"));
+        CHECK(h.capabilities().available("qp.plugin.node_types"));
+    }
+
+    // A directory scan over a real, unmodified plugin library. One file, in its own directory: the set has to be
+    // unambiguous for the reasons the next block makes concrete.
+    {
+        const test::TempDir tmp{"qp_host_loader"};
+        const FixtureDir dir{tmp, "real"};
+        dir.add(QP_LOADER_FIXTURE_good, name_of(QP_LOADER_FIXTURE_good));
+
+        host::PluginHost h{kGrant};
+        const host::LoadReport report = h.load_directory(dir.path(), "dll");
+        INFO(report.to_text());
+        REQUIRE(report.all_mounted());
+        CHECK(report.attempts() == 1);
+        REQUIRE(h.mounted_ids().size() == 1);
+        CHECK(h.mounted_ids()[0] == "org.qp.fixture.good");
+        CHECK(h.unload("org.qp.fixture.good").has_value());
+    }
+
+    // Two of the loader's well-formed fixtures **cannot both mount**, and this is the sharpest thing the real
+    // fixtures taught: `good` and `second` are both correct plugins and both declare `node_types`, and the
+    // capability registry serves one provider per capability id. So the second is refused with
+    // `duplicate_provider` even though its own manifest is fine and its dependency is present.
+    //
+    // That is a real constraint on plugin authors rather than a defect to paper over -- "who provides this" has
+    // to have one answer -- and it is asserted here, in a case built from libraries nobody wrote for it, because
+    // a rule that only appears when two plugins meet is a rule nobody learns from a unit test of one.
+    {
+        host::PluginHost h{kGrant};
+        REQUIRE(h.load(QP_LOADER_FIXTURE_good).ok());
+        const host::PluginOutcome second = h.load(QP_LOADER_FIXTURE_second);
+        INFO(second.detail);
+        REQUIRE_FALSE(second.ok());
+        CHECK(second.id == "org.qp.fixture.second");
+        CHECK(second.detail.find("duplicate_provider") != std::string::npos);
+        // And the refusal left nothing behind: the first plugin is untouched and the second is not mounted.
+        CHECK(h.mounted_ids().size() == 1);
+        CHECK(contains(h.mounted_ids(), "org.qp.fixture.good"));
+    }
+
+    // And the loader's malformed libraries, through the host: a missing entry point, a wrong tag and a wrong
+    // exports version each become one sentence naming the reason, and the host never maps what it would have
+    // contributed.
+    {
+        host::PluginHost h{kGrant};
+        const host::PluginOutcome no_entry = h.load(QP_LOADER_FIXTURE_no_entry);
+        REQUIRE_FALSE(no_entry.ok());
+        CHECK(no_entry.detail.find("qp_plugin_entry") != std::string::npos);
+
+        const host::PluginOutcome bad_tag = h.load(QP_LOADER_FIXTURE_bad_tag);
+        REQUIRE_FALSE(bad_tag.ok());
+        CHECK(bad_tag.detail.find("tag") != std::string::npos);
+
+        const host::PluginOutcome bad_version = h.load(QP_LOADER_FIXTURE_bad_version);
+        REQUIRE_FALSE(bad_version.ok());
+        // Not readable as a plugin: the exports version is checked before any pointer field is followed, so the
+        // manifest was never converted. The file name stands in as the identity, which is the honest answer --
+        // "this file" rather than a plugin name the host could not have read.
+        CHECK(bad_version.id == name_of(QP_LOADER_FIXTURE_bad_version));
+        CHECK(bad_version.detail.find("export block version") != std::string::npos);
+        CHECK(h.mounted_ids().empty());
+    }
+}
+
 TEST_CASE("host.scanning_a_directory_mounts_what_it_can_and_reports_the_rest", "[host]") {
     const test::TempDir tmp{"qp_host_scan"};
 

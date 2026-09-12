@@ -30,13 +30,15 @@
  * @invariant   Every row of a glyph has the same length, and every character is `.` or an index into `ink`
  * @errors      noexcept
  * @frozen      no
- * @tests       theme.icons_are_well_formed, theme.icons_use_palette_ink
+ * @tests       theme.icons_are_well_formed, theme.icons_use_palette_ink,
+ *              theme.icons_match_the_shipped_sheet
  */
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 #include <string_view>
+#include <vector>
 
 namespace qp::views::qt::icons {
 
@@ -165,5 +167,78 @@ enum class Glyph : std::uint8_t {
 [[nodiscard]] constexpr Glyph glyph_at(std::size_t i) noexcept {
     return i < count() ? static_cast<Glyph>(i) : Glyph::new_document;
 }
+
+/// @brief The resource path of the shipped sprite sheet, inside `icons.qrc`.
+///
+/// A resource rather than a file on disk: the sheet is part of the program, so an installed build cannot lose
+/// it by being moved, and nothing has to know where the executable lives.
+///
+/// @ownership   pure
+/// @thread      any
+/// @pre         none
+/// @post        Non-null, starts with ':'
+/// @invariant   Constant
+/// @errors      noexcept
+/// @frozen      no
+/// @tests       theme.icons_match_the_shipped_sheet
+inline constexpr const char* kSheetResource = ":/qp/icons/icons.png";
+
+/// @brief The gap between two glyphs in the sheet, in pixels. One transparent column.
+inline constexpr std::size_t kSheetStride = IconBitmap::kSize + 1;
+
+/**
+ * @brief The sprite sheet, as one row of palette indices per glyph.
+ *
+ * Read from `kSheetResource`, which `icons.qrc` packages. The result is the **same shape as the bitmap table**:
+ * `size()` glyphs of `IconBitmap::kSize` rows of `IconBitmap::kSize` bytes, each byte a palette index or `0xFF`
+ * for transparent. Greyscale rather than a palette PNG, because the palette lives in `theme.hpp` and a PLTE
+ * chunk in the file would be a second copy of it that nothing could keep in step.
+ *
+ * `pixels` is empty when the resource is missing or malformed -- a build that forgot to compile the `.qrc`. That
+ * is a total answer rather than a crash, and the test that compares this against the table is what turns the
+ * empty case into a failure with a name.
+ *
+ * @ownership   owns the returned sheet
+ * @thread      ui
+ * @pre         none
+ * @post        Either empty, or `rows == kSize` and every glyph column is `kSize` wide
+ * @invariant   Depends on nothing but the compiled-in resource
+ * @errors      noexcept
+ * @complexity  O(glyphs x size^2)
+ * @nondet      none
+ * @frozen      no
+ * @tests       theme.icons_match_the_shipped_sheet
+ */
+struct Sheet final {
+    /// One row of `glyph_count * kSize` bytes, `kSize` rows. Empty when unavailable.
+    std::vector<std::uint8_t> pixels{};
+    /// How many glyph columns the sheet holds.
+    std::size_t glyph_count = 0;
+    /// The sheet's own width in pixels, for a caller that wants to draw it whole.
+    std::size_t width = 0;
+    /// The sheet's own height in pixels.
+    std::size_t height = 0;
+
+    /// @brief Whether the sheet was read at all.
+    [[nodiscard]] bool valid() const noexcept { return !pixels.empty(); }
+    /// @brief Palette index at `(x, y)`, or `0xFF` when out of range.
+    [[nodiscard]] std::uint8_t at(std::size_t x, std::size_t y) const noexcept;
+    /// @brief Whether glyph column `g` has any opaque pixel.
+    [[nodiscard]] bool glyph_has_ink(std::size_t g) const noexcept;
+};
+
+/// @brief The shipped sheet, read once.
+///
+/// @ownership   borrows (a reference to a function-local constant)
+/// @thread      ui
+/// @pre         none
+/// @post        The same sheet every call
+/// @invariant   Read once, because decoding a PNG per icon would be a per-paint cost
+/// @errors      noexcept
+/// @complexity  O(1) after the first call
+/// @nondet      none
+/// @frozen      no
+/// @tests       theme.icons_match_the_shipped_sheet
+[[nodiscard]] const Sheet& sheet() noexcept;
 
 }  // namespace qp::views::qt::icons

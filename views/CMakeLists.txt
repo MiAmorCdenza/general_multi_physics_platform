@@ -75,6 +75,16 @@ add_library(qp_views STATIC
     qt/theme.hpp
     qt/icons.cpp
     qt/icons.hpp
+    # The icon sheet, compiled into the library by AUTORCC (on at the top of this file) and linked into every
+    # consumer. A plain `.qrc` source rather than `qt_add_resources`, for two reasons: the bitmap table in
+    # `qt/icons.cpp` is the source of truth and this only packages what `scripts/make_icon_sheet.py` rasterised
+    # from it, so no Qt-provided build step is wanted; and `qt_add_resources` protects its derived variables
+    # from escaping a directory scope, which is friction a STATIC library does not need.
+    #
+    # In the **library** rather than in the shell, so `qp_test_views_theme` links the same bytes the application
+    # ships. A resource compiled into an executable is invisible to a test that lives in another target, and
+    # "the shipped sheet matches the table" would then be a claim about a file no test could open.
+    qt/qp_icons.qrc
     src/hello_view.cpp
     include/qp/views/hello_view.hpp)
 

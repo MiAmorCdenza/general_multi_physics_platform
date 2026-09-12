@@ -386,6 +386,58 @@ TEST_CASE("theme.icons_use_palette_ink", "[views][theme]") {
     REQUIRE(opaque_in_row(2) < opaque_in_row(8));
 }
 
+TEST_CASE("theme.icons_match_the_shipped_sheet", "[views][theme]") {
+    // The sheet under `views/qt/resources/` is a **derived artefact** of the bitmap table in `icons.cpp`, and
+    // derived artefacts drift: somebody edits a glyph, or regenerates the sheet from a stale table, and the two
+    // disagree silently -- the palette would still paint and only the shape would be wrong.
+    //
+    // So they are compared pixel for pixel. That is what makes it safe to keep the sheet in the repository
+    // rather than generating it on every build: it cannot be stale without failing here.
+    using qp::views::qt::icons::Glyph;
+    using qp::views::qt::icons::IconBitmap;
+    using qp::views::qt::icons::count;
+    using qp::views::qt::icons::glyph_at;
+    using qp::views::qt::icons::kSheetStride;
+    using qp::views::qt::icons::sheet;
+
+    const qp::views::qt::icons::Sheet& art = sheet();
+    REQUIRE(art.valid());
+    REQUIRE(art.height == IconBitmap::kSize);
+    REQUIRE(art.glyph_count == count());
+    // One transparent column between glyphs, and nothing after the last one.
+    REQUIRE(art.width == count() * IconBitmap::kSize + (count() - 1));
+
+    for (std::size_t g = 0; g < count(); ++g) {
+        const Glyph glyph = glyph_at(g);
+        const IconBitmap& bitmap = qp::views::qt::icons::bitmap(glyph);
+        INFO("glyph " << g << " (" << qp::views::qt::icons::name(glyph) << ")");
+        REQUIRE(art.glyph_has_ink(g));
+
+        for (std::size_t y = 0; y < IconBitmap::kSize; ++y) {
+            for (std::size_t x = 0; x < IconBitmap::kSize; ++x) {
+                const char c = bitmap.rows[y][x];
+                // The table's index characters and the sheet's bytes are one alphabet: `0`..`3`, with `.`
+                // written as the sheet's transparent marker.
+                const std::uint8_t expected = c == '.' ? 0xFFU : static_cast<std::uint8_t>(c - '0');
+                REQUIRE(art.at(g * kSheetStride + x, y) == expected);
+            }
+        }
+
+        // The separator column is transparent in every row, or two glyphs touch and the sheet is unreadable as
+        // a sheet.
+        for (std::size_t y = 0; y < IconBitmap::kSize; ++y) {
+            REQUIRE(art.at(g * kSheetStride + IconBitmap::kSize, y) == 0xFFU);
+        }
+    }
+
+    // And the run-time path really rasterises: the `run` glyph becomes a 16-pixel image, so a resource that was
+    // packaged but never read would not pass by comparing the sheet to the table alone.
+    const QImage rendered = qp::views::qt::to_icon(Glyph::run, 16).pixmap(16, 16).toImage();
+    REQUIRE_FALSE(rendered.isNull());
+    REQUIRE(rendered.height() == 16);
+    REQUIRE(rendered.width() == 16);
+}
+
 TEST_CASE("theme.an_unknown_category_still_gets_a_colour", "[views][theme]") {
     // Total on purpose. An unrecognised category is a plugin's typo, and the node still has to be drawn -- in
     // the default group, where a user can see it and wonder, rather than not at all. A lookup that returned

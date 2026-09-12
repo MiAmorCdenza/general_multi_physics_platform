@@ -575,7 +575,8 @@ public:
      * @complexity  O(files log files) plus the plugins' own registration
      * @nondet      only through the filesystem
      * @frozen      no
-     * @tests       host.scanning_a_directory_mounts_what_it_can_and_reports_the_rest
+     * @tests       host.scanning_a_directory_mounts_what_it_can_and_reports_the_rest,
+     *              host.mounts_and_refuses_the_loaders_own_fixtures
      */
     [[nodiscard]] LoadReport load_directory(const std::string& directory,
                                             std::string_view extension = "");

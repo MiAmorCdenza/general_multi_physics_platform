@@ -427,6 +427,23 @@ L0 是本项目唯一不可插件化的部分，也是接口面必须最小的�
 `PluginHost::add_builtin_node_type` 而不是直接写注册表，所以它们和插件的贡献一样**可归因**
 （`origin_of` 答 `qp.builtin`）**可撤销**——绕过记录的那条路，正是记录要堵的洞。
 
+**C5 是断言，不是印象。** 调色板原本是四个文件里的 `QColor(0x..)` 字面量，「警示文字读不读得清」只能靠
+看截图回答、「色盲安全吗」根本答不了。现在它是 `views/qt/theme.hpp` 里的**数据**加两个公式——WCAG 2.1
+相对亮度与对比度、以及三种二色觉的线性光模拟——因此由普通 Catch2 套件在**两个编译器**上检查
+（`theme.contrast_is_measurable`、`theme.text_clears_wcag_aa`、`theme.meaning_survives_colour_blindness`、
+`theme.text_on_a_tinted_node_is_readable`）。把「看着像」换成量出来的数字之后，测试当场抓出三处真实缺陷：
+四个品类色在绿色盲下只差 0.019（重新搜索色相/亮度空间，最小间距 0.209）；节点整块填充时**任何**墨色在
+`#8C663F` 上最好只有 4.18:1，于是节点盒改成「品类色标题带 + `surface_raised` 正文」两段式；页脚在用
+`text_disabled`（2.5:1）承载节点的身份信息。
+
+**图标是数据，资源是派生物。** 位图与「每个墨色字符扮演什么角色」写在 `views/qt/icons.cpp`，角色是
+`Palette` 字段而不是字面量（`theme.icons_use_palette_ink` 要求每一个不透明像素都是调色板自己的颜色）。
+`scripts/make_icon_sheet.py` 把它们栅格化成一个 44×8 的灰度 PNG（0..3 是调色板下标、`0xFF` 透明），
+由 `views/qt/qp_icons.qrc` 打包进 `qp_views`；`theme.icons_match_the_shipped_sheet` 逐像素比较表与图，
+所以「仓库里存着一张派生图片」不会变成「图片悄悄过期」。**一个坑值得记下来**：`.qrc` 编译进**静态**库时，
+链接器会丢掉没有引用的目标文件，资源因此不会注册，`QImage::load` 在运行时静默失败——库内部必须有一次
+对生成符号的引用，且该符号的声明在全局作用域（`Q_INIT_RESOURCE` 在命名空间里会把声明也命名空间化）。
+
 ### 6.2 `plugins/` —— 内容（可整体删除）
 
 | 目录 | 内容 |
