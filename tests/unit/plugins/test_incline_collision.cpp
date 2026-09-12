@@ -328,7 +328,11 @@ TEST_CASE("plugin.mechanics.incline_rejects_unusable_input", "[plugin][mechanics
     REQUIRE(bad_velocity.step_is_refused(op, 1.0e-3));
 
     Batch fine = Batch::one(0.0, 0.0, 0.1);
-    for (const double bad_dt : {0.0, -1.0e-3, std::numeric_limits<double>::quiet_NaN()}) {
+    // A zero or non-finite step. A **negative** one is deliberately absent: the kernel contract admits it so a
+    // reversibility declaration can be falsified by running a round trip, and this scheme honours the sign --
+    // it is friction, so the round trip does not return, which is why `is_time_reversible()` is left false.
+    for (const double bad_dt : {0.0, std::numeric_limits<double>::quiet_NaN(),
+                                std::numeric_limits<double>::infinity()}) {
         REQUIRE(fine.step_is_refused(op, bad_dt));
     }
 

@@ -6,6 +6,7 @@
 
 #include <qp/graph/field/field.hpp>
 
+#include <cmath>
 #include <cstdint>
 #include <utility>
 
@@ -22,7 +23,7 @@ namespace execution = graph::execution;
 /// the description is legal without conversion -- the kernel reads and writes the state's own
 /// memory. Returned by value: it is 32 bytes of POD, and a reference would need a lifetime the
 /// caller has no reason to manage.
-[[nodiscard]] qp::abi::LatticeDesc describe(const execution::StateView& state) noexcept {
+[[nodiscard]] qp::abi::LatticeDesc describe_state(const execution::StateView& state) noexcept {
     qp::abi::LatticeDesc desc{};
     desc.kind = qp::abi::LatticeKind::line;
     desc.component = qp::abi::ComponentKind::vector;
@@ -49,6 +50,35 @@ std::unique_ptr<execution::IStateOperator> BatchOperator::make(
 
 std::string_view BatchOperator::name() const noexcept { return name_; }
 
+execution::SimModelDesc BatchOperator::describe() const noexcept {
+    // A default-constructed description, which is every field's timid answer -- and starting from it rather than
+    // naming each field is deliberate: a field added to `SimModelDesc` later is then deliberately false here
+    // instead of silently false, and the difference between those two is the whole point of the defaults.
+    //
+    // Not `IStateOperator::describe()`: that member is pure virtual, so calling it would be a link error rather
+    // than a set of defaults. The defaults live on the struct, not on the interface.
+    execution::SimModelDesc desc;
+    // Derived, not restated. `IBatchAdvancer::capabilities` says whether the kernel consumes the injected RNG,
+    // and a kernel that does is a function of `(state, dt, rng)` -- so replaying it needs the stream too, and
+    // the step alone does not determine the next state. Saying `is_pure == true` for such a kernel would put
+    // "reproducible" on a run that is only reproducible if the stream is recorded as well.
+    const kernels::Capability caps = advancer_->capabilities();
+    desc.is_pure = !kernels::has_capability(caps, kernels::Capability::is_stochastic);
+    // Asked of the scheme rather than guessed from its name. A time-reversible scheme returns bit-identically
+    // for a self-inverse step, which is what a zero tolerance claims; anything else leaves this false.
+    desc.time_reversible = advancer_->is_time_reversible();
+    desc.round_trip_tolerance = 0.0;
+    // The two that belong to the mapping rather than to the scheme. This adapter hands the kernel a batch that
+    // aliases the caller's own buffer and accumulates a step index; neither is shared with another instance.
+    desc.is_independent_of_other_instances = true;
+    // Conservative, and deliberately so: the adapter does not know whether the kernel's arithmetic respects the
+    // units the node declared, and `IBatchAdvancer` has nowhere to say. A scheme that wants the stronger claim
+    // needs a field of its own -- guessing "yes" here would be the adapter asserting physics on a kernel's
+    // behalf, which is the one thing this layer exists not to do.
+    desc.is_dimensionally_consistent = false;
+    return desc;
+}
+
 diag::Result<void> BatchOperator::step(execution::StateView& state, double dt) {
     if (!state.is_consistent()) return diag::ErrorCode::invalid_argument;
     // A layout this adapter cannot describe is refused rather than described wrongly. The ABI admits
@@ -56,10 +86,12 @@ diag::Result<void> BatchOperator::step(execution::StateView& state, double dt) {
     // `abi::is_consistent` rejects -- so the failure would surface later, in the kernel, as a
     // type mismatch that names the batch rather than the caller who chose the layout.
     if (state.components_per_particle != kSupportedComponents) return diag::ErrorCode::type_mismatch;
-    if (!(dt > 0.0)) return diag::ErrorCode::invalid_argument;
+    // Non-zero and finite, not positive: a negative step is what a round trip needs, and a round trip is how
+    // the model's reversibility declaration is checked rather than trusted.
+    if (!std::isfinite(dt) || dt == 0.0) return diag::ErrorCode::invalid_argument;
 
     field::FieldValue view;
-    view.desc = describe(state);
+    view.desc = describe_state(state);
     // Writable through a const pointer, which is what `FieldValue` offers: a field is normally
     // something a reader samples, and the batch contract makes the output side writable. The cast is
     // confined to this one place so there is exactly one site to audit, and it is reached only after

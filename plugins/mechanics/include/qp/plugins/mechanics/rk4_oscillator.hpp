@@ -146,6 +146,32 @@ public:
     [[nodiscard]] graph::kernels::Capability capabilities() const noexcept override;
 
     /**
+     * @brief Whether this scheme undoes its own step. **Yes**, and the reason is worth stating.
+     *
+     * The textbook answer is "Runge-Kutta is not symplectic, so it is not reversible", and measuring it says
+     * otherwise: one `+dt` step followed by one `-dt` step returns to the start to about `1e-15` relative per
+     * step, accumulating with the number of steps but never growing with time the way a truncation error
+     * would. Non-symplectic and non-reversible are two different properties, and RK4 has only the first -- the
+     * energy it loses is a separate phenomenon from the round trip it can undo.
+     *
+     * The claim is checked rather than trusted, by
+     * `plugin.mechanics.oscillator_round_trips_to_its_start`, which runs the round trip; a scheme that declared
+     * this and then refused a negative `dt` would fail that case, which is why `advance` accepts one.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        Returns true
+     * @invariant   Constant for the object's lifetime
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.mechanics.oscillator_round_trips_to_its_start
+     */
+    [[nodiscard]] bool is_time_reversible() const noexcept override;
+
+    /**
      * @brief Reads `omega` out of the parameter block, or refuses the block.
      *
      * @ownership   observes

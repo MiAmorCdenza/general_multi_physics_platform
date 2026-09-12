@@ -457,6 +457,51 @@ public:
     [[nodiscard]] virtual Capability capabilities() const noexcept = 0;
 
     /**
+     * @brief Whether one `+dt` advance followed by one `-dt` advance returns to the starting state.
+     *
+     * ## Why a scheme has to say this
+     *
+     * Reversibility is the property that separates two integrators which are indistinguishable in a forward
+     * run, and it is the one a physics course actually asks about: "run it forward, run it back, are you where
+     * you started" is an experiment a student can perform, and the answer differs between methods that both put
+     * an oscillator on an orbit.
+     *
+     * **Measured before it was written**, because the first guess was wrong. RK4 on a harmonic oscillator,
+     * `x0 = 1`, `v0 = 0`, `omega = 2`, relative round-trip error `max|x-x0| / |x0|`:
+     *
+     *     1 step    at dt=1e-2 : 8.9e-13        100 steps at dt=1e-2 : 8.9e-11
+     *     1 step    at dt=1e-3 : 6.7e-16        100 steps at dt=1e-3 : 8.9e-14
+     *
+     * It accumulates -- a thousand steps is worse than ten -- but it accumulates from rounding rather than from
+     * truncation, so the answer is **yes** and the error stays around `1e-15` per step instead of growing with
+     * time. The distinction is not academic and it is not guessable: an earlier draft of this comment asserted
+     * the opposite and justified a `false` declaration with a measurement that had read the *state's* own
+     * magnitudes instead of the error. The declaration is only worth having because the number behind it was
+     * taken from a run.
+     *
+     * The default is `false`, and that matters as much as the field: a scheme that has not thought about this
+     * says nothing, and a run built on it cannot be reported as reversible.
+     *
+     * ## What `true` obliges a scheme to do
+     *
+     * Accept a **negative** `dt`. A scheme that declares this and then refuses `dt < 0` has made a claim nothing
+     * can check, which is exactly what `execution.model.a_time_reversible_operator_round_trips` exists to
+     * refuse: it runs the round trip and fails if the scheme will not take it.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        none
+     * @invariant   Constant for the object's lifetime; false for an operator declaring `is_stochastic`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.model.a_time_reversible_operator_round_trips
+     */
+    [[nodiscard]] virtual bool is_time_reversible() const noexcept { return false; }
+
+    /**
      * @brief Load-time validation and one-off setup.
      *
      * Called **before** any step runs, so that a parameter block the operator
@@ -479,6 +524,12 @@ public:
 
     /**
      * @brief Advances the batch by one step.
+     *
+     * @param batch The state. `in` and `out` may alias when the operator is in-place.
+     * @param ctx   The step context. `ctx.dt` is **non-zero and finite**; negative is legal, because a
+     *              round trip is how `is_time_reversible` is checked and a claim nothing can falsify is a
+     *              comment. A scheme that cannot honour a negative step must refuse it rather than
+     *              substituting a magnitude.
      *
      * @ownership   observes
      * @thread      eval

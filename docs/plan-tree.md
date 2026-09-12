@@ -212,8 +212,55 @@ L0 是本项目唯一不可插件化的部分，也是接口面必须最小的�
 | 不做 | 偶极、磁尾、T04、包络 —— 全是插件 |
 | 依赖 | `abi` |
 
----
+### 3.9 `core/graph/execution/` —— 运行循环与仿真模型契约
 
+| 项 | 内容 |
+|---|---|
+| 职责 | 把一个节点驱动成一个算子、按步推进、记录成迹；以及**声明一个模型是什么** |
+| 关键类型 | `IStateOperator`, `SimModelDesc`, `StateView`, `IOperatorBinder`, `GraphRun`, `check_run` |
+| 关键决策 | 循环**刻意不依赖 `kernels`**：这里的算子只有两个方法，绑到 `IBatchAdvancer` 上会得到一个只能驱动批算子的循环；适配器属于插件，紧挨着它适配的代码 |
+| 关键决策 | 第一个采样在第一步**之前**，所以 `n` 步的迹有 `n+1` 个采样；失败的步**保留已采样的部分** |
+| 依赖 | `ir`, `structure`, `run`, `store`, `trace`, `validate`, `plugin`（C4 故障屏障） |
+
+**`ISimModel` 这个名字没有被用来造一个同名的东西。** 章程 C6 要求 `IInstrument` 与 `ISimModel`
+同时立项，而「推进状态的模型」在本仓库里已经以 `IStateOperator`（运行循环驱动的那一个）与
+`kernels::IBatchAdvancer`（原生算子）的具体形式存在。再造一个同名接口去满足一个名词，只会得到两个
+「模型」概念。补的是真正缺的那一半：**模型必须说清自己是什么**——`IStateOperator::describe()`
+返回 `SimModelDesc`，四个字段，每一条都是**可证伪**的断言而不是注释：
+
+| 字段 | 断言 | 谁去证伪 |
+|---|---|---|
+| `is_pure` | 同输入同输出，迹可重放 | `execution.model.a_pure_step_is_replayable`（逐位比较） |
+| `time_reversible` + `round_trip_tolerance` | 一步 `+dt` 接一步 `-dt` 回到起点 | `execution.model.a_time_reversible_operator_round_trips`（真的跑一次往返） |
+| `is_dimensionally_consistent` | 算术遵守节点声明的单位 | `execution.model.a_dimensionally_wrong_step_leaves_the_bound`（守恒量） |
+| `is_independent_of_other_instances` | 两个实例/两次运行互不干扰 | `execution.model.interleaved_instances_do_not_disturb_each_other`（交错推进后逐位比较） |
+
+**四个默认值都是怯懦的答案**（全 `false`）。什么都没声明的实现就是什么都没声明，据它生成的报告
+不能比这更乐观；乐观的默认值会把「可复现」「物理自洽」印在一次其算子从未如此声称的运行上。
+
+**`describe()` 是纯虚、没有默认实现**——一个默认实现就是一条没有人做过的声明。
+
+**往返（round trip）不是「反解 ODE」。** 后者要解方程，前者只要把同一个规则用相反的符号再走一遍，
+所以它正好落在运行循环自己的协议里：不需要第二套系统，也不需要参考解。这也是为什么算子的 `dt`
+约定从「必须为正」放宽为「非零且有限，**负数合法**」：一个无法被证伪的声明就是注释。
+`GraphRun::run` 仍然只走正向（`dt > 0`）——迹是时间序列，它的采样时刻必须非降——**宽的那一侧在算子、
+窄的那一侧在运行**，两处都写明了理由。
+
+**这一条是量出来的，不是想出来的，而且第一版是错的。** 直觉答案是「RK4 不是辛格式，所以不可逆」，
+于是第一版把 `is_time_reversible()` 声明为 `false`，并附上一份「往返误差随时间增长」的测量——
+那份测量读的是**状态自身的量级**而不是误差。逐值打印之后真相相反：RK4 在简谐振子上
+`x0=1, v0=0, omega=2` 的一步往返相对误差约 `8.9e-13`（`dt=1e-2`）、一百步约 `8.9e-11`，
+**随步数累积但源自舍入而不是截断**，所以答案是**是**。非辛与不可逆是两件不同的事，RK4 只占第一件。
+现在这个声明由 `plugin.mechanics.oscillator_round_trips_to_its_start` 真的跑往返来检查。
+
+**`kernels::IBatchAdvancer::is_time_reversible()` 有默认实现（`false`）**，与 `describe()` 的纯虚
+不同：新增一个虚函数会让已有的每个内核都编不过，而「这个格式可逆吗」有一个安全答案。
+`BatchOperator::describe()` 把内核的能力集映射成运行循环的四个字段，其中两个是**推导**的：
+`is_pure` 就是「不消耗 RNG」，`time_reversible` 来自内核自己的声明；另外两个是适配器自己的性质，
+而 `is_dimensionally_consistent` 保守地留 `false`——适配器不知道内核的算术是否守单位，
+`IBatchAdvancer` 也没地方说，替内核断言物理正是这一层最不该做的事。
+
+---
 ## 4. L2 —— 运行与数据（`core/runtime/`）
 
 > **这一层是上一轮分析中发现"缺失"的部分。** 旧工程的抽象里只有"图 + 版本号 + 槽位"，

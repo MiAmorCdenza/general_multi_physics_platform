@@ -92,7 +92,11 @@ diag::Result<void> InclineFriction::advance(const kernels::BatchView& batch,
     if (!batch.valid()) return diag::ErrorCode::invalid_argument;
 
     const double dt = ctx.dt;
-    if (!std::isfinite(dt) || dt <= 0.0) return diag::ErrorCode::invalid_argument;
+    // Non-zero and finite, not positive: the kernel contract admits a negative step so that a reversibility
+    // declaration can be falsified. This scheme has friction, so a round trip does **not** return -- the
+    // honest declaration is `is_time_reversible() == false`, which is the default it leaves alone, and the
+    // negative step is honoured so that the demonstration is a measurement rather than an assertion.
+    if (!std::isfinite(dt) || dt == 0.0) return diag::ErrorCode::invalid_argument;
 
     if (writable_elements(*batch.in) == nullptr) return diag::ErrorCode::type_mismatch;
     if (writable_elements(*batch.out) == nullptr) return diag::ErrorCode::type_mismatch;

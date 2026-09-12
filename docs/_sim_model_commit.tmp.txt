@@ -1,0 +1,49 @@
+core/graph/execution: the simulation-model contract, and it is falsifiable
+
+Charter C6 requires `IInstrument` and `ISimModel` to be established together, and the
+`ISimModel` half already exists in this repository in concrete form: `IStateOperator` is
+"something that advances a state", and `kernels::IBatchAdvancer` is its native-operator
+sibling. Inventing a same-named interface to satisfy a noun would produce two concepts of
+"model". What was genuinely missing is the other half of the contract -- a model having to
+say **what it is** -- and that is `IStateOperator::describe()`.
+
+`SimModelDesc` is four fields, and each one is a claim the platform can check rather than a
+sentence in a comment:
+
+  is_pure                            replayed step for step, compared bit for bit
+  time_reversible + tolerance        a real `+dt` then `-dt` round trip
+  is_dimensionally_consistent        a conserved quantity a wrong step cannot respect
+  is_independent_of_other_instances  two operators interleaved, then compared bit for bit
+
+All four defaults are the timid answers, and `describe()` is pure virtual with no default:
+a default implementation would be a declaration nobody made. `IBatchAdvancer::
+is_time_reversible()` does have a default (`false`), because adding a pure virtual there
+would break every existing kernel and "is this scheme reversible" has a safe answer.
+
+So the operator `dt` contract widens from "positive" to "non-zero and finite, negative
+legal" -- a claim nothing can falsify is a comment. `GraphRun::run` still only goes forward
+(`dt > 0`), because a trace's sample times must not decrease: the permissive side is the
+operator and the narrow side is the run, and both say why.
+
+The reversibility declaration was **measured, and the first version was wrong**. The
+reflexive answer is "RK4 is not symplectic, therefore not reversible", so the first draft
+declared false and justified it with a measurement showing the round-trip error growing with
+time -- a measurement that had read the *state's* own magnitudes instead of the error.
+Printing the values showed the opposite: one step returns to within ~8.9e-13 relative,
+a hundred steps to ~8.9e-11, accumulating from rounding rather than truncation. Non-symplectic
+and non-reversible are two different properties and RK4 has only the first. The declaration
+is now `true` and is checked by `plugin.mechanics.oscillator_round_trips_to_its_start`.
+
+`BatchOperator::describe()` maps a kernel's capability set into the run loop's vocabulary,
+deriving two of the four answers (`is_pure` is exactly "does not consume the RNG";
+`time_reversible` comes from the scheme) and leaving `is_dimensionally_consistent` false,
+because an adapter asserting physics on a kernel's behalf is the one thing that layer exists
+not to do.
+
+Two test-side corrections are recorded rather than quietly made, because both were assertions
+that "looked right": a declared round-trip tolerance of zero cannot be demanded bit-exactly
+(the failing value was a subnormal printed as `0.0`), and from a state at rest a `+dt` and a
+`-dt` step give the *same* displacement with opposite velocities, so the obvious pair of
+inequalities is simply false.
+
+GCC 661/661, MSVC 662/662; all four contract partitions and the static gates green.

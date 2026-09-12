@@ -26,6 +26,7 @@
 
 #include <qp/graph/field/field.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -274,9 +275,14 @@ TEST_CASE("plugin.mechanics.oscillator_rejects_bad_batch", "[plugin][mechanics]"
         REQUIRE_FALSE(op.advance(batch, ctx).has_value());
     }
 
-    // A non-positive or non-finite step is refused. dt = 0 would report success and
-    // advance nothing, which a run loop counting steps would never notice.
-    for (const double bad : {0.0, -0.01, std::numeric_limits<double>::quiet_NaN()}) {
+    // A zero or non-finite step is refused. `dt = 0` would report success and advance nothing, which a run
+    // loop counting steps would never notice.
+    //
+    // A **negative** step is deliberately not in this list. The kernel contract admits it so that the
+    // reversibility declaration can be falsified by running a round trip, and this scheme honours it: see
+    // `plugin.mechanics.oscillator_is_not_time_reversible`, which uses exactly that to show the answer is no.
+    for (const double bad : {0.0, std::numeric_limits<double>::quiet_NaN(),
+                             std::numeric_limits<double>::infinity()}) {
         State state = State::one(1.0, 0.0);
         field::FieldValue out = state.view();
         kernels::BatchView batch;
@@ -287,6 +293,66 @@ TEST_CASE("plugin.mechanics.oscillator_rejects_bad_batch", "[plugin][mechanics]"
         ctx.dt = bad;
         REQUIRE_FALSE(op.advance(batch, ctx).has_value());
     }
+}
+
+TEST_CASE("plugin.mechanics.oscillator_round_trips_to_its_start",
+          "[plugin][mechanics]") {
+    // The measurement that decided `is_time_reversible`, kept as a test so it cannot rot into an assertion --
+    // and the case is worth reading because the intuitive answer is **wrong**. "Runge-Kutta is not symplectic,
+    // therefore it is not reversible" is the textbook reflex, and measurement says otherwise: one `+dt` step
+    // followed by one `-dt` step returns to the start to about 1e-15 relative per step. Non-symplectic and
+    // non-reversible are two different properties, and this scheme has only the first. Its energy drift, which
+    // the case above measures, is a separate phenomenon from the round trip it can undo.
+    Rk4Oscillator op;
+    prepare(op, 2.0);
+    REQUIRE(op.is_time_reversible());
+
+    /// @brief One `+dt` or `-dt` step, through the same aliased batch a host hands over.
+    const auto step_once = [&op](State& state, double dt) {
+        field::FieldValue view = state.view();
+        kernels::BatchView batch;
+        batch.in = &view;
+        batch.out = &view;
+        batch.count = state.count();
+        kernels::AdvanceContext ctx;
+        ctx.dt = dt;
+        REQUIRE(op.advance(batch, ctx).has_value());
+    };
+
+    /// @brief `steps` forward and then `steps` back, returning the relative round-trip error.
+    const auto round_trip_error = [&step_once](int steps, double dt) {
+        State state = State::one(1.0, 0.0);
+        for (int i = 0; i < steps; ++i) step_once(state, dt);
+        for (int i = 0; i < steps; ++i) step_once(state, -dt);
+        return std::max(std::abs(state.x() - 1.0), std::abs(state.v()));
+    };
+
+    // Rounding, not truncation: the error is near machine epsilon for one step at either step size, and a
+    // thousand steps is still far below anything a plot would show. A scheme whose round trip drifted with the
+    // truncation error would be orders of magnitude above this, which is what makes the threshold meaningful
+    // rather than decorative.
+    REQUIRE(round_trip_error(1, 1.0e-2) < 1.0e-12);
+    REQUIRE(round_trip_error(1, 1.0e-3) < 1.0e-12);
+    REQUIRE(round_trip_error(1000, 1.0e-2) < 1.0e-9);
+
+    // It accumulates, so it is not *exactly* reversible, and saying so is what keeps the claim honest: a
+    // thousand steps is a worse round trip than one step.
+    REQUIRE(round_trip_error(1000, 1.0e-2) > round_trip_error(1, 1.0e-2));
+
+    // The sign is honoured rather than folded away, which is what makes the measurement above about this scheme
+    // rather than about a guard. What the correction is worth recording: the obvious pair of assertions here --
+    // `forward.v() != backward.v()` and `forward.x() != backward.x()` -- both **fail**, and not because the sign
+    // is ignored. From a state at rest, `+dt` and `-dt` give the same displacement and exactly opposite
+    // velocities, because the `dt^2` term of the position series does not see the sign and the `dt` term of the
+    // velocity does. Plain value-by-value printing is what showed it, after an assertion that "looked right"
+    // said otherwise.
+    State forward = State::one(1.0, 0.0);
+    State backward = State::one(1.0, 0.0);
+    step_once(forward, 1.0e-2);
+    step_once(backward, -1.0e-2);
+    REQUIRE(forward.v() == -backward.v());
+    REQUIRE(forward.v() != 0.0);
+    REQUIRE(forward.x() == backward.x());
 }
 
 TEST_CASE("plugin.mechanics.oscillator_stays_on_its_orbit", "[plugin][mechanics]") {

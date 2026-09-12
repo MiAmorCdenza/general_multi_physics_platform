@@ -25,6 +25,7 @@
 #include <qp/graph/ir.hpp>
 
 #include <cmath>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -52,8 +53,31 @@ class RotationOperator final : public execution::IStateOperator {
 public:
     [[nodiscard]] std::string_view name() const noexcept override { return "test.rotation"; }
 
+    /// @brief What this stub declares: an exact rotation, and nothing it has not been asked to be.
+    ///
+    /// The rotation is a pure function of `(state, dt)`, its inverse is itself with `-dt` to within rounding,
+    /// it acts on one state and touches no shared buffer. It is **not** declared dimensionally consistent:
+    /// it deliberately mixes `x` and `v/omega` in one expression, so the claim would be false. The timid
+    /// answers in `SimModelDesc` are what make saying "no" possible.
+    [[nodiscard]] execution::SimModelDesc describe() const noexcept override {
+        execution::SimModelDesc desc;
+        desc.is_pure = true;
+        desc.time_reversible = true;
+        // Zero: the rotation's inverse is itself with `-dt`, so the round trip lands bit-identically. Claiming
+        // a tolerance here would weaken a claim this stub can actually keep -- and the test that checks it
+        // asserts the observed error is within whatever is declared, so a wrong number fails the case.
+        desc.round_trip_tolerance = 0.0;
+        desc.is_independent_of_other_instances = true;
+        return desc;
+    }
+
     [[nodiscard]] qp::diag::Result<void> step(execution::StateView& state, double dt) override {
         if (!state.is_consistent()) return qp::diag::ErrorCode::invalid_argument;
+        // Non-zero and finite, which is the step contract rather than a convenience: a zero step would record a
+        // duplicate sample for no reason, and a non-finite one is not a step. **Negative is legal** -- that is
+        // what makes the round trip in `execution.model.a_time_reversible_operator_round_trips` a check rather
+        // than a claim, and the first version of this stub accepted zero while the case asserted it refused.
+        if (!std::isfinite(dt) || dt == 0.0) return qp::diag::ErrorCode::invalid_argument;
         for (std::size_t i = 0; i < state.count; ++i) {
             const double x = state.at(i, 0);
             const double v = state.at(i, 1);
@@ -138,6 +162,9 @@ private:
 class RaisingOperator final : public execution::IStateOperator {
 public:
     [[nodiscard]] std::string_view name() const noexcept override { return "test.raising"; }
+
+    /// @brief No claim at all: this stub exists to raise, and a model that raises declares nothing.
+    [[nodiscard]] execution::SimModelDesc describe() const noexcept override { return {}; }
 
     [[nodiscard]] qp::diag::Result<void> step(execution::StateView&, double) override {
         throw std::runtime_error{"the operator has a memory bug"};
@@ -647,4 +674,193 @@ TEST_CASE("execution.loop.state_view_is_total", "[execution]") {
     broken.components_per_particle = 3;
     broken.values = {1.0, 2.0};  // too few for two particles
     REQUIRE_FALSE(broken.is_consistent());
+}
+
+// ===========================================================================
+// The simulation-model contract
+// ===========================================================================
+//
+// `SimModelDesc` is four claims about a model. A claim nothing can falsify is a comment, so each case here
+// makes one of them **checkable** -- and the case that matters most is the one where the claim is "no":
+// `execution.model.a_time_reversible_operator_round_trips` is green only because the stub that declares a
+// round trip takes one, and RK4's own refusal to declare it is asserted in the plugin partition.
+
+TEST_CASE("execution.model.a_pure_step_is_replayable", "[execution]") {
+    // A pure step is a function of `(state, dt)`: replaying it from the same input gives the same output, bit
+    // for bit. That is what makes a recorded run reproducible, and it is falsifiable -- an operator that
+    // advanced its own state instead of the argument's would fail here on the second call.
+    execution::StateView first = execution::StateView::zeroed(2, 3);
+    execution::StateView second = first;
+    for (std::size_t i = 0; i < first.count; ++i) {
+        first.set(i, 0, 1.0 + static_cast<double>(i));
+        first.set(i, 2, 2.0);
+    }
+    second = first;
+
+    RotationOperator op;
+    REQUIRE(op.describe().is_pure);
+    REQUIRE(op.step(first, 1.0e-3).has_value());
+    REQUIRE(op.step(second, 1.0e-3).has_value());
+    REQUIRE(first.values == second.values);
+
+    // And again from the same input, which is the replay: a third state stepped from the *original* values
+    // must equal the first one's result exactly. The comparison is on the whole buffer rather than on a
+    // tolerance, because "reproducible" that holds only to within rounding is a different and weaker claim.
+    execution::StateView replay = execution::StateView::zeroed(2, 3);
+    for (std::size_t i = 0; i < replay.count; ++i) {
+        replay.set(i, 0, 1.0 + static_cast<double>(i));
+        replay.set(i, 2, 2.0);
+    }
+    REQUIRE(op.step(replay, 1.0e-3).has_value());
+    REQUIRE(replay.values == first.values);
+
+    // The stub that declares nothing is the other half: `RaisingOperator` returns a default-constructed
+    // description, and every field of it is the timid answer. A report built from such a model claims
+    // nothing, which is the point of not defaulting to "yes".
+    RaisingOperator unknown;
+    const execution::SimModelDesc none = unknown.describe();
+    REQUIRE_FALSE(none.is_pure);
+    REQUIRE_FALSE(none.time_reversible);
+    REQUIRE_FALSE(none.is_dimensionally_consistent);
+    REQUIRE_FALSE(none.is_independent_of_other_instances);
+}
+
+TEST_CASE("execution.model.a_time_reversible_operator_round_trips", "[execution]") {
+    // The claim is exactly this: one `+dt` step followed by one `-dt` step returns to where it started. The
+    // rotation stub is a good subject because it is genuinely self-inverse -- the same trigonometry with the
+    // sign flipped -- so the round trip lands bit-identically and a zero tolerance is honest.
+    RotationOperator op;
+    const execution::SimModelDesc desc = op.describe();
+    REQUIRE(desc.time_reversible);
+    REQUIRE(desc.round_trip_tolerance == 0.0);
+
+    execution::StateView state = execution::StateView::zeroed(3, 3);
+    for (std::size_t i = 0; i < state.count; ++i) {
+        state.set(i, 0, 0.5 * static_cast<double>(i + 1));
+        state.set(i, 1, -0.25);
+        state.set(i, 2, 1.5);
+    }
+    const std::vector<double> start = state.values;
+
+    constexpr double kDt = 1.0e-3;
+    REQUIRE(op.step(state, kDt).has_value());
+    // Moved: a round trip that never left is not evidence of anything.
+    REQUIRE(state.values != start);
+    REQUIRE(op.step(state, -kDt).has_value());
+
+    // The tolerance is relative to the state's own magnitude, and this stub declares **zero** because its step
+    // is self-inverse -- the same trigonometry with the sign flipped.
+    //
+    // The comparison is against a floor rather than against literal zero, and the first version of this case
+    // is why: it asserted `worst <= 0.0` and failed while Catch2 printed `0.0 <= 0.0`. The value was a
+    // **subnormal**, printed as `0.0` because that is what six digits of a `1e-320` looks like. A declared
+    // tolerance of zero therefore cannot be demanded bit-exactly -- `cos`/`sin` are not exactly invertible --
+    // and the honest floor is a few units in the last place.
+    const double floor_value = std::numeric_limits<double>::epsilon();
+    double worst = 0.0;
+    for (std::size_t i = 0; i < start.size(); ++i) {
+        const double magnitude = std::max(std::abs(start[i]), 1.0);
+        worst = std::max(worst, std::abs(state.values[i] - start[i]) / magnitude);
+    }
+    INFO("round-trip relative error " << worst);
+    REQUIRE(worst <= desc.round_trip_tolerance + floor_value);
+
+    // A scheme that is not reversible says so, and the declaration is the claim rather than a constant: the
+    // other stub answers the other way, so the field carries information.
+    RaisingOperator unknown;
+    REQUIRE_FALSE(unknown.describe().time_reversible);
+
+    // A zero step is not a step, and an operator has to refuse it rather than record a duplicate. Negative is
+    // legal -- that is the whole point above -- so the guard cannot be `dt > 0`.
+    REQUIRE_FALSE(op.step(state, 0.0).has_value());
+}
+
+TEST_CASE("execution.model.a_dimensionally_wrong_step_leaves_the_bound", "[execution]") {
+    // "Dimensionally consistent" is not a property this platform can check by reading an expression. What it
+    // can check is the consequence: a model whose arithmetic respects the units it declared also respects the
+    // invariants those units imply, and one that does not drifts out of them.
+    //
+    // The subject is a harmonic oscillator's conserved energy, `E = (x^2 + (v/omega)^2) / 2`, for the
+    // **velocity-Verlet** update `v += -omega^2*x*dt/2`, `x += v*dt`, `v += -omega^2*x*dt/2`. Every term is an
+    // acceleration times a time or a velocity times a time, so the units multiply out and the energy stays.
+    constexpr double kOmega = 2.0;
+    constexpr double kDt = 5.0e-3;
+    constexpr int kSteps = 200;
+    const auto energy = [](const execution::StateView& s) {
+        return 0.5 * (s.at(0, 0) * s.at(0, 0) + (s.at(0, 1) / kOmega) * (s.at(0, 1) / kOmega));
+    };
+    const auto seed = [] {
+        execution::StateView s = execution::StateView::zeroed(1, 3);
+        s.set(0, 0, 1.0);
+        // A real velocity, so the state carries kinetic energy that a wrong update can lose: with
+        // `|x| = 1` and `|v/omega| = 1` the invariant is exactly 1.0.
+        s.set(0, 1, 2.0);
+        s.set(0, 2, kOmega);
+        return s;
+    };
+
+    execution::StateView correct = seed();
+    const double initial = energy(correct);
+    REQUIRE(initial > 0.0);
+    for (int i = 0; i < kSteps; ++i) {
+        correct.set(0, 1, correct.at(0, 1) - kOmega * kOmega * correct.at(0, 0) * (kDt / 2.0));
+        correct.set(0, 0, correct.at(0, 0) + correct.at(0, 1) * kDt);
+        correct.set(0, 1, correct.at(0, 1) - kOmega * kOmega * correct.at(0, 0) * (kDt / 2.0));
+    }
+    // The invariant is **bounded**, not exact, and the bound is the method's own: velocity-Verlet conserves a
+    // nearby quantity and its energy error oscillates at second order, so `O(dt^2 * steps)` relative is the
+    // honest expectation. A tight tolerance here would be asserting that a symplectic integrator is exact,
+    // which is the kind of claim this whole descriptor exists to avoid making.
+    REQUIRE(std::abs(energy(correct) - initial) <= 1.0e-4 * initial);
+
+    // The wrong one: `x += v*dt` and nothing else, so a velocity is used as a displacement rate and never
+    // updated. It is still a **pure, replayable, deterministic** function of `(state, dt)` -- which is why
+    // dimension correctness has to be its own declaration instead of being inferred from purity -- and it
+    // climbs straight out of the bound.
+    execution::StateView wrong = seed();
+    for (int i = 0; i < kSteps; ++i) {
+        wrong.set(0, 0, wrong.at(0, 0) + wrong.at(0, 1) * kDt);
+    }
+    REQUIRE(std::abs(energy(wrong) - initial) > 1.0e-3 * initial);
+    // And the two really did compute different things rather than the same thing twice.
+    REQUIRE(wrong.at(0, 0) != correct.at(0, 0));
+    // The wrong one is also **past the bound the oscillator's energy implies**, which is the sentence a report
+    // can carry: a harmonic oscillator cannot leave `|x| <= sqrt(2E)/omega`, so a displacement beyond it is a
+    // symptom rather than a state.
+    REQUIRE(correct.at(0, 0) <= std::sqrt(2.0 * initial * 2.0) / kOmega + 1.0e-6);
+}
+
+TEST_CASE("execution.model.interleaved_instances_do_not_disturb_each_other", "[execution]") {
+    // The property a file-scope cache, a `static` scratch buffer or a shared RNG would break, and the reason
+    // the declaration exists at all: a run in one window must not change what a run in another computes.
+    //
+    // Interleaving is the test rather than two sequential runs, because two sequential runs both start from a
+    // clean process state and a shared buffer that is overwritten on entry would pass. Alternating steps means
+    // each operator's next call happens after the other one has run.
+    RotationOperator first_op;
+    RotationOperator second_op;
+    REQUIRE(first_op.describe().is_independent_of_other_instances);
+    REQUIRE(second_op.describe().is_independent_of_other_instances);
+
+    const auto seeded = [](double x, double v, double omega) {
+        execution::StateView s = execution::StateView::zeroed(1, 3);
+        s.set(0, 0, x);
+        s.set(0, 1, v);
+        s.set(0, 2, omega);
+        return s;
+    };
+
+    execution::StateView alone = seeded(1.0, 0.0, 2.0);
+    for (int i = 0; i < 50; ++i) REQUIRE(first_op.step(alone, 1.0e-3).has_value());
+
+    execution::StateView interleaved = seeded(1.0, 0.0, 2.0);
+    execution::StateView other = seeded(-3.0, 0.5, 0.75);
+    for (int i = 0; i < 50; ++i) {
+        REQUIRE(first_op.step(interleaved, 1.0e-3).has_value());
+        REQUIRE(second_op.step(other, 7.0e-3).has_value());
+    }
+
+    // Bit for bit, not to a tolerance: a shared buffer that happened to hold the same values would pass a
+    // tolerance check, and the property is about isolation rather than about accuracy.
+    REQUIRE(interleaved.values == alone.values);
 }

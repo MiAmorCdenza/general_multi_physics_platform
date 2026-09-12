@@ -157,11 +157,82 @@ struct StateView final {
 };
 
 /**
+ * @brief What an operator declares about the model it integrates.
+ *
+ * The four questions are the four a reader of a reported number has to be able to answer, and each is answered
+ * by a claim the platform can **check** rather than by a sentence in a comment:
+ *
+ *   - `is_pure` -- does the same input give the same output, so a trace can be replayed? Checked by running the
+ *     same step twice and comparing bit for bit (`execution.model.a_pure_step_is_replayable`).
+ *   - `time_reversible` / `round_trip_tolerance` -- does a `+dt` step followed by a `-dt` step return to where
+ *     it started? Checked by running exactly that
+ *     (`execution.model.a_time_reversible_operator_round_trips`).
+ *   - `is_dimensionally_consistent` -- does the arithmetic respect the units the node declared? Checked against
+ *     a quantity the model conserves, which a dimensionally wrong step cannot respect
+ *     (`execution.model.a_dimensionally_wrong_step_leaves_the_bound`).
+ *   - `is_independent_of_other_instances` -- does it carry state another instance or another run could
+ *     disturb? Checked by interleaving two operators and requiring both to match their solo runs
+ *     (`execution.model.interleaved_instances_do_not_disturb_each_other`).
+ *
+ * ## Why the defaults are the timid answers
+ *
+ * `is_pure == false`, `time_reversible == false`, `is_dimensionally_consistent == false`,
+ * `is_independent_of_other_instances == false`. An implementation that says nothing has declared nothing, and a
+ * report built from it must not claim more than that. Optimistic defaults would put "reproducible" and
+ * "physically consistent" on a run whose operator never said either.
+ *
+ * ## Why reversibility is a `bool` and a tolerance rather than an enum
+ *
+ * The obvious shape is `exact` / `approximate` / `forward-only`, and it is worse than it looks: `exact`
+ * invites a claim about floating-point arithmetic that a multi-stage method cannot keep, and "forward-only"
+ * is not a property of a scheme at all -- it is a property of whoever rejected the negative step. So the
+ * declaration is the falsifiable one: **a round trip returns to its starting state within
+ * `round_trip_tolerance`, relative to the state's own magnitude**. A scheme that cannot make that claim says
+ * so by leaving `time_reversible` false, and there is no third answer to get wrong.
+ *
+ * The tolerance exists because a self-inverse single-stage step (`x -> x + dt*v`) returns bit-identically and
+ * deserves to say so, while a scheme that only returns to within its own rounding needs to say that instead.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        none
+ * @invariant   `round_trip_tolerance` is finite and non-negative
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       execution.model.a_time_reversible_operator_round_trips
+ */
+struct SimModelDesc final {
+    /// Whether `step` is a function of `(state, dt)` alone: no clock, no RNG, no counter that changes
+    /// behaviour, no dependence on how many times it has been called.
+    bool is_pure = false;
+    /// Whether a `+dt` step followed by a `-dt` step returns to the starting state, within
+    /// `round_trip_tolerance`.
+    ///
+    /// Only meaningful for a pure operator: a step that consumed randomness cannot round-trip regardless of
+    /// its arithmetic, so an impure operator must leave this false.
+    bool time_reversible = false;
+    /// Largest permitted round-trip error, **relative to the state's own magnitude**. Zero means
+    /// bit-identical is required -- the right claim for a step that is literally self-inverse, and true only
+    /// by accident for any other.
+    double round_trip_tolerance = 0.0;
+    /// Whether the step keeps the units the node declared: an acceleration integrated into a velocity, a force
+    /// divided by a mass. False is not a defect in the interface -- a prototype model may knowingly ignore a
+    /// unit -- but it must be **said**, because a dimensionally wrong run produces numbers that look like
+    /// measurements.
+    bool is_dimensionally_consistent = false;
+    /// Whether two instances of this operator, or two runs in one process, are isolated from each other. The
+    /// property a file-scope cache, a `static` scratch buffer, or a shared RNG would break.
+    bool is_independent_of_other_instances = false;
+};
+
+/**
  * @brief Something that advances a state and can name what it integrates.
  *
- * The interface is deliberately two methods. A run loop needs to instantiate an operator, step it,
- * and label the columns it produced; anything more would be this layer deciding how an operator
- * works internally, and every addition here narrows which families can be run.
+ * The interface is deliberately three methods. A run loop needs to instantiate an operator, step it,
+ * label the columns it produced, and say what the model claims about itself; anything more would be this
+ * layer deciding how an operator works internally, and every addition here narrows which families can be
+ * run.
  *
  * @ownership   observes (an operator is owned by whoever provides it)
  * @thread      main (prepare, step)
@@ -170,7 +241,8 @@ struct StateView final {
  * @invariant   `name` is stable for the object's lifetime
  * @errors      `step` returns a Result and never throws
  * @frozen      no
- * @tests       execution.loop.records_the_initial_condition
+ * @tests       execution.loop.records_the_initial_condition,
+ *              execution.model.a_pure_step_is_replayable
  */
 class IStateOperator {
 public:
@@ -192,17 +264,52 @@ public:
     /// @frozen      no
     [[nodiscard]] virtual std::string_view name() const noexcept = 0;
 
-    /// @brief Advances every particle by `dt`, in place.
-    ///
-    /// @ownership   mutates `state`
-    /// @thread      main
-    /// @pre         `state.is_consistent()`
-    /// @post        On success every particle holds its state after one step
-    /// @invariant   No allocation, no throw, and no dependence on anything but the state and `dt`
-    /// @errors      Returns an error code rather than throwing
-    /// @complexity  O(count)
-    /// @nondet      none -- an operator that needs randomness must take it from the run's seed
-    /// @frozen      no
+    /**
+     * @brief What this operator claims about the model it integrates.
+     *
+     * **Pure virtual, with no default**, and that is the decision worth stating: a default would be a
+     * declaration nobody made. Every implementation must answer, and the timid answers in `SimModelDesc`
+     * mean an implementation that genuinely does not know can say so without lying in either direction.
+     *
+     * Called once per run, before the first step, and the answer is recorded with the trace so a report can
+     * say what was claimed rather than what was hoped.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   The same description on every call
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.model.a_time_reversible_operator_round_trips,
+     *              execution.model.a_dimensionally_wrong_step_leaves_the_bound,
+     *              execution.model.interleaved_instances_do_not_disturb_each_other
+     */
+    [[nodiscard]] virtual SimModelDesc describe() const noexcept = 0;
+
+    /**
+     * @brief Advances every particle by `dt`, in place.
+     *
+     * @param state The state to advance. Mutated in place.
+     * @param dt    Step size. **Non-zero and finite**: a zero step would append a duplicate sample for no
+     *              reason, and a non-finite one is not a step. Negative is legal, and that is a decision --
+     *              a run loop only ever steps forward, but a **round trip** is how the reversibility
+     *              declaration above is checked, and a declaration nothing can falsify is a comment.
+     *
+     * @ownership   value (the state is modified through the reference)
+     * @thread      main
+     * @pre         `state.is_consistent()`
+     * @post        On success every particle holds its state after one step
+     * @invariant   No allocation, no throw, and no dependence on anything but the state and `dt`
+     * @errors      Returns an error code rather than throwing; `invalid_argument` for a zero or non-finite
+     *              `dt`
+     * @complexity  O(count)
+     * @nondet      none -- an operator that needs randomness must take it from the run's seed
+     * @frozen      no
+     * @tests       execution.model.a_time_reversible_operator_round_trips
+     */
     [[nodiscard]] virtual diag::Result<void> step(StateView& state, double dt) = 0;
 };
 

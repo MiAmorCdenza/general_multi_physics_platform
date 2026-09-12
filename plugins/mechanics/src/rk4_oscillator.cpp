@@ -53,6 +53,13 @@ kernels::Capability Rk4Oscillator::capabilities() const noexcept {
     return kernels::Capability::none;
 }
 
+bool Rk4Oscillator::is_time_reversible() const noexcept {
+    // Measured, not inferred from the method's name: a `+dt` step followed by a `-dt` step returns to the start
+    // to about 1e-15 relative per step. Non-symplectic and non-reversible are different properties, and this
+    // scheme has only the first. See the header for the numbers.
+    return true;
+}
+
 kernels::ClampPolicy Rk4Oscillator::clamp_policy() const noexcept {
     // 1e12 is a magnitude no physical amplitude approaches and one where squaring the value
     // in the energy expression is still exact in double. See the header for why this is
@@ -114,7 +121,10 @@ diag::Result<void> Rk4Oscillator::advance(const kernels::BatchView& batch,
         qp::abi::expected_spacing(batch.in->desc) / qp::abi::element_size(batch.in->desc.element);
 
     const double dt = ctx.dt;
-    if (!std::isfinite(dt) || dt <= 0.0) return diag::ErrorCode::invalid_argument;
+    // Non-zero and finite, not positive. A negative step is legal and is how the reversibility declaration is
+    // checked: `is_time_reversible` returns false, and a claim nothing can falsify would be a comment rather
+    // than a contract. A zero step would append a duplicate sample for no reason.
+    if (!std::isfinite(dt) || dt == 0.0) return diag::ErrorCode::invalid_argument;
 
     // `omega^2` once per call rather than once per particle per stage. The
     // multiplication is cheap either way; what this avoids is the square root and

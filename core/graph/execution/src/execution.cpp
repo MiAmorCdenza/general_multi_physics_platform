@@ -206,6 +206,11 @@ RunOutcome GraphRun::run(std::size_t steps, double dt) {
         out.error = diag::ErrorCode::invalid_argument;
         return out;
     }
+    // A run goes **forward**: `dt > 0`, where the operator contract is more permissive and admits any non-zero
+    // finite value. The narrowing is deliberate and it belongs here rather than in the operator, because a trace
+    // is a time series and its samples are in non-decreasing time order -- a backward run would append samples
+    // whose times go the wrong way. An operator is free to accept a negative step so that a round trip can
+    // check its reversibility; a *run* does not offer one.
     if (!(dt > 0.0) || !state_.is_consistent()) {
         out.error = diag::ErrorCode::invalid_argument;
         return out;

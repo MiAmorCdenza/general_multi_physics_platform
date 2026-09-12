@@ -109,6 +109,42 @@ public:
     [[nodiscard]] std::string_view name() const noexcept override;
 
     /**
+     * @brief What the wrapped kernel declares, mapped into the run loop's vocabulary.
+     *
+     * The mapping is where this adapter earns its keep a second time. `IBatchAdvancer` carries a
+     * **capability** set -- in-place, scratch, stochastic, neighbourhood -- and the run loop asks a
+     * different question: is the step replayable, what happens with a negative `dt`, does it respect the
+     * node's units, can two of them coexist. Neither vocabulary is a subset of the other, and collapsing
+     * them was rejected for the same reason collapsing the two interfaces was.
+     *
+     * Two of the four answers are **derived** rather than restated:
+     *
+     *   - `is_pure` is exactly "not stochastic". A kernel that consumes the injected RNG is a function of
+     *     `(state, dt, rng)`, so replaying it needs the stream as well, and the honest declaration is that
+     *     the step alone does not determine the next state.
+     *   - `reversibility` is `approximate` for every scheme this build wraps. A scheme could declare
+     *     `exact`, and the place for it is the kernel's own description -- the adapter must not guess
+     *     "self-inverse" from a name.
+     *
+     * The other two are declared here, because they are properties of the mapping rather than of the
+     * scheme: this adapter hands the kernel a batch aliasing the caller's buffer and accumulates a step
+     * index, and neither is shared between instances.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        None of the four fields is left at "unknown"
+     * @invariant   `is_pure` is false exactly when the advancer declares `is_stochastic`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.binding.end_to_end_against_a_closed_form,
+     *              execution.binding.binder_comes_from_the_plugin
+     */
+    [[nodiscard]] graph::execution::SimModelDesc describe() const noexcept override;
+
+    /**
      * @brief Advances the state by `dt` through the wrapped advancer.
      *
      * Builds a `BatchView` that aliases the state's own buffer -- `in` and `out` are the same
