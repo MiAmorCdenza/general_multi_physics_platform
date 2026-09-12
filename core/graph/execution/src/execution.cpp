@@ -7,6 +7,7 @@
  */
 #include <qp/graph/execution/execution.hpp>
 
+#include <qp/plugin/guard.hpp>
 #include <qp/units/dimensions.hpp>
 
 #include <cassert>
@@ -155,7 +156,12 @@ RunOutcome GraphRun::run(std::size_t steps, double dt) {
     }
 
     for (std::size_t i = 0; i < steps; ++i) {
-        const diag::Result<void> stepped = operator_->step(state_, dt);
+        // The plugin boundary, once per step. A `try` costs nothing on the path where nothing throws --
+        // table-based unwinding puts the price on the throw, not on the entry -- and what the hot-path rule
+        // forbids is a `throw` here, which would happen only if a plugin misbehaved. The label is the
+        // operator's name, because that is what the run report and the trace's provenance name.
+        const diag::Result<void> stepped = qp::plugin::call_guarded(
+            operator_name_, &faults_, [this, dt] { return operator_->step(state_, dt); });
         if (!stepped.has_value()) {
             // The samples already taken are kept. A run that diverged at step 900 is *more*
             // informative than an empty trace: the confidence panel can show where it went wrong,

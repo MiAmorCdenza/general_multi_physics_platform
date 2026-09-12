@@ -19,5 +19,5 @@ target_include_directories(qp_graph_eval
 
 target_compile_features(qp_graph_eval PUBLIC cxx_std_20)
 target_link_libraries(qp_graph_eval
-    PUBLIC qp::graph_ir qp::graph_structure qp::ports
+    PUBLIC qp::graph_ir qp::graph_structure qp::ports qp::plugin
     PRIVATE qp_warnings qp_sanitize)

@@ -58,6 +58,7 @@
 
 #include <qp/diag/result.hpp>
 #include <qp/graph/ir.hpp>
+#include <qp/plugin/guard.hpp>
 #include <qp/runtime/run/run.hpp>
 #include <qp/runtime/store/store.hpp>
 #include <qp/runtime/trace/trace.hpp>
@@ -512,6 +513,30 @@ public:
     /// @frozen      no
     [[nodiscard]] const qp::runtime::Trace& trace() const noexcept { return trace_; }
 
+    /**
+     * @brief The faults the bound operator produced, in the order they happened.
+     *
+     * Exposed because a fault is a **defect report** rather than a limitation: a caller that only saw
+     * `plugin_fault` in a run outcome could not tell whether the operator raised once on an edge case or has
+     * been quarantined for good, and those two lead to different sentences in a status line.
+     *
+     * A block comment, not `///` lines: the contract gate reads block comments, so a contract written with
+     * `///` is a contract the gate cannot see -- and this one's `@tests` id was reported as an orphan until
+     * it was converted.
+     *
+     * @ownership   borrows from this object
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   Entries are the operator's, labelled with `operator_name()`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.loop.a_raising_operator_is_a_fault_not_a_crash
+     */
+    [[nodiscard]] const qp::plugin::FaultLog& faults() const noexcept { return faults_; }
+
 private:
     /**
      * @brief Declares the run's channels on the trace.
@@ -539,6 +564,9 @@ private:
     std::unique_ptr<IStateOperator> operator_{};
     std::string operator_name_{};
     qp::runtime::Trace trace_{qp::runtime::RunId{}};
+    /// Faults recorded while calling the operator; see `faults()`. Owned rather than borrowed because a
+    /// run is the thing that discovers them.
+    qp::plugin::FaultLog faults_{};
 };
 
 }  // namespace qp::graph::execution

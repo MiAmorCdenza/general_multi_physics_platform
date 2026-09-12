@@ -55,7 +55,11 @@ ALLOWED: dict[str, set[str]] = {
     # so mutate -> ports must be allowed. That follows from Value being defined in ports.
     "mutate": {"units", "diag", "ports", "ir", "structure"},
     "validate": {"units", "diag", "ports", "ir", "structure"},
-    "eval": {"units", "diag", "ports", "abi", "ir", "structure"},
+    # eval needs plugin for one thing: the fault barrier around the call into a plugin's evaluator.
+    # Charter C4 requires that call to be guarded, and the guard is the plugin module's business -- the
+    # graph layer should not be implementing its own exception policy. plugin is L0, so this is a
+    # downward dependency, not an inversion.
+    "eval": {"units", "diag", "ports", "abi", "ir", "structure", "plugin"},
     # domain uses validate's Report to express a "stale declaration" and needs structure to read the graph.
     # The direction is domain -> validate (**one-way**): validate does not depend on domain, because
     # domain semantics must have exactly one definition site -- an early version defined the same
@@ -82,8 +86,10 @@ ALLOWED: dict[str, set[str]] = {
     # It deliberately does not depend on `kernels`. An `IStateOperator` is two methods, and binding
     # this to `IBatchAdvancer` would give a run loop that can only drive batch advancers; the
     # adapter presenting one as the other belongs to the plugin, next to the code it adapts.
+    # execution calls a plugin's operator once per step, so it needs the same fault barrier eval uses:
+    # charter C4 does not stop at the evaluator's edge. plugin is L0, so this is downward, not an inversion.
     "execution": {"units", "diag", "ir", "structure",
-                  "run", "store", "trace"},
+                  "run", "store", "trace", "plugin"},
     "kernels": {"units", "diag", "abi", "field", "domain"},
     # L2 runs and data
     "run": {"units", "diag", "abi", "ports"},

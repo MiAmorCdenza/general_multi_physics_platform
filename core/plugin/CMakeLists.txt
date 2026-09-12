@@ -22,7 +22,8 @@
 
 add_library(qp_plugin STATIC
     src/manifest.cpp
-    src/loader.cpp)
+    src/loader.cpp
+    src/guard.cpp)
 
 add_library(qp::plugin ALIAS qp_plugin)
 

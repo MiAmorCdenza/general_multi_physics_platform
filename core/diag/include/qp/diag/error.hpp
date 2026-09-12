@@ -58,6 +58,17 @@ enum class ErrorCode : std::uint16_t {
     plugin_incompatible = 0x0402,
     plugin_load_failed = 0x0403,
     plugin_capability_missing = 0x0404,
+    /// The plugin misbehaved **while the host was calling it**: it raised, or it returned something that
+    /// does not match what it declared. The host caught it and carried on; the plugin's answer is not
+    /// trustworthy.
+    ///
+    /// Separate from the plugin's own refusals on purpose. A plugin that returns "I cannot do this" is
+    /// working; a plugin that raises is broken, and the two need different words in a report and different
+    /// handling in the host -- one is a limitation a user can act on, the other is a defect to report.
+    plugin_fault = 0x0405,
+    /// The host stopped calling this plugin after repeated faults, and is reporting the consequence rather
+    /// than the cause. A caller that sees this should ask what happened earlier; the run itself continues.
+    plugin_quarantined = 0x0406,
 
     // -- 5xxx runs and data ---------------------------------------------------
     run_not_found = 0x0501,
@@ -174,6 +185,8 @@ enum class ErrorDomain : std::uint8_t {
         case ErrorCode::plugin_incompatible: return "plugin_incompatible";
         case ErrorCode::plugin_load_failed: return "plugin_load_failed";
         case ErrorCode::plugin_capability_missing: return "plugin_capability_missing";
+        case ErrorCode::plugin_fault: return "plugin_fault";
+        case ErrorCode::plugin_quarantined: return "plugin_quarantined";
         case ErrorCode::run_not_found: return "run_not_found";
         case ErrorCode::seed_required: return "seed_required";
         case ErrorCode::dataset_empty: return "dataset_empty";

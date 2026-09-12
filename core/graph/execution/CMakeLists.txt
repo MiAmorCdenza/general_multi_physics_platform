@@ -34,6 +34,6 @@ target_include_directories(qp_graph_execution
 
 target_compile_features(qp_graph_execution PUBLIC cxx_std_20)
 target_link_libraries(qp_graph_execution
-    PUBLIC qp::graph_ir qp::graph_structure qp::diag
+    PUBLIC qp::graph_ir qp::graph_structure qp::diag qp::plugin
            qp::runtime_run qp::runtime_store qp::runtime_trace
     PRIVATE qp_warnings qp_sanitize)

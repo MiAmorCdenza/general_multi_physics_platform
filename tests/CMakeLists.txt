@@ -413,6 +413,24 @@ qp_add_test(qp_test_graph_kernels
 qp_add_test(qp_test_plugin
     SOURCES unit/plugin/test_plugin.cpp
     LIBS qp::plugin)
+# The plugin fault barrier: charter C4's in-process half. It lives in the ordinary suite rather than the
+# plugin partition because the barrier is foundation -- `core/graph/eval` and `core/graph/execution` call it,
+# and those must be covered in a build with no plugins present.
+qp_add_test(qp_test_plugin_guard
+    SOURCES unit/plugin/test_guard.cpp
+    LIBS qp::plugin)
+
+# C4's boundary, observed rather than asserted in prose: a plugin that faults its memory dies, and no
+# `try` block changes that. The child prints a marker, crashes, and the criterion is two-sided --
+# the crash marker must be there and the survived marker must not, so a build where the fault became
+# survivable fails instead of passing quietly.
+add_test(NAME qp_test_plugin_guard.death.hard_crash
+    COMMAND ${CMAKE_COMMAND} -E env QP_TEST_SELF=$<TARGET_FILE:qp_test_plugin_guard>
+            $<TARGET_FILE:qp_test_plugin_guard> "plugin.guard.a_hard_crash_is_out_of_scope")
+set_tests_properties(qp_test_plugin_guard.death.hard_crash PROPERTIES
+    LABELS "unit;death"
+    PASS_REGULAR_EXPRESSION "a hard crash is out of scope"
+    FAIL_REGULAR_EXPRESSION "SURVIVED")
 
 # -- Plugin loader fixtures ---------------------------------------------------
 #

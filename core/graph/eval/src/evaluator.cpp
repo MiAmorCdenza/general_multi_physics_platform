@@ -160,8 +160,16 @@ Result<EvalStats> evaluate_graph(const Graph& g, const EvalContext& ctx, EvalRes
                 }
             } else {
                 ++stats.nodes_computed;
+                // The plugin boundary. A plugin that raises is caught here and reported as a fault, so the
+                // host survives -- charter C4's schema domain. The label is the **node type**, because that
+                // is what the user is looking at and what the report can name; the plugin's own identity
+                // would be less useful in a diagnostic than the type it was asked to compute.
+                //
+                // Note what this does not claim: a plugin that segfaults still takes the process down. That
+                // boundary is stated in `qp/plugin/guard.hpp` rather than implied away.
                 Result<std::vector<std::pair<PortNumber, qp::ports::Value>>> r =
-                    ctx.evaluator->evaluate(id, *desc, sorted_inputs);
+                    qp::plugin::call_guarded(desc->type_name, ctx.faults,
+                                            [&] { return ctx.evaluator->evaluate(id, *desc, sorted_inputs); });
                 if (!r) return Result<EvalStats>{r.error()};
 
                 auto produced = std::move(r).value();

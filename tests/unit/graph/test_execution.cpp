@@ -26,6 +26,7 @@
 
 #include <cmath>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -95,6 +96,39 @@ public:
     }
 };
 
+/// @brief An operator that raises on its first step, for charter C4's in-process half.
+///
+/// A plugin that throws used to take the host with it: `GraphRun::run` called `IStateOperator::step`
+/// directly, and the exception travelled out of `run_once` and out of the event loop. This stub is what makes
+/// that a test rather than a hope -- and it is a stub rather than a real plugin because the property belongs
+/// to the **loop**, not to any physics.
+class RaisingOperator final : public execution::IStateOperator {
+public:
+    [[nodiscard]] std::string_view name() const noexcept override { return "test.raising"; }
+
+    [[nodiscard]] qp::diag::Result<void> step(execution::StateView&, double) override {
+        throw std::runtime_error{"the operator has a memory bug"};
+    }
+};
+
+/// @brief A binder that answers for one type and hands back the operator that raises.
+///
+/// The loop takes **binders**, not operators: which operator a node becomes is the plugin's business, and the
+/// loop only asks. So the fault has to be reachable the way a real one is -- through a binder -- or the test
+/// would be exercising a path no caller has.
+class RaisingBinder final : public execution::IOperatorBinder {
+public:
+    [[nodiscard]] bool can_bind(std::string_view type_name,
+                                const execution::StateView&) const noexcept override {
+        return type_name == "demo.raising";
+    }
+
+    [[nodiscard]] std::unique_ptr<execution::IStateOperator> bind(
+        std::string_view type_name, const Node&, const execution::StateView&) override {
+        if (type_name != "demo.raising") return nullptr;
+        return std::make_unique<RaisingOperator>();
+    }
+};
 /// @brief A binder that owns a type but can honour no instance of it.
 ///
 /// The stub that makes `can_bind` and `bind` two different questions rather than one asked twice. Every
@@ -316,6 +350,49 @@ TEST_CASE("execution.loop.can_bind_answers_for_the_type_not_the_instance", "[exe
             unusable.can_bind("mine.but.unusable", layout));
 }
 
+TEST_CASE("execution.loop.a_raising_operator_is_a_fault_not_a_crash", "[execution]") {
+    // Charter C4, at the call site that matters most for a physics plugin: the loop calls `step` once per
+    // step, 4096 times a run, and that call goes into plugin code. Before the barrier existed, an operator
+    // that raised took the exception out through the run, the window's slot and the event loop -- the
+    // process died, and the user lost whatever they had not saved.
+    //
+    // Three properties, and each is load-bearing:
+    //   - the failure comes back as a **code**, so the caller can report it;
+    //   - the samples already taken are kept, because a run that faulted at step 900 is evidence and an
+    //     empty trace is not;
+    //   - the fault is attributed to the operator's name, so a report can say which one.
+    RaisingBinder raising;
+
+    execution::GraphRun run;
+    REQUIRE(run.prepare(any_node("demo.raising"), {&raising}, rt::RunId{7}).has_value());
+    REQUIRE(run.is_ready());
+    REQUIRE(run.operator_name() == "test.raising");
+    REQUIRE(run.set_initial(0, 1.0, 0.0).has_value());
+    run.set_omega(2.0);
+
+    const execution::RunOutcome outcome = run.run(10, 1.0e-3);
+    REQUIRE_FALSE(outcome.ok());
+    // Not `invalid_argument`, not `internal_error`: the code names the cause, so a report can distinguish a
+    // plugin that misbehaved from a run that was asked to do something impossible.
+    REQUIRE(outcome.error == qp::diag::ErrorCode::plugin_fault);
+    REQUIRE(outcome.steps == 0);
+
+    // The initial condition is in the record and nothing else is, because the very first step faulted. The
+    // loop keeps what it recorded rather than discarding the run.
+    REQUIRE(run.trace().size() == 1);
+    REQUIRE(run.trace().samples().front().t == 0.0);
+    REQUIRE(run.trace().samples().front().values[0].value == 1.0);
+
+    // And the fault is on the record, with the operator's name and the plugin's own words.
+    REQUIRE(run.faults().faults().size() == 1);
+    REQUIRE(run.faults().faults().front().label == "test.raising");
+    REQUIRE(run.faults().faults().front().what == "the operator has a memory bug");
+    REQUIRE(run.faults().faults().front().count == 1);
+
+    // A caller that runs the same broken operator again is protected by the same log only if it shares it,
+    // which is the point of the log being the caller's object rather than a global: two runs are two runs.
+    REQUIRE_FALSE(run.faults().is_quarantined("test.raising"));
+}
 TEST_CASE("execution.loop.rejects_unusable_arguments", "[execution]") {
     AnyTypeBinder binder;
     const Node node = any_node("anything");

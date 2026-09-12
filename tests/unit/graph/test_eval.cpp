@@ -13,6 +13,7 @@
 
 #include <cstring>
 #include <deque>
+#include <stdexcept>
 #include <string>
 
 using namespace qp::graph;
@@ -95,6 +96,18 @@ private:
     return d;
 }
 
+/// @brief An evaluator that raises, for charter C4 at the evaluator's own boundary.
+///
+/// `EvalContext::evaluator` is plugin code: the host calls it once per uncached node. Before the barrier,
+/// a throw here travelled out of `evaluate_graph` and out of whatever called it -- in a UI that is the event
+/// loop, and the process is gone.
+class RaisingEvaluator final : public INodeEvaluator {
+public:
+    [[nodiscard]] Result<std::vector<std::pair<PortNumber, Value>>> evaluate(
+        NodeId, const NodeDesc&, const std::vector<std::pair<PortNumber, Value>>&) override {
+        throw std::runtime_error{"the evaluator has a memory bug"};
+    }
+};
 /// @brief Counting evaluator: records how often it is called, proving the cache really works.
 class CountingEvaluator final : public INodeEvaluator {
 public:
@@ -685,6 +698,60 @@ TEST_CASE("graph.eval.is_readonly", "[graph][eval]") {
     REQUIRE(s.g.edge_count() == edges);
 }
 
+TEST_CASE("graph.eval.a_raising_evaluator_is_a_fault", "[graph][eval]") {
+    // Charter C4 at the evaluator boundary. `EvalContext::evaluator` is plugin code, called once per uncached
+    // node; before the barrier a throw here travelled out of `evaluate_graph` and out of whatever called it,
+    // which in this platform is a Qt slot -- and a process that throws out of a slot dies.
+    Graph g;
+    FakeCatalog catalog;
+    catalog.add(make_const());
+    RaisingEvaluator evaluator;
+    EvalCache cache{16};
+    EvalResult result;
+
+    const auto added = g.add_node("const");
+    REQUIRE(added.has_value());
+    const NodeId node = added.value();
+    g.find_node_mutable(node)->set_param(1, Value{1.0});
+    g.bump_version();
+
+    qp::plugin::FaultLog faults;
+    const EvalContext context{&catalog, &qp::ports::builtin_registry(), &evaluator, &cache, &faults};
+
+    // Strike one: caught, converted, and reported as a plugin fault rather than as a graph problem -- the
+    // graph is fine, the code that was asked to compute it is not.
+    const Result<EvalStats> failed = evaluate_graph(g, context, result);
+    REQUIRE_FALSE(failed.has_value());
+    REQUIRE(failed.error() == qp::diag::ErrorCode::plugin_fault);
+    REQUIRE(faults.faults().size() == 1);
+    // The label is the **node type**, because that is what the user is looking at; naming the plugin would be
+    // less useful in a diagnostic than naming the thing on screen that stopped working.
+    REQUIRE(faults.faults().front().label == "const");
+    REQUIRE(faults.faults().front().what == "the evaluator has a memory bug");
+
+    // A faulted node caches nothing -- there is no result to cache -- so a second attempt really calls the
+    // plugin again, which is what makes the strike count mean "it keeps happening".
+    REQUIRE_FALSE(cache.size() > 0);
+    const Result<EvalStats> second = evaluate_graph(g, context, result);
+    REQUIRE(second.error() == qp::diag::ErrorCode::plugin_fault);
+    REQUIRE(faults.faults().size() == 2);
+    REQUIRE_FALSE(faults.is_quarantined("const"));
+
+    // The third strike crosses the limit. The caller still sees the fault it caused, and the log records that
+    // this one was the last straw.
+    const Result<EvalStats> third = evaluate_graph(g, context, result);
+    REQUIRE(third.error() == qp::diag::ErrorCode::plugin_fault);
+    REQUIRE(faults.faults().size() == 3);
+    REQUIRE(faults.is_quarantined("const"));
+    REQUIRE(faults.faults().back().quarantined);
+
+    // From here the plugin is not called at all. The code says "we stopped asking", which is a different
+    // story from "it failed again": one is a defect report, the other is a policy the host is applying.
+    const Result<EvalStats> refused = evaluate_graph(g, context, result);
+    REQUIRE_FALSE(refused.has_value());
+    REQUIRE(refused.error() == qp::diag::ErrorCode::plugin_quarantined);
+    REQUIRE(faults.faults().size() == 3);   // a call that never happened is not a fault
+}
 TEST_CASE("graph.eval.result_lookup", "[graph][eval]") {
     EvalResult r;
     REQUIRE_FALSE(r.get(NodeId{1, 1}, 1).valid());

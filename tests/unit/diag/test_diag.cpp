@@ -50,6 +50,7 @@ TEST_CASE("diag.error_code_names_are_unique", "[diag][property]") {
         ErrorCode::cycle_detected, ErrorCode::duplicate_connection, ErrorCode::not_connected,
         ErrorCode::graph_busy, ErrorCode::plugin_not_found, ErrorCode::plugin_incompatible,
         ErrorCode::plugin_load_failed, ErrorCode::plugin_capability_missing,
+        ErrorCode::plugin_fault, ErrorCode::plugin_quarantined,
         ErrorCode::run_not_found, ErrorCode::seed_required, ErrorCode::dataset_empty,
         ErrorCode::fit_failed, ErrorCode::internal_error, ErrorCode::not_implemented,
         ErrorCode::cancelled,
@@ -70,6 +71,10 @@ TEST_CASE("diag.error_domain_mapping", "[diag]") {
     STATIC_REQUIRE(domain_of(ErrorCode::unit_mismatch) == ErrorDomain::typing);
     STATIC_REQUIRE(domain_of(ErrorCode::cycle_detected) == ErrorDomain::graph);
     STATIC_REQUIRE(domain_of(ErrorCode::plugin_incompatible) == ErrorDomain::plugin);
+    // A plugin that misbehaves is a plugin problem, not an internal one: the domain is what routes the
+    // report, and "the host has a bug" would send it to the wrong reader.
+    STATIC_REQUIRE(domain_of(ErrorCode::plugin_fault) == ErrorDomain::plugin);
+    STATIC_REQUIRE(domain_of(ErrorCode::plugin_quarantined) == ErrorDomain::plugin);
     STATIC_REQUIRE(domain_of(ErrorCode::seed_required) == ErrorDomain::runtime);
     STATIC_REQUIRE(domain_of(ErrorCode::internal_error) == ErrorDomain::internal);
     STATIC_REQUIRE(domain_of(ErrorCode::ok) == ErrorDomain::internal);  // meaningless, present only for full coverage

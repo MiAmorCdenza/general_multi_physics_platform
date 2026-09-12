@@ -273,6 +273,7 @@ TEST_CASE("diag.log.severity_is_total", "[diag][log][property]") {
         ErrorCode::cycle_detected, ErrorCode::duplicate_connection, ErrorCode::not_connected,
         ErrorCode::graph_busy, ErrorCode::plugin_not_found, ErrorCode::plugin_incompatible,
         ErrorCode::plugin_load_failed, ErrorCode::plugin_capability_missing,
+        ErrorCode::plugin_fault, ErrorCode::plugin_quarantined,
         ErrorCode::run_not_found, ErrorCode::seed_required, ErrorCode::dataset_empty,
         ErrorCode::fit_failed, ErrorCode::internal_error, ErrorCode::not_implemented,
         ErrorCode::cancelled,

@@ -37,6 +37,7 @@
 #include <qp/diag/result.hpp>
 #include <qp/graph/eval/cache.hpp>
 #include <qp/graph/ir.hpp>
+#include <qp/plugin/guard.hpp>
 #include <qp/graph/structure.hpp>
 #include <qp/ports.hpp>
 
@@ -86,11 +87,27 @@ public:
 };
 
 /// @brief The external dependencies evaluation needs.
+///
+/// @ownership   observes (every pointer is borrowed for one evaluation)
+/// @thread      main
+/// @pre         The pointees outlive the evaluation
+/// @post        none
+/// @invariant   `valid()` is true for a context the evaluator will use
+/// @errors      noexcept
+/// @frozen      no
 struct EvalContext final {
     const INodeCatalog* catalog = nullptr;
     const qp::ports::PortTypeRegistry* types = nullptr;
     INodeEvaluator* evaluator = nullptr;
     EvalCache* cache = nullptr;
+    /// Where a plugin fault is recorded, or null for a caller that wants the barrier without the counting.
+    ///
+    /// Optional, and the optionality is the honest part: an evaluation with no log still catches a plugin's
+    /// exception -- the barrier is **not** optional -- but nothing counts the faults, so nothing is
+    /// quarantined. A caller that wants a broken plugin dropped after `kFaultLimit` faults owns a log and
+    /// hands it over, which is the same shape as `cache`: the evaluator does not decide policy, it uses what
+    /// it is given.
+    qp::plugin::FaultLog* faults = nullptr;
 
     [[nodiscard]] bool valid() const noexcept {
         return catalog != nullptr && types != nullptr && evaluator != nullptr;
@@ -150,13 +167,16 @@ private:
  * @complexity  O(V + E) plus the cost of each node implementation
  * @nondet      none
  * @frozen      no
+ * @errors      Result; an error code when a node implementation fails or a type is unregistered, and
+ *              `plugin_fault` / `plugin_quarantined` when the implementation misbehaved rather than refused
  * @tests       graph.eval.single_node, graph.eval.chain_propagates,
  *              graph.eval.deterministic_across_runs,
  *              graph.eval.cache_hit_on_second_run,
  *              graph.eval.param_change_invalidates_only_downstream,
  *              graph.eval.unknown_type_fails, graph.eval.missing_param_fails,
  *              graph.eval.bypass_passthrough, graph.eval.diamond_evaluates_once,
- *              graph.eval.is_readonly, graph.eval.result_lookup
+ *              graph.eval.is_readonly, graph.eval.result_lookup,
+ *              graph.eval.a_raising_evaluator_is_a_fault
  */
 [[nodiscard]] Result<EvalStats> evaluate_graph(const Graph& g, const EvalContext& ctx,
                                                EvalResult& out);
