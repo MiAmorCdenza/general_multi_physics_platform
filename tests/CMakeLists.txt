@@ -336,6 +336,20 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(meta.contract_checker PROPERTIES
         LABELS "gate"
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+    # The plan tree's own counts, checked against the tree.
+    #
+    # Section 9.9 claims "six content categories, one interface added, and the one is not in core". A claim like
+    # that rots the moment a seventh directory appears, and it rots **silently**: the document still reads
+    # correctly, and the person acting on it is acting on a stale fact. This has nothing to do with behaviour, so
+    # no C++ case can express it -- it is a claim about the repository's shape, and it is checked the same way the
+    # other gate self-tests are.
+    add_test(NAME meta.content_shape
+        COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_SOURCE_DIR}/tests/meta/check_content_shape.py)
+    set_tests_properties(meta.content_shape PROPERTIES
+        LABELS "gate"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 endif()
 
 # -- ABI layout assertions (enforcement.md §7) -------------------------------
