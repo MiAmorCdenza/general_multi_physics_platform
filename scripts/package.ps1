@@ -119,7 +119,7 @@ try {
     # path is denied" on whichever file Windows happens to report first. Naming the
     # cause here saves reading that message as a permissions problem.
     Get-Process -Name "qp_shell" -ErrorAction SilentlyContinue | ForEach-Object {
-        Write-Host "  [note] ??????????? (pid $($_.Id))"
+        Write-Host "  [note] 结束仍在运行的旧包进程 (pid $($_.Id))"
         $_.Kill()
         $_.WaitForExit(5000)
     }
@@ -127,7 +127,7 @@ try {
         try {
             Remove-Item -Recurse -Force $OutDir -ErrorAction Stop
         } catch {
-            Fail "???? $OutDir ?$($_.Exception.Message)??????????????????"
+            Fail "无法清空 $OutDir ：$($_.Exception.Message)。若有程序仍在使用该目录，请先关闭。"
         }
     }
     New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
@@ -160,6 +160,17 @@ try {
         # be both larger and a bigger licence surface for no benefit.
         "--skip-plugin-types", "networkinformation,tls",
         "--no-network",
+        # The C++ runtime travels **inside** the package rather than being assumed.
+        # `dumpbin /dependents` shows MSVCP140.dll, VCRUNTIME140.dll and
+        # VCRUNTIME140_1.dll: without them the program fails to start at all on a
+        # machine that has never had a Visual C++ Redistributable installed, and the
+        # error names a missing DLL rather than the redistributable that supplies it.
+        #
+        # Most Windows machines happen to have it, because other software installs
+        # it -- which is exactly what makes relying on it a bad bet for a package
+        # handed to a colleague. App-local deployment is Microsoft's supported
+        # pattern and makes the directory self-contained.
+        "--compiler-runtime",
         "--dir", (Resolve-Path $OutDir).Path
     )
 
@@ -184,6 +195,47 @@ try {
         Fail "windeployqt failed (exit code $deployCode)"
     }
 
+    # -- C++ runtime, app-local ------------------------------------------------
+    #
+    # Copied from the MSVC redistributable directory rather than obtained by running
+    # an installer on the target machine. `--compiler-runtime` further up deploys
+    # `vc_redist.x64.exe`, which the recipient must run with administrator rights and
+    # often reboot for; app-local deployment is Microsoft's supported alternative and
+    # needs nothing at all.
+    #
+    # It also drags in `dxcompiler.dll` and `dxil.dll` (15 MB) for DirectX shader
+    # compilation, which a Qt **Widgets** application never does -- those belong to
+    # Qt Quick. Both are removed below, along with the installer.
+    Remove-Item (Join-Path $OutDir "vc_redist.x64.exe") -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $OutDir "dxcompiler.dll") -ErrorAction SilentlyContinue
+    Remove-Item (Join-Path $OutDir "dxil.dll") -ErrorAction SilentlyContinue
+
+    if (-not $env:VCToolsRedistDir) {
+        Fail @"
+找不到 VCToolsRedistDir（VC++ 可再发行文件目录）。
+请在 "x64 Native Tools Command Prompt" 里运行本脚本；否则请自行把
+MSVCP140.dll / VCRUNTIME140.dll / VCRUNTIME140_1.dll 放入包中。
+"@
+    }
+
+    # The CRT directory name tracks the toolset version (Microsoft.VC143.CRT today),
+    # so the first match is taken rather than one name being hard-coded: a toolset
+    # upgrade must not break packaging.
+    $redistRoot = Get-ChildItem $env:VCToolsRedistDir -Recurse -Directory `
+        -Filter "Microsoft.VC*.CRT" -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -like "*\x64\*" } | Select-Object -First 1 -ExpandProperty FullName
+    if (-not $redistRoot) {
+        Fail "在 $env:VCToolsRedistDir 下找不到 x64 的 Microsoft.VC*.CRT 目录"
+    }
+
+    foreach ($runtime in @("MSVCP140.dll", "VCRUNTIME140.dll", "VCRUNTIME140_1.dll")) {
+        $source = Join-Path $redistRoot $runtime
+        if (-not (Test-Path $source)) {
+            Fail "缺少 $runtime（在 $redistRoot 下）：程序在没有装过 VC++ 可再发行包的机器上无法启动"
+        }
+        Copy-Item $source $OutDir
+    }
+    Ok "C++ 运行库就位（app-local：目标机器无需安装、无需管理员权限、无需重启）"
     $dllCount = (Get-ChildItem $OutDir -Filter "Qt6*.dll" | Measure-Object).Count
     if ($dllCount -eq 0) { Fail "windeployqt 没有复制任何 Qt DLL，包不完整" }
     Ok "已部署 $dllCount 个 Qt DLL"
@@ -196,6 +248,17 @@ try {
 
     # -- 4. Licence files --------------------------------------------------
     Step "许可文件"
+
+    # The run instructions are part of the package, not a message in a chat window:
+    # whoever receives the folder will not have this conversation. `docs/` is not
+    # copied wholesale -- most of it is design material for developers.
+    $runbook = Join-Path $repoRoot "packaging/运行说明.md"
+    if (Test-Path $runbook) {
+        Copy-Item $runbook $OutDir
+        Ok "运行说明已复制"
+    } else {
+        Write-Host "  [warn] 缺少 packaging/运行说明.md，包内将没有运行说明" -ForegroundColor Yellow
+    }
 
     foreach ($name in @("LICENSE", "NOTICE", "THIRD_PARTY_NOTICES.md")) {
         if (-not (Test-Path $name)) { Fail "缺少 $name，无法随二进制分发" }
