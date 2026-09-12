@@ -122,6 +122,17 @@ def main() -> int:
         ("arrow_in_string_literal",
          f"const char* s = \"{ARROW}\";\n",
          True),          # an arrow inside a string is not governed by the comment rules
+        # A PowerShell here-string body is data. The opening `@"` is on an earlier
+        # line, so a per-line scanner cannot tell the body from a comment -- and the
+        # false positive lands on exactly the lines that are correct, which is how a
+        # rule gets weakened instead of fixed. Found on the localized help text in
+        # scripts/package.ps1.
+        ("here_string_body_is_not_a_comment",
+         'Fail @"\n' + CJK + ' help text\n"@\n',
+         True),
+        ("here_string_terminator_is_not_a_comment",
+         'Fail @"\nbody\n"@\n',
+         True),
         ("cjk_prose_in_markdown",
          f"# 规格说明\n\n{CJK}的散文按中文书写。\n",
          False),         # documentation is not subject to D2

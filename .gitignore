@@ -44,6 +44,8 @@ msvc_*.log
 # 它们和 build*.log 是同类东西，只是名字不同；统一按"构建日志"忽略。
 *-msvc-*.log
 v-*.log
+q-*.log
+g-*.log
 
 # ── 临时脚手架 ──────────────────────────────────────────────────────────────
 # 门禁脚本的中间产物与调查用的一次性脚本。允许它们存在（开发时反复用到），
@@ -54,3 +56,8 @@ plan.json
 
 # aqtinstall writes this next to the working directory when it fetches Qt
 aqtinstall.log
+
+# Packaging output: built by scripts/package.ps1
+# It is a build artifact (25 MB of Qt DLLs), and shipping is a release action rather
+# than something a commit should carry.
+dist/

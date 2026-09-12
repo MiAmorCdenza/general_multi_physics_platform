@@ -102,21 +102,75 @@ class Violation:
         return f"{shown}:{self.line}: [{self.rule}] {self.detail}\n      {self.snippet}"
 
 
-def comment_text(line: str) -> str:
-    """Extract the comment portion of a source line, if any.
+class CommentScanner:
+    """Finds the comment portion of a source line, tracking state across lines.
 
-    Handles // and /* */ and # for Python/PowerShell/CMake. Deliberately
-    simple: it only needs to be good enough to classify a line, and the
-    gate is verified by tests/meta.
+    The only state that matters in this repository is a PowerShell here-string:
+    everything between `@"` and a line whose stripped form is `"@` is data, not
+    code and not a comment. Every other construct the gate meets is decidable from
+    a single line, so the scanner deliberately stops there rather than growing into
+    a parser for each language it sees.
     """
-    stripped = line.strip()
-    for marker in ("//", "#", "*", "/*", "--"):
-        if stripped.startswith(marker):
+
+    def __init__(self) -> None:
+        self._here_string: str | None = None
+
+    def comment_text(self, line: str) -> str:
+        stripped = line.strip()
+
+        # A here-string terminator closes the body; the line itself carries no
+        # comment either.
+        if self._here_string is not None:
+            if stripped in ('"@', "'@"):
+                self._here_string = None
+            return ""
+
+        # Opening a PowerShell here-string: `@"` or `@'` at the end of a line. The
+        # body starts on the next line.
+        if stripped.endswith('@"') or stripped.endswith("@'"):
+            self._here_string = stripped[-2:]
+            return ""
+
+        # An explicit block-comment continuation line: "* text" inside /** ... */.
+        if stripped.startswith(("*", "/*")):
             return stripped
-    idx = line.find("//")
-    if idx >= 0:
-        return line[idx:]
-    return ""
+
+        quote: str | None = None
+        escaped = False
+        i = 0
+        while i < len(line):
+            ch = line[i]
+
+            if quote is not None:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == quote:
+                    quote = None
+                i += 1
+                continue
+
+            if ch in ("'", '"'):
+                quote = ch
+                i += 1
+                continue
+
+            if ch == "/" and i + 1 < len(line) and line[i + 1] in ("/", "*"):
+                return line[i:]
+            if ch == "#" and (i == 0 or line[i - 1].isspace()):
+                return line[i:]
+            i += 1
+        return ""
+
+
+def comment_text(line: str) -> str:
+    """Single-line convenience wrapper. See CommentScanner for the real rule.
+
+    Kept so that the meta test can keep feeding one line at a time, and so that no
+    caller has to know about the stateful form when it only has one line to judge.
+    """
+    return CommentScanner().comment_text(line)
 
 
 def scan_text(text: str, path: Path, check_comments: bool) -> list[Violation]:
@@ -127,6 +181,7 @@ def scan_text(text: str, path: Path, check_comments: bool) -> list[Violation]:
     True for code, CMake and scripts, and False for documentation.
     """
     out: list[Violation] = []
+    scanner = CommentScanner()
     for n, line in enumerate(text.splitlines(), 1):
         if SUPPRESSION_MARKER in line:
             continue
@@ -136,7 +191,7 @@ def scan_text(text: str, path: Path, check_comments: bool) -> list[Violation]:
                                  snippet))
         if not check_comments:
             continue
-        comment = comment_text(line)
+        comment = scanner.comment_text(line)
         if not comment:
             continue
         if CJK_RE.search(comment):

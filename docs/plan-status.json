@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "GUI 起步：views/model（Qt 无关）+ views/qt（节点编辑器、属性面板）在 MSVC x64 + Qt 6.8.3 下可运行",
+  "updated": "打包链路打通：scripts/package.ps1 产出可分发目录并验证在无 Qt 的 PATH 下能跑",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -28,7 +28,7 @@
     "code_dialect": {
       "tool": "scripts/check_dialect.py",
       "state": "passing",
-      "detail": "D1 象形字符全仓库禁 / D2 源码注释必须 ASCII 英文 / D3 源码注释内禁非 ASCII 图（箭头、制表符）。见 standards/code-dialect.md：箭头归 D3 而非 D1，因为散文里的图是正当的，同一张图出现在注释里才是会在非 UTF-8 控制台坏掉的东西。基线已清零，gate.dialect 作为强制门禁打开。由 tests/meta/check_dialect_gate.py 用 14 反例 + 10 正例验证。"
+      "detail": "D1 象形字符全仓库禁 / D2 源码注释必须 ASCII 英文 / D3 源码注释内禁非 ASCII 图。见 standards/code-dialect.md。扫描器**跨行有状态**：PowerShell here-string（`@\"` 到 `\"@`）的正文是数据而非注释，而逐行扫描看不见起始行——于是它会恰好对着**正确的那些行**报假阳性（scripts/package.ps1 里给用户看的中文帮助文本），而假阳性的通常下场是把规则改松。另有 `--exclude` 之外的行内抑制标记，只用于测试门禁自身的文件。由 tests/meta/check_dialect_gate.py 用 16 反例 + 12 正例验证。"
     },
     "file_encoding": {
       "tool": "scripts/check_encoding.py",
@@ -56,6 +56,11 @@
       "tool": "scripts/check_qt_modules.py",
       "state": "passing",
       "detail": "只允许链接 LGPL 兼容的 Qt 模块。检查的是**生成出来的链接行**而不是源码：源码扫描只能找 `#include <QtCharts/...>`，会漏掉两种真实出错方式——CMake 里声明了组件但被扫的文件没 include，以及某个 LGPL 模块传递依赖 GPL 模块。而法律上要紧的是最终进二进制的那组库，那组库是在构建系统里定下来的。由 tests/meta/check_qt_licence_gate.py 用 4 反例 + 2 正例 + 1 跳过场景验证。**首次在真实构建树上运行就抓到一个洞**：Qt 的 debug 库名带后缀（`Qt6Chartsd.lib`），按原始文件名比对会让 debug 构建漏过——而 debug 正是开发者做原型时链的。现在有专门的夹具。无 Qt 构建树时放行并说明，因为那是本项目承诺能工作的配置。"
+    },
+    "packaging": {
+      "tool": "scripts/package.ps1",
+      "state": "passing",
+      "detail": "组装可分发目录：qp_shell.exe + Qt DLL + 平台插件 + LICENSE / NOTICE / THIRD_PARTY_NOTICES.md + LICENSE.LGPLv3，并**验证产物在把 Qt 目录从 PATH 移除后仍能启动**——只在构建机上能跑的包会通过其它所有检查，所以这一步才是「可分发」这个词的凭据。LGPLv3 全文刻意不入库（仓库里没有 Qt 代码，入库会造成误导），脚本从已安装副本定位，找不到就失败而不是产出一个看起来完整的包。包内容**必须与 NOTICE 声明一致**：首次运行产物里有 Qt6Network 与 tls/networkinformation 插件，而 NOTICE 只声明三个模块——两份文件各自为真却互相矛盾，接收者读到的许可文件描述的是另一个产物。弥合方向是收窄包（--no-network），不是放宽 NOTICE：给一个没有网络功能的课堂工具塞进整套网络栈，既更大又凭空扩大许可面。Qt6Svg 确实会被图标引擎拉进来，因此写进了声明。"
     }
   },
   "test_stats": {
@@ -226,9 +231,8 @@
     "reason": "章程的核心断言是「views/ 与 plugins/ 可以整个删掉，core/ 仍能编译并通过全部测试」，即 core 被设计成**可复用的地基**。可复用的地基应该让它尽可能容易被复用（含专利授权、无 copyleft 摩擦），而不是给它加一道需要法律判断的门槛。否决 LGPL-3.0 的要点：core 是静态库，LGPL-3.0 §4 只允许走 §4(d)(0)（须提供目标代码让用户可重新链接）；LGPL 是为「库」写的而本项目同时是应用与框架；它会给插件生态制造一条取决于构建方式的分界线（DLL 插件不受传染、静态链接 core 的插件受传染），而插件作者不该需要先读许可法才能判断能否闭源。",
     "qt_obligations": "Qt 6.8.3 以 LGPL-3.0 动态链接使用（Qt6Core/Gui/Widgets），未修改 Qt 源码。LGPL-3.0 全文**刻意不入库**——仓库里没有 Qt 代码，入库会产生「这里有 LGPL 代码」的误导；全文属于发行包，由打包步骤作为 LICENSE.LGPLv3 放入。Qt Charts 刻意不用（GPL-3.0 而非 LGPL），绘图改用 QCustomPlot(MIT) 或 QWT(LGPL)。",
     "outstanding": [
-      "scripts/fetch_deps.ps1 -WithQt 无人值守装 Qt（目前手工 aqtinstall）",
-      "打包步骤把 LGPLv3 全文放入发行包",
-      "windeployqt 生成可分发目录并在无 Qt 机器上验证"
+      "scripts/fetch_deps.ps1 -WithQt 无人值守装 Qt（目前手工 aqtinstall 装到 C:\\Qt）",
+      "在一台没装 Qt 的机器上解压发行包并运行（package.ps1 验证的是 PATH 隔离，不是全新机器）"
     ]
   }
 }

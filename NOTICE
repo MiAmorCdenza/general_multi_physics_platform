@@ -18,7 +18,7 @@ Copyright (C) 2010 Nokia Corporation and/or its subsidiary(-ies)
 
 The distributed application links dynamically against the following Qt modules:
 
-    Qt6Core, Qt6Gui, Qt6Widgets
+    Qt6Core, Qt6Gui, Qt6Widgets, Qt6Svg
 
 These modules are used under the GNU Lesser General Public License, version 3
 (LGPL-3.0). The full text of that licence is included with the binary
