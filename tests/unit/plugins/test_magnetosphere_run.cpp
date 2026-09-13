@@ -26,6 +26,7 @@
 #include <qp/plugins/magnetosphere/field_nodes.hpp>
 #include <qp/plugins/magnetosphere/geomagnetic.hpp>
 #include <qp/plugins/magnetosphere/plan.hpp>
+#include <qp/plugins/magnetosphere/render_nodes.hpp>
 #include <qp/plugins/magnetosphere/run.hpp>
 #include <qp/plugins/magnetosphere/units.hpp>
 
@@ -77,6 +78,9 @@ struct Scene final {
         REQUIRE(FieldNodes::mount(host) == 1);
         REQUIRE(PusherNodes::mount(host) == 1);
         REQUIRE(EmitterNodes::mount(host) == 1);
+        // The render item too, or `build_plan` cannot look its descriptor up and silently records no
+        // declaration for it -- which is the failure this case exists to catch, and it caught it here first.
+        REQUIRE(RenderNodes::mount(host) == 1);
     }
 
     [[nodiscard]] graph::EvalContext ctx() noexcept {
@@ -688,4 +692,45 @@ TEST_CASE("magnetosphere.run.a_provider_builds_a_run_from_a_graph", "[magnetosph
     REQUIRE_FALSE(refused.ok());
     REQUIRE(refused.run == nullptr);
     REQUIRE(refused.refusal == std::string{to_string(RunRefusal::field_not_baked)});
+}
+
+
+TEST_CASE("magnetosphere.render.the_item_is_declared_and_never_evaluated", "[magnetosphere]") {
+    // **What the render domain is for.** A render node is a *declaration*: the graph says what it wants drawn,
+    // nothing is evaluated, and a view item does the drawing. `graph/domain` already implements that split --
+    // a declared output whose node has no compute goes into `plan.render.declared` -- and this case is what pins
+    // the kit against it, because a render type that quietly set `has_compute` true would be evaluated during a
+    // bake and would drag the view layer's representation into the kernel.
+    Scene scene;
+    const Chain chain = add_chain(scene, 0.0, 6.6, 4, 0.01, 90.0);
+    const graph::NodeId item = scene.add(RenderNodes::kParticlesType);
+    scene.set(item, RenderNodes::kPortTrail, 32.0);
+    scene.wire(chain.pusher, PusherNodes::kPortStateOut, item, RenderNodes::kPortState);
+    scene.declared.add(graph::DeclaredOutput{item, RenderNodes::kPortItem});
+
+    const std::vector<graph::NodeDesc> types = RenderNodes::node_types();
+    REQUIRE(types.size() == 1);
+    REQUIRE(types.front().type_name == RenderNodes::kParticlesType);
+    REQUIRE_FALSE(types.front().has_compute);
+    REQUIRE(types.front().find_port(RenderNodes::kPortState, false) != nullptr);
+    REQUIRE(types.front().find_port(RenderNodes::kPortItem, true) != nullptr);
+    REQUIRE(types.front().find_port(RenderNodes::kPortItem, true)->type == qp::ports::kParticleBuffer);
+
+    const graph::ExecutionPlan plan =
+        graph::build_plan(scene.g, graph::PlanContext{&scene.host.node_types()}, scene.declared);
+
+    // Declared, with the port the graph named -- the pair is what a view item is handed.
+    REQUIRE(plan.render.declared().size() == 1);
+    REQUIRE(plan.render.declared().front().node == item);
+    REQUIRE(plan.render.declared().front().port == RenderNodes::kPortItem);
+    // And **not evaluated**: the render domain has no execution order, and the node appears in neither
+    // evaluation plan. A node in both would be drawn and computed, which is the weld this design prevents.
+    REQUIRE(plan.render.order().empty());
+    for (const graph::NodeId id : plan.field.order()) REQUIRE(id != item);
+    for (const graph::NodeId id : plan.particle.order()) REQUIRE(id != item);
+    // The chain that feeds it *is* in the particle plan, so the item is reached through the graph rather than
+    // standing alone: the declaration is what makes the branch reachable, and the branch is what makes the
+    // declaration meaningful.
+    REQUIRE_FALSE(plan.particle.order().empty());
+    REQUIRE(plan.field.order().size() == 1);
 }
