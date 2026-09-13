@@ -77,7 +77,7 @@ struct Scene final {
 
     Scene() {
         // Three field models now: the dipole, the uniform field and the sum.
-        REQUIRE(FieldNodes::mount(host) == 3);
+        REQUIRE(FieldNodes::mount(host) == 4);
         REQUIRE(PusherNodes::mount(host) == 1);
         REQUIRE(EmitterNodes::mount(host) == 1);
         // The render item too, or `build_plan` cannot look its descriptor up and silently records no
@@ -847,6 +847,37 @@ TEST_CASE("magnetosphere.field_nodes.a_uniform_field_is_uniform", "[magnetospher
     REQUIRE(scene.fields.size() == 2);
     REQUIRE(scene.fields.contains(gfield::FieldKey{dipole.index, FieldNodes::kPortField}));
     REQUIRE(scene.fields.contains(gfield::FieldKey{uniform.index, FieldNodes::kPortField}));
+
+    // **The electric field, which is the same table and a different quantity.** The pusher has had an electric
+    // socket since it was written and nothing produced a field for it; this node is that production, and what
+    // distinguishes it from the magnetic bake is exactly one thing -- the dimension in the description.
+    const graph::NodeId electric = scene.add(FieldNodes::kUniformElectricType);
+    scene.set(electric, FieldNodes::kPortE0, 0.0);
+    scene.set(electric, FieldNodes::kPortE1, 1.0e-3);
+    scene.set(electric, FieldNodes::kPortE2, 0.0);
+    for (graph::PortNumber axis = 0; axis < 3; ++axis) {
+        scene.set(electric, FieldNodes::kPortElectricOrigin0 + axis, -2.0 * kEarthRadiusM);
+        scene.set(electric, FieldNodes::kPortElectricOrigin0 + 3 + axis, 1.0 * kEarthRadiusM);
+        scene.set(electric, FieldNodes::kPortElectricOrigin0 + 6 + axis, 5.0);
+    }
+    REQUIRE(scene.bake().has_value());
+    const gfield::FieldValue volts =
+        scene.fields.view(gfield::FieldKey{electric.index, FieldNodes::kPortField});
+    REQUIRE(gfield::is_readable(volts));
+    REQUIRE(volts.point_count() == 125);
+    // Volts per metre: kg m / (A s^3). The magnetic table beside it is kg / (A s^2), and the two descriptions
+    // differ in exactly the exponents that tell them apart -- which is what the dimension parameter is for.
+    REQUIRE(volts.dimension().M == 1);
+    REQUIRE(volts.dimension().L == 1);
+    REQUIRE(volts.dimension().T == -3);
+    REQUIRE(volts.dimension().I == -1);
+    REQUIRE(view.dimension().L == 0);
+    REQUIRE(view.dimension().T == -2);
+    for (std::uint64_t point = 0; point < volts.point_count(); ++point) {
+        REQUIRE(gfield::get_component(volts, point, 0) == 0.0);
+        REQUIRE(gfield::get_component(volts, point, 1) == 1.0e-3);
+        REQUIRE(gfield::get_component(volts, point, 2) == 0.0);
+    }
 
     // A non-finite component is refused rather than baked: a field table full of NaN is a run that produces
     // NaN positions with nothing said.

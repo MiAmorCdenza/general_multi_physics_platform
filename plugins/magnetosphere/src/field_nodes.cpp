@@ -305,7 +305,48 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {
     sum_out.unit_symbol = "T";
     sum.outputs.push_back(sum_out);
 
-    return {std::move(dipole), std::move(uniform), std::move(sum)};
+    graph::NodeDesc electric;
+    electric.type_name = kUniformElectricType;
+    electric.label = "Uniform E field";
+    electric.description = "The same electric field everywhere, in volts per metre. Wire it into a pusher's "
+                           "electric socket: with a magnetic field it produces the E x B drift, which is what "
+                           "gives a magnetosphere its convection pattern.";
+    electric.category = "field";
+    electric.version = 1;
+    electric.allow_in_field_domain = true;
+    electric.allow_in_particle_domain = false;
+    electric.has_compute = true;
+    graph::PortDesc ex = parameter(kPortE0, "e_x", "E x", "V/m", 1.0e-5);
+    ex.description = "The field's x component. A tenth of a millivolt per metre is the order of the "
+                     "cross-polar-cap field mapped to the equatorial plane, so the drift it produces is visible "
+                     "over a run rather than over a thousand.";
+    electric.inputs.push_back(ex);
+    electric.inputs.push_back(parameter(kPortE1, "e_y", "E y", "V/m", 1.0e-5));
+    electric.inputs.push_back(parameter(kPortE2, "e_z", "E z", "V/m", 1.0e-5));
+    for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+        const char* names[9] = {"origin_x", "origin_y", "origin_z",     "spacing_x", "spacing_y",
+                                "spacing_z", "count_x",  "count_y",      "count_z"};
+        const char* labels[9] = {"Grid origin x", "Grid origin y", "Grid origin z",     "Grid spacing x",
+                                 "Grid spacing y", "Grid spacing z", "Nodes along x",   "Nodes along y",
+                                 "Nodes along z"};
+        const char* units[9] = {"m", "m", "m", "m", "m", "m", "", "", ""};
+        const double steps[9] = {kEarthRadiusM, kEarthRadiusM, kEarthRadiusM, 0.1 * kEarthRadiusM,
+                                 0.1 * kEarthRadiusM, 0.1 * kEarthRadiusM, 1.0, 1.0, 1.0};
+        electric.inputs.push_back(parameter(kPortElectricOrigin0 + offset, names[offset], labels[offset],
+                                            units[offset], steps[offset]));
+    }
+    graph::PortDesc e_out;
+    e_out.number = kPortField;
+    e_out.name = "field";
+    e_out.label = "Electric field";
+    e_out.description = "The baked field, as a volume of volt-per-metre vectors.";
+    e_out.type = qp::ports::kVectorField;
+    e_out.connectable = true;
+    e_out.required = false;
+    e_out.unit_symbol = "V/m";
+    electric.outputs.push_back(e_out);
+
+    return {std::move(dipole), std::move(uniform), std::move(sum), std::move(electric)};
 }
 
 gfield::FieldValue DipoleEvaluator::input_field(const graph::NodeId id, const graph::PortNumber port) const noexcept {
@@ -327,6 +368,23 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
     graph::NodeId id, const graph::NodeDesc& desc,
     const std::vector<std::pair<graph::PortNumber, qp::ports::Value>>& inputs) {
     using Outcome = std::vector<std::pair<graph::PortNumber, qp::ports::Value>>;
+    if (desc.type_name == FieldNodes::kUniformElectricType) {
+        const graph::InputView electric_view{inputs};
+        const Vec3 value{real_or(electric_view, FieldNodes::kPortE0, 0.0),
+                         real_or(electric_view, FieldNodes::kPortE1, 0.0),
+                         real_or(electric_view, FieldNodes::kPortE2, 0.0)};
+        const GridSpec electric_grid = FieldNodes::read_from(electric_view, FieldNodes::kPortElectricOrigin0);
+        const gfield::FieldKey electric_key{id.index, FieldNodes::kPortField};
+        // **Volts per metre**, and the dimension is the only difference from the magnetic bake: the pusher reads
+        // both sockets through the same vocabulary, so a description that mixed them up would make an electric
+        // field appear as a magnetic one with nothing downstream able to tell.
+        if (!bake_uniform(value, electric_grid, electric_key, *fields_, volt_per_metre_dimension())) {
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        Outcome out;
+        out.emplace_back(FieldNodes::kPortField, qp::ports::Value{fields_->view(electric_key).desc});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
     if (desc.type_name == FieldNodes::kSumType) {
         const graph::InputView sum_view{inputs};
         const GridSpec sum_grid = FieldNodes::read_from(sum_view);

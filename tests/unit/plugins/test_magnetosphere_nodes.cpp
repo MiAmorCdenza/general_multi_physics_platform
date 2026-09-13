@@ -79,7 +79,7 @@ struct Scene final {
 
     Scene() {
         // Three field models now: the dipole, the uniform field and the sum.
-        REQUIRE(FieldNodes::mount(host) == 3);
+        REQUIRE(FieldNodes::mount(host) == 4);
         REQUIRE(PusherNodes::mount(host) == 1);
     }
 
@@ -173,10 +173,11 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // Two field models: the dipole and the uniform field. Each is a **type of its own** with its own port
     // numbers, which is the composition principle -- a shielding field is `mul(convection, shield)`, not a
     // switch inside a node -- and what the uniform field was added to make demonstrable.
-    REQUIRE(types.size() == 3);
+    REQUIRE(types.size() == 4);
     REQUIRE(types[0].type_name == FieldNodes::kDipoleType);
     REQUIRE(types[1].type_name == FieldNodes::kUniformType);
     REQUIRE(types[2].type_name == FieldNodes::kSumType);
+    REQUIRE(types[3].type_name == FieldNodes::kUniformElectricType);
     const graph::NodeDesc& dipole = types.front();
     REQUIRE(dipole.type_name == FieldNodes::kDipoleType);
     REQUIRE(dipole.valid());
@@ -225,7 +226,7 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // second mount registers nothing, because a name that is taken is left alone rather than duplicated.
     qp::host::PluginHost host{qp::plugin::Capability::node_types};
     // Three field models now: the dipole, the uniform field and the sum.
-        REQUIRE(FieldNodes::mount(host) == 3);
+        REQUIRE(FieldNodes::mount(host) == 4);
     REQUIRE(host.node_types().find(FieldNodes::kDipoleType) != nullptr);
     REQUIRE(FieldNodes::mount(host) == 0);
 }
