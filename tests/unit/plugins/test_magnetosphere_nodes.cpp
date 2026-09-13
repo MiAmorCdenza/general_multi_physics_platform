@@ -82,7 +82,7 @@ struct Scene final {
         // mask, the multiplier and the convection field. Each is a **type of its own** with its own port numbers,
         // which is the composition principle -- a shielding field is `mul(convection, shield)`, not a switch
         // inside a node.
-        REQUIRE(FieldNodes::mount(host) == 9);
+        REQUIRE(FieldNodes::mount(host) == 10);
         REQUIRE(PusherNodes::mount(host) == 1);
     }
 
@@ -177,7 +177,7 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // mask, the multiplier and the convection field. Each is a **type of its own** with its own port numbers,
     // which is the composition principle -- a shielding field is `mul(convection, shield)`, not a switch inside a
     // node.
-    REQUIRE(types.size() == 9);
+    REQUIRE(types.size() == 10);
     REQUIRE(types[0].type_name == FieldNodes::kDipoleType);
     REQUIRE(types[1].type_name == FieldNodes::kUniformType);
     REQUIRE(types[2].type_name == FieldNodes::kSumType);
@@ -244,9 +244,9 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // Mounting is what makes the type reachable from a running program rather than only from a test fixture. The
     // second mount registers nothing, because a name that is taken is left alone rather than duplicated.
     qp::host::PluginHost host{qp::plugin::Capability::node_types};
-    // Nine field models now, and the count is asserted rather than assumed: it is the one place a new type
+    // Ten field models now, and the count is asserted rather than assumed: it is the one place a new type
     // announces itself in the test suite, so a type that silently failed to register is a failure here.
-    REQUIRE(FieldNodes::mount(host) == 9);
+    REQUIRE(FieldNodes::mount(host) == 10);
     REQUIRE(host.node_types().find(FieldNodes::kDipoleType) != nullptr);
     REQUIRE(FieldNodes::mount(host) == 0);
 }
@@ -440,7 +440,7 @@ TEST_CASE("magnetosphere.field_nodes.a_field_scales_by_its_weight", "[magnetosph
     // where the weight belongs are both refused by `check_connection`, so the multiplier's own check is the second
     // line of defence rather than the only one.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 9);
+    REQUIRE(types.size() == 10);
     REQUIRE(types[5].type_name == FieldNodes::kMulType);
     REQUIRE(types[5].has_compute);
     const graph::PortDesc* mul_field = types[5].find_port(FieldNodes::kPortMulField, false);
@@ -566,7 +566,7 @@ TEST_CASE("magnetosphere.field_nodes.the_convection_field_is_the_potentials_grad
 
     // The type is declared like the others and allowed only where a bake is.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 9);
+    REQUIRE(types.size() == 10);
     REQUIRE(types[6].type_name == FieldNodes::kConvectionType);
     REQUIRE(types[6].has_compute);
     REQUIRE(types[6].allow_in_field_domain);
@@ -695,7 +695,7 @@ TEST_CASE("magnetosphere.field_nodes.corotation_is_the_rotation_the_field_allows
     // The type declares one socket and no grid parameters, which is the decision this node makes: it bakes on the
     // lattice of the field it reads, so there is no second grid to disagree with the first.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 9);
+    REQUIRE(types.size() == 10);
     REQUIRE(types[7].type_name == FieldNodes::kCorotationType);
     REQUIRE(types[7].has_compute);
     REQUIRE(types[7].inputs.size() == 1);
@@ -936,7 +936,7 @@ TEST_CASE("magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_
 
     // And the type is declared with its own grid ports, three parameters first -- the same shape the mask has.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 9);
+    REQUIRE(types.size() == 10);
     REQUIRE(types[8].type_name == FieldNodes::kAtmosphereType);
     REQUIRE(types[8].has_compute);
     REQUIRE(types[8].allow_in_field_domain);
@@ -951,6 +951,168 @@ TEST_CASE("magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_
         REQUIRE(parameter != nullptr);
         REQUIRE_FALSE(parameter->connectable);
     }
+}
+
+TEST_CASE("magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_implies", "[magnetosphere]") {
+    // The tail's analytic model: `B = (B0 tanh(z/L), 0, 0)`. Three properties make it the model a course writes
+    // down -- the reversal across the plane, the saturation away from it, and **exactly zero in the plane** -- and
+    // a fourth is what turns it from arithmetic into physics: Ampere's law says what current the field implies, and
+    // that current can be measured from the baked table by differentiating it.
+    const GridSpec grid{Vec3{-2.0 * kEarthRadiusM, -2.0 * kEarthRadiusM, -8.0 * kEarthRadiusM},
+                        Vec3{0.1 * kEarthRadiusM, 0.1 * kEarthRadiusM, 0.025 * kEarthRadiusM},
+                        41, 41, 641};
+    FieldNodes::SheetSpec spec;
+    spec.b0_tesla = 5.0e-9;
+    spec.half_thickness_m = 2.0 * kEarthRadiusM;
+    gfield::FieldSet fields;
+    const gfield::FieldKey key{41, FieldNodes::kPortField};
+    REQUIRE(bake_current_sheet(spec, grid, key, fields));
+    const gfield::FieldValue sheet = fields.view(key);
+    REQUIRE(gfield::is_readable(sheet));
+    REQUIRE(sheet.is_vector());
+    REQUIRE(sheet.desc.dimension.M == 1);
+    REQUIRE(sheet.desc.dimension.T == -2);
+
+    // Every node, against the closed form, and the two other components **exactly zero**: a sheet is
+    // one-dimensional, and a `B_y` that came out as 1e-30 would be a number in the table that is not the model.
+    for (std::uint64_t point = 0; point < sheet.point_count(); ++point) {
+        const std::uint64_t k = point % grid.nz;
+        const double z = grid.origin_m.z + static_cast<double>(k) * grid.spacing_m.z;
+        REQUIRE(gfield::get_component(sheet, point, 0) == spec.b0_tesla * std::tanh(z / spec.half_thickness_m));
+        REQUIRE(gfield::get_component(sheet, point, 1) == 0.0);
+        REQUIRE(gfield::get_component(sheet, point, 2) == 0.0);
+    }
+
+    // The three properties, read back from the table rather than recomputed: zero in the plane, opposite signs
+    // either side of it, and saturation at the lobe value several half-thicknesses away.
+    const auto bx_at_z = [&](double z_m) {
+        const auto k = static_cast<std::uint64_t>(std::lround((z_m - grid.origin_m.z) / grid.spacing_m.z));
+        const std::uint64_t at = (0 * grid.ny + grid.ny / 2) * grid.nz + k;
+        return gfield::get_component(sheet, at, 0);
+    };
+    REQUIRE(bx_at_z(1.0 * kEarthRadiusM) > 0.0);
+    REQUIRE(bx_at_z(-1.0 * kEarthRadiusM) < 0.0);
+    // Odd symmetry, to a few parts in a billion rather than exactly: `tanh` is odd and the bake is one
+    // multiplication, but the nodes at `+z` and `-z` are **not** exactly symmetric about the plane -- the spacing is
+    // not a binary fraction of an earth radius, so `origin + k*spacing` and `origin + (n-k)*spacing` differ in their
+    // last bits. The same rounding is why this case's first version failed on `bx_at_z(0.0) == 0.0`: the node
+    // nearest the plane is a hundred-millionth of a metre *from* it, and `tanh` there is not zero but 8e-16.
+    REQUIRE(std::abs(bx_at_z(1.0 * kEarthRadiusM) + bx_at_z(-1.0 * kEarthRadiusM)) /
+                std::abs(bx_at_z(1.0 * kEarthRadiusM)) < 1.0e-9);
+    // **Zero in the plane is a property of the continuum**, and the honest way to assert it on a lattice is to ask
+    // the sampler for the plane itself: the trilinear blend of two nodes that are nearly equal and opposite is zero
+    // to within what a double can say about it. And the bound the model gives at any node -- `|tanh u| <= |u|` -- is
+    // asserted at the node nearest the plane, which is a statement about the model rather than about the spacing.
+    const Vec3 in_the_plane = sample_baked(sheet, grid.origin_m, grid.spacing_m, Vec3{0.0, 0.0, 0.0});
+    REQUIRE(std::abs(in_the_plane.x) < 1.0e-15 * spec.b0_tesla);
+    const double nearest_node_z = grid.origin_m.z + static_cast<double>(grid.nz / 2) * grid.spacing_m.z;
+    REQUIRE(std::abs(bx_at_z(nearest_node_z)) <=
+            spec.b0_tesla * (std::abs(nearest_node_z) + grid.spacing_m.z) / spec.half_thickness_m);
+    // `tanh(1) = 0.7616` at one half-thickness, and within a percent of the lobe value at three.
+    REQUIRE(std::abs(bx_at_z(2.0 * kEarthRadiusM) - spec.b0_tesla * 0.7615941559557649) < 1.0e-20);
+    REQUIRE(std::abs(bx_at_z(6.0 * kEarthRadiusM) - spec.b0_tesla) / spec.b0_tesla < 0.01);
+
+    // **The current the field implies**, measured by differentiating the table: `J_y = -(1/mu0) dB_x/dz`, which for
+    // this model is `-(B0/(mu0 L)) sech^2(z/L)` -- concentrated in the sheet, and carrying `B0/mu0` amperes per
+    // metre in total. The measured centre value is compared against the closed form where the central difference's
+    // truncation error is smallest.
+    const double mu0 = 4.0 * 3.14159265358979323846 * kMu0OverFourPi;
+    const double dz = grid.spacing_m.z;
+    const double derivative = (bx_at_z(dz) - bx_at_z(-dz)) / (2.0 * dz);
+    const double measured_jy = -derivative / mu0;
+    const double predicted_jy = -spec.b0_tesla / (mu0 * spec.half_thickness_m);
+    REQUIRE(std::abs(measured_jy - predicted_jy) / std::abs(predicted_jy) < 0.01);
+
+    // The **total** sheet current, `integral J_y dz`, which must be `-2 B0/mu0` however the current is distributed:
+    // the field swings from `-B0` to `+B0`, and `integral J_y dz = -(1/mu0) [B_x]` across the sheet is that whole
+    // swing over `mu0`. The factor of two is the one this assertion's first version got wrong -- it predicted
+    // `-B0/mu0` and the measurement came back at 1.9987 times that, which is the arithmetic being right and the
+    // expectation being wrong. It holds for any scale height, so a bake that got `L` wrong but kept the shape still
+    // fails here.
+    double total_current = 0.0;
+    for (std::uint64_t k = 0; k < grid.nz; ++k) {
+        const double z = grid.origin_m.z + static_cast<double>(k) * grid.spacing_m.z;
+        const double plus = std::tanh((z + dz) / spec.half_thickness_m);
+        const double minus = std::tanh((z - dz) / spec.half_thickness_m);
+        total_current += -(spec.b0_tesla * (plus - minus) / (2.0 * dz)) / mu0 * dz;
+    }
+    const double predicted_total = -2.0 * spec.b0_tesla / mu0;
+    REQUIRE(std::abs(total_current - predicted_total) / std::abs(predicted_total) < 0.01);
+    // Amperes per metre: five nanotesla over mu0 is four milliamperes per metre, and the reversal doubles it -- the
+    // number a textbook gives for a quiet tail's cross-tail current.
+    REQUIRE(std::abs(predicted_total) > 1.0e-3);
+    REQUIRE(std::abs(predicted_total) < 1.0e-2);
+
+    // **And the composition it exists for**: adding the sheet to a dipole is the classic cross-section, and the sum
+    // is exactly the two fields added -- checked at a tailward point where both are present, which is where a
+    // composition that quietly dropped one of them would show.
+    const gfield::FieldKey dipole_key{42, FieldNodes::kPortField};
+    REQUIRE(bake_dipole(0.0, kDipoleMomentAm2, grid, dipole_key, fields));
+    const gfield::FieldKey combined{43, FieldNodes::kPortField};
+    REQUIRE(bake_sum(fields.view(dipole_key), sheet, combined, fields));
+    const gfield::FieldValue sum = fields.view(combined);
+    const auto point_at = [&](double x_m, double z_m) {
+        const auto i = static_cast<std::uint64_t>(std::lround((x_m - grid.origin_m.x) / grid.spacing_m.x));
+        const auto k = static_cast<std::uint64_t>(std::lround((z_m - grid.origin_m.z) / grid.spacing_m.z));
+        return (i * grid.ny + grid.ny / 2) * grid.nz + k;
+    };
+    const std::uint64_t tail = point_at(-1.5 * kEarthRadiusM, 0.0);
+    const std::uint64_t lobe = point_at(-1.5 * kEarthRadiusM, 6.0 * kEarthRadiusM);
+    for (std::uint64_t component = 0; component < 3; ++component) {
+        REQUIRE(gfield::get_component(sum, lobe, component) ==
+                gfield::get_component(fields.view(dipole_key), lobe, component) +
+                    gfield::get_component(sheet, lobe, component));
+    }
+    // In the neutral plane the sheet's own field is exactly zero, so the sum's `x` component there is the dipole's
+    // -- which at a tailward point on the equator is small but not zero, and the assertion says which of the two it
+    // is rather than asserting a zero that only the sheet would give.
+    // The sheet's own field in the plane is zero, and the node nearest the plane is **not in it**: the spacing is
+    // not a binary fraction of an earth radius, so that node sits about three nanometres off the plane and holds
+    // `tanh(z/L)` there -- measured as `-0x1.c3e7596b2bd7ap-80`, which is -1.5e-24 tesla. Catch2 prints that as
+    // "-0.0" and the first version of this line asserted `== 0.0`, so it failed while *looking* like an
+    // impossibility. The bound the model gives is what belongs here: `|tanh u| <= |u|`, and the node is within one
+    // spacing of the plane.
+    const double sheet_x_at_tail = gfield::get_component(sheet, tail, 0);
+    REQUIRE(std::abs(sheet_x_at_tail) <= spec.b0_tesla * grid.spacing_m.z / spec.half_thickness_m);
+    // In the neutral plane the sheet contributes nothing to any physical scale, so the sum's `x` there is the
+    // dipole's -- asserted with the same model bound as above rather than as an equality, because "nothing" is
+    // 1.5e-24 tesla on this lattice rather than zero.
+    REQUIRE(std::abs(gfield::get_component(sum, tail, 0) - gfield::get_component(fields.view(dipole_key), tail, 0)) <=
+            spec.b0_tesla * grid.spacing_m.z / spec.half_thickness_m);
+    REQUIRE(gfield::get_component(sum, tail, 2) < 0.0);
+    // **Relative sizes, measured rather than assumed.** At 1.5 earth radii downwind and 6 up, the dipole's `x`
+    // component is 8.9e-8 T and the sheet's is 5e-9: the planet still wins by eighteen, and that is the honest
+    // physics of a five-nanotesla tail -- it takes over tens of earth radii out, which this box (two radii either
+    // way) deliberately does not reach, because the point of the node is the *sheet*, not a picture of the tail.
+    // The line this replaced claimed the sheet dominated here by a hundred, a number nobody had measured.
+    const double sheet_lobe = gfield::get_component(sheet, lobe, 0);
+    const double dipole_lobe_x = gfield::get_component(fields.view(dipole_key), lobe, 0);
+    REQUIRE(std::abs(sheet_lobe - spec.b0_tesla) / spec.b0_tesla < 0.01);
+    REQUIRE(std::abs(dipole_lobe_x) > 5.0 * std::abs(sheet_lobe));
+
+    // Refusals: a sheet of zero thickness is a discontinuity rather than a sheet, and a grid that cannot be baked.
+    FieldNodes::SheetSpec knife = spec;
+    knife.half_thickness_m = 0.0;
+    REQUIRE_FALSE(bake_current_sheet(knife, grid, key, fields));
+    FieldNodes::SheetSpec nan = spec;
+    nan.b0_tesla = std::numeric_limits<double>::quiet_NaN();
+    REQUIRE_FALSE(bake_current_sheet(nan, grid, key, fields));
+    const GridSpec too_small{Vec3{}, Vec3{1.0, 1.0, 1.0}, 1, 1, 1};
+    REQUIRE_FALSE(bake_current_sheet(spec, too_small, key, fields));
+
+    // The type declares its own grid ports after its two parameters, and publishes tesla.
+    const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
+    REQUIRE(types.size() == 10);
+    REQUIRE(types[9].type_name == FieldNodes::kCurrentSheetType);
+    REQUIRE(types[9].has_compute);
+    REQUIRE(types[9].allow_in_field_domain);
+    REQUIRE_FALSE(types[9].allow_in_particle_domain);
+    const graph::PortDesc* out = types[9].find_port(FieldNodes::kPortField, true);
+    REQUIRE(out != nullptr);
+    REQUIRE(out->type == qp::ports::kVectorField);
+    REQUIRE(out->unit_symbol == std::string{"T"});
+    REQUIRE(types[9].find_port(FieldNodes::kPortSheetOrigin0, false) != nullptr);
+    REQUIRE_FALSE(types[9].find_port(FieldNodes::kPortSheetOrigin0, false)->connectable);
 }
 
 TEST_CASE("magnetosphere.field_nodes.the_dipole_is_baked_onto_the_grid_it_declares", "[magnetosphere]") {

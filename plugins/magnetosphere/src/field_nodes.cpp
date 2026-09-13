@@ -142,6 +142,10 @@ namespace {
         out = FieldNodes::kPortAtmosphereOrigin0;
         return true;
     }
+    if (type_name == FieldNodes::kCurrentSheetType) {
+        out = FieldNodes::kPortSheetOrigin0;
+        return true;
+    }
     // `field.mul` is the one type that declares no grid at all: a product is defined on the lattice its inputs
     // share, so it forwards. A caller reaching here with `mul` has failed to follow the wire, which is what the
     // walk below exists to do.
@@ -441,6 +445,42 @@ bool bake_atmosphere(const FieldNodes::AtmosphereSpec& spec, const GridSpec& gri
         }
     }
     return fields.publish(key, desc, std::move(rates));
+}
+
+FieldNodes::SheetSpec FieldNodes::read_sheet_from(const graph::InputView& inputs) noexcept {
+    SheetSpec spec;
+    spec.b0_tesla = real_or(inputs, kPortSheetB0, kDefaultSheetB0);
+    spec.half_thickness_m = real_or(inputs, kPortSheetThickness, kDefaultSheetThicknessM);
+    return spec;
+}
+
+FieldNodes::SheetSpec FieldNodes::read_sheet(const graph::Node& node) noexcept {
+    graph::PortValues values;
+    values.reserve(node.params.size());
+    for (const graph::ParamValue& p : node.params) values.emplace_back(p.number, p.value);
+    return read_sheet_from(graph::InputView{values});
+}
+
+bool bake_current_sheet(const FieldNodes::SheetSpec& spec, const GridSpec& grid, gfield::FieldKey key,
+                        gfield::FieldSet& fields) {
+    if (!bakeable(grid)) return false;
+    if (!std::isfinite(spec.b0_tesla)) return false;
+    if (!std::isfinite(spec.half_thickness_m) || !(spec.half_thickness_m > 0.0)) return false;
+
+    BakedField table{grid.origin_m, grid.spacing_m, grid.nx, grid.ny, grid.nz};
+    for (std::uint32_t i = 0; i < grid.nx; ++i) {
+        for (std::uint32_t j = 0; j < grid.ny; ++j) {
+            for (std::uint32_t k = 0; k < grid.nz; ++k) {
+                const double z = grid.node_position(i, j, k).z;
+                // **Exact zeros in the two other components**, not expressions that ought to vanish: a sheet is
+                // one-dimensional, and a `B_y` that came out as 1e-30 would be a number in the table that is not
+                // the model. The case asserts the zeros at every node, which is what keeps this honest.
+                table.set_node(i, j, k, Vec3{spec.b0_tesla * std::tanh(z / spec.half_thickness_m), 0.0, 0.0});
+            }
+        }
+    }
+    const qp::abi::LatticeDesc desc = table.view(tesla_dimension()).desc;
+    return fields.publish(key, desc, std::move(table.data()));
 }
 
 std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipole;
@@ -850,9 +890,55 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     a_out.unit_symbol = "1/s";
     atmosphere.outputs.push_back(a_out);
 
-    return {std::move(dipole),      std::move(uniform),    std::move(sum),      std::move(electric),
+    // ---------------- the tail's current sheet ----------------
+    graph::NodeDesc sheet;
+    sheet.type_name = kCurrentSheetType;
+    sheet.label = "Tail current sheet";
+    sheet.description = "A Harris current sheet, B = (B0 tanh(z/L), 0, 0): the analytic model of the stretched "
+                        "nightside. Add it to a dipole for the classic magnetosphere cross-section -- closed lines "
+                        "on the dayside and stretched ones on the nightside -- or use it alone to study the "
+                        "neutral sheet, where the field is exactly zero.";
+    sheet.category = "field";
+    sheet.version = 1;
+    sheet.allow_in_field_domain = true;
+    sheet.allow_in_particle_domain = false;
+    sheet.has_compute = true;
+    graph::PortDesc b0 = parameter(kPortSheetB0, "b0", "Lobe field", "T", 1.0e-9);
+    b0.description = "The field the sheet saturates to away from the plane. Five nanotesla is the quiet tail's "
+                     "order, four orders below the surface field, which is why the sum of this and a dipole is a "
+                     "dipole near the Earth and a sheet far from it.";
+    sheet.inputs.push_back(b0);
+    graph::PortDesc thickness = parameter(kPortSheetThickness, "half_thickness", "Half thickness", "m",
+                                          kEarthRadiusM);
+    thickness.description = "The sheet's half-thickness: how far from the plane the field has risen to tanh(1) of "
+                            "its lobe value. A few earth radii at the distances a first course looks at.";
+    sheet.inputs.push_back(thickness);
+    for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+        const char* names[9] = {"origin_x", "origin_y", "origin_z", "spacing_x", "spacing_y",
+                                "spacing_z", "count_x",  "count_y",   "count_z"};
+        const char* labels[9] = {"Grid origin x", "Grid origin y", "Grid origin z",   "Grid spacing x",
+                                 "Grid spacing y", "Grid spacing z", "Nodes along x", "Nodes along y",
+                                 "Nodes along z"};
+        const char* units[9] = {"m", "m", "m", "m", "m", "m", "", "", ""};
+        const double steps[9] = {kEarthRadiusM, kEarthRadiusM, kEarthRadiusM, 0.1 * kEarthRadiusM,
+                                 0.1 * kEarthRadiusM, 0.1 * kEarthRadiusM, 1.0, 1.0, 1.0};
+        sheet.inputs.push_back(parameter(kPortSheetOrigin0 + offset, names[offset], labels[offset], units[offset],
+                                         steps[offset]));
+    }
+    graph::PortDesc s_out;
+    s_out.number = kPortField;
+    s_out.name = "field";
+    s_out.label = "Magnetic field";
+    s_out.description = "The baked sheet, as a volume of tesla vectors.";
+    s_out.type = qp::ports::kVectorField;
+    s_out.connectable = true;
+    s_out.required = false;
+    s_out.unit_symbol = "T";
+    sheet.outputs.push_back(s_out);
+
+    return {std::move(dipole),      std::move(uniform),    std::move(sum),        std::move(electric),
             std::move(mask),        std::move(mul),        std::move(convection), std::move(corotation),
-            std::move(atmosphere)};
+            std::move(atmosphere),  std::move(sheet)};
 }
 
 gfield::FieldValue DipoleEvaluator::input_field(const graph::NodeId id, const graph::PortNumber port) const noexcept {
@@ -874,6 +960,18 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
     graph::NodeId id, const graph::NodeDesc& desc,
     const std::vector<std::pair<graph::PortNumber, qp::ports::Value>>& inputs) {
     using Outcome = std::vector<std::pair<graph::PortNumber, qp::ports::Value>>;
+    if (desc.type_name == FieldNodes::kCurrentSheetType) {
+        const graph::InputView sheet_view{inputs};
+        const FieldNodes::SheetSpec spec = FieldNodes::read_sheet_from(sheet_view);
+        const GridSpec sheet_grid = FieldNodes::read_from(sheet_view, FieldNodes::kPortSheetOrigin0);
+        const gfield::FieldKey sheet_key{id.index, FieldNodes::kPortField};
+        if (!bake_current_sheet(spec, sheet_grid, sheet_key, *fields_)) {
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        Outcome out;
+        out.emplace_back(FieldNodes::kPortField, qp::ports::Value{fields_->view(sheet_key).desc});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
     if (desc.type_name == FieldNodes::kAtmosphereType) {
         const graph::InputView atmosphere_view{inputs};
         const FieldNodes::AtmosphereSpec spec = FieldNodes::read_atmosphere_from(atmosphere_view);

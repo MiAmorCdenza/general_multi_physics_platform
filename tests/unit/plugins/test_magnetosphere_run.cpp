@@ -79,7 +79,7 @@ struct Scene final {
     Scene() {
         // Seven field models now: the dipole, the uniform field, the sum, the electric field, the region mask,
         // the multiplier and the convection field.
-        REQUIRE(FieldNodes::mount(host) == 9);
+        REQUIRE(FieldNodes::mount(host) == 10);
         REQUIRE(PusherNodes::mount(host) == 1);
         REQUIRE(EmitterNodes::mount(host) == 1);
         // The render item too, or `build_plan` cannot look its descriptor up and silently records no

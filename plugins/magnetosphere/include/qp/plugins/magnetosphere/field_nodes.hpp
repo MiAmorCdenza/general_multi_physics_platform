@@ -434,6 +434,102 @@ public:
     /// @brief The drag table, a scalar lattice in per second.
     static constexpr qp::graph::PortNumber kPortAtmosphereOut = 1;
 
+    /// @brief The tail: a **Harris current sheet**, the analytic model of the stretched nightside.
+    ///
+    /// The reference implementation's `tail.py` is "the distant tail's analytic model", and the analytic tail is the
+    /// Harris sheet -- the one model of a magnetotail every course writes down:
+    ///
+    ///     B = ( B0 tanh(z / L), 0, 0 )
+    ///
+    /// A field along `x` that reverses across the equatorial plane, saturating at `+/-B0` more than a few `L` away
+    /// from it, and **exactly zero in the plane itself**. That last property is what a reconnecting tail is built
+    /// on: with `B` along `x` and the field reversing at `z = 0`, a particle crossing the plane sees no field at all
+    /// and is not turned, which is how the plasma sheet is populated.
+    ///
+    /// ## Why this is a node rather than a parameter on the dipole
+    ///
+    /// The same reason every other field here is: this is an **independent** field, and the composition is the
+    /// wiring. `sum(dipole, current_sheet)` is the classic magnetosphere cross-section -- closed lines on the
+    /// dayside, stretched ones on the nightside -- and a dipole with a "tail shape" parameter would be a model
+    /// nobody can reason about, because the two fields have nothing to do with each other physically. This one is
+    /// the field of a current, and the current is not the dipole's.
+    ///
+    /// ## The current, which is derived rather than assumed
+    ///
+    /// Ampere's law turns the field into the current that makes it: `J_y = -(1/mu0) dB_x/dz = -(B0 / (mu0 L))
+    /// sech^2(z / L)`. A sheet current flowing in `y`, concentrated within a few `L` of the plane, carrying
+    /// `B0 / mu0` amperes per metre in total. That is a **derived** quantity the case measures by differentiating
+    /// the baked table, so a bake that got the argument or the scale wrong fails on the physics rather than on a
+    /// value it also chose.
+    ///
+    /// ## `L` is a half-thickness, and the units say so
+    ///
+    /// `tanh(z/L)` is dimensionless, so `L` is a length in metres and `B0` is a field in tesla. The default is the
+    /// observed order: the plasma sheet's half-thickness is a few earth radii at the distances a first course looks
+    /// at, and `B0` is a few nanotesla twenty radii downwind -- four orders below the surface field, which is why a
+    /// picture of the sum of this and a dipole is a dipole near the Earth and a sheet far from it.
+    static constexpr const char* kCurrentSheetType = "field.current_sheet";
+    /// @brief The lobe field, in tesla: what `|B|` saturates to away from the plane.
+    static constexpr qp::graph::PortNumber kPortSheetB0 = 1;
+    /// @brief The sheet's half-thickness, in metres.
+    static constexpr qp::graph::PortNumber kPortSheetThickness = 2;
+    /// @brief Where the **sheet** node's grid starts: after the two parameters.
+    static constexpr qp::graph::PortNumber kPortSheetOrigin0 = 3;
+
+    /// @brief The default lobe field, in tesla: five nanotesla, the quiet-time tail's order.
+    static constexpr double kDefaultSheetB0 = 5.0e-9;
+    /// @brief The default half-thickness, in metres: two earth radii.
+    static constexpr double kDefaultSheetThicknessM = 2.0 * kEarthRadiusM;
+
+    /// @brief What a current-sheet node's parameters say.
+    ///
+    /// @ownership   owns
+    /// @thread      main
+    /// @pre         none
+    /// @post        none
+    /// @invariant   `half_thickness_m > 0`
+    /// @errors      noexcept
+    /// @frozen      no
+    /// @tests       magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_implies
+    struct SheetSpec final {
+        /// The lobe field the sheet saturates to, in tesla.
+        double b0_tesla = kDefaultSheetB0;
+        /// The half-thickness, in metres.
+        double half_thickness_m = kDefaultSheetThicknessM;
+    };
+
+    /// @brief A current-sheet node's parameters, read from the node itself.
+    ///
+    /// @param node The node. Borrowed.
+    ///
+    /// @ownership   pure
+    /// @thread      main
+    /// @pre         none
+    /// @post        The two numbers the node carries, or the defaults for the ones it does not
+    /// @invariant   One reader, two sources, as every other parameter reader in this kit
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_implies
+    [[nodiscard]] static SheetSpec read_sheet(const graph::Node& node) noexcept;
+
+    /// @brief The same reader for an evaluator's own inputs.
+    ///
+    /// @param inputs The evaluator's inputs. Borrowed for the call.
+    ///
+    /// @ownership   pure
+    /// @thread      main
+    /// @pre         none
+    /// @post        The same values `read_sheet` gives for the same ports
+    /// @invariant   One reader, two sources
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_implies
+    [[nodiscard]] static SheetSpec read_sheet_from(const graph::InputView& inputs) noexcept;
+
     /// @brief The default drag rate at the surface, in per second. Zero: no atmosphere until a course asks for one.
     static constexpr double kDefaultAtmosphereNu0 = 0.0;
     /// @brief The default scale height, in metres: 100 km, the thermosphere's order at low altitude.
@@ -972,6 +1068,36 @@ public:
  */
 [[nodiscard]] bool bake_atmosphere(const FieldNodes::AtmosphereSpec& spec, const GridSpec& grid,
                                    qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
+
+/**
+ * @brief Bakes a Harris current sheet `B = (B0 tanh(z/L), 0, 0)` onto `grid`.
+ *
+ * The model, its parameters and the current it implies are argued on `kCurrentSheetType`. What belongs here is the
+ * one decision the arithmetic makes: `tanh` is evaluated per node from the node's own `z`, and the other two
+ * components are written as **exact zeros** rather than as expressions that happen to be small. A sheet is
+ * one-dimensional; a `B_y` computed from a formula that ought to vanish would leave a number in the table that is
+ * not the model, and the case that checks `B_z = 0` at every node is what keeps that honest.
+ *
+ * @param spec  The lobe field and the half-thickness, in SI.
+ * @param grid  Where to bake. At least two nodes an axis and a positive spacing.
+ * @param key   Who is publishing it.
+ * @param fields The store. Borrowed; the samples are moved into it on success.
+ *
+ * @ownership   owns the samples it publishes on success
+ * @thread      main
+ * @pre         none
+ * @post        On true, `fields.view(key)` is a readable vector volume in tesla whose `x` component is
+ *              `B0 tanh(z/L)` at every node and whose other two are zero
+ * @invariant   On false the store is unchanged
+ * @errors      Returns false -- never throws -- for a non-finite lobe field, a non-positive or non-finite
+ *              half-thickness, or a grid that cannot be baked
+ * @complexity  O(points)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_implies
+ */
+[[nodiscard]] bool bake_current_sheet(const FieldNodes::SheetSpec& spec, const GridSpec& grid,
+                                      qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
 
 /**
  * @brief The node evaluator that bakes this kit's field types into a store.
