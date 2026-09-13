@@ -33,7 +33,8 @@
  *              qt.views.editor_window.file_menu_follows_the_document,
  *              qt.views.measurement.one_ledger_per_session,
  *              qt.views.measurement.fresh_window_is_empty,
- *              qt.views.measurement.a_reading_points_at_its_node
+ *              qt.views.measurement.a_reading_points_at_its_node,
+ *              qt.views.measurement.a_provider_run_closes_the_loop
  */
 #pragma once
 
@@ -216,7 +217,8 @@ public:
     /// @complexity  O(channels)
     /// @nondet      none
     /// @frozen      no
-    /// @tests       qt.views.measurement.a_reading_points_at_its_node
+    /// @tests       qt.views.measurement.a_reading_points_at_its_node,
+///              qt.views.measurement.a_provider_run_closes_the_loop
     void measure_selection();
 
     /// @brief Records a few readings so the measurement panel is not empty on start.

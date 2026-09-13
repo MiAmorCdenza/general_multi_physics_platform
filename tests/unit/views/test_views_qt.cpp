@@ -54,6 +54,7 @@
 #include <QMenuBar>
 #include <QPixmap>
 
+#include <qp/graph/execution/run_provider.hpp>
 #include <qp/graph/mutate/command.hpp>
 #if defined(QP_HAS_QPJSON_FORMAT)
 #include <qp/plugins/csv/csv_exporter.hpp>
@@ -63,6 +64,7 @@
 #include <qp/views/model/demo_library.hpp>
 #include <qp/views/model/document_controller.hpp>
 #include <qp/views/model/measurement_model.hpp>
+#include <qp/views/model/run_providers.hpp>
 #include <qp/graph/ir/node_type_registry.hpp>
 #include <qp/host/host.hpp>
 #if defined(QP_HAS_INSTRUMENTS)
@@ -1354,6 +1356,125 @@ TEST_CASE("qt.views.canvas.the_neighbourhood_is_lit_and_the_rest_is_dimmed", "[v
         REQUIRE(canvas.prominence_of(node) == 1.0);
     }
     for (std::size_t i = 0; i < 3; ++i) REQUIRE(canvas.edge_prominence(i) == 1.0);
+}
+
+namespace {
+
+/// @brief A provider run that records one length channel, so the window's copy of a record can be followed.
+///
+/// One sample per **step**, not per call: `advance` is handed the whole run's step count, and a run that recorded
+/// once per call would look like a time series with a single point -- which is what the first version of the stub
+/// in `tests/model/test_run_controller.cpp` did, and what a case there now pins.
+class RecordingStubRun final : public qp::graph::execution::IGraphRun {
+public:
+    /// The value every sample carries: what a reading taken from this trace must equal.
+    static constexpr double kRadius = 42095700.0;
+
+    [[nodiscard]] qp::diag::Result<void> advance(std::size_t steps, double dt) override {
+        if (!(dt > 0.0)) return qp::diag::ErrorCode::invalid_argument;
+        for (std::size_t step = 0; step < steps; ++step) {
+            ++steps_;
+            (void)trace_.append(static_cast<double>(steps_) * dt,
+                                {qp::runtime::UncertainValue::measured(kRadius, 0.0, qp::units::dims::length)});
+        }
+        return {};
+    }
+    [[nodiscard]] qp::graph::execution::GraphRunReport report() const override {
+        qp::graph::execution::GraphRunReport out;
+        out.steps = steps_;
+        out.particles = 1;
+        out.live = 1;
+        out.note = "recording stub";
+        return out;
+    }
+    [[nodiscard]] std::vector<double> positions() const override { return {1.0, 2.0, 3.0}; }
+    void set_run(qp::runtime::RunId run) noexcept override {
+        trace_ = qp::runtime::Trace{run};
+        (void)trace_.add_channel(qp::runtime::Channel{"radius", qp::units::dims::length, {}});
+    }
+    [[nodiscard]] const qp::runtime::Trace& trace() const noexcept override { return trace_; }
+
+private:
+    std::size_t steps_ = 0;
+    qp::runtime::Trace trace_{qp::runtime::RunId{}};
+};
+
+/// @brief A provider that claims any non-empty graph and answers with `RecordingStubRun`.
+class RecordingProvider final : public qp::graph::execution::IGraphRunProvider {
+public:
+    [[nodiscard]] std::string_view name() const noexcept override { return "recording stub"; }
+    [[nodiscard]] bool claims(const qp::graph::Graph& graph) const noexcept override {
+        return graph.node_count() > 0;
+    }
+    [[nodiscard]] qp::graph::execution::RunBuildResult build(const qp::graph::Graph&,
+                                                             const qp::graph::INodeCatalog&) override {
+        qp::graph::execution::RunBuildResult out;
+        out.run = std::make_unique<RecordingStubRun>();
+        return out;
+    }
+};
+
+}  // namespace
+
+TEST_CASE("qt.views.measurement.a_provider_run_closes_the_loop", "[views][qt]") {
+    // **The platform's whole claim, end to end, on the path that had no record.** A run produced by a **provider**
+    // -- the shape a kit with a bake and a launch uses -- used to hand the window a report and a picture and no
+    // trace at all, so the measurement session stayed empty, the reading button said "nothing to read yet" and the
+    // confidence panel said "not measurable". Both sentences were true, and the closed loop the platform exists
+    // for was dead for its flagship experiment.
+    //
+    // The chain is four links and this case walks all four: the provider's run records, the controller opens the
+    // ledger entry and hands the identity over before the first step, the window copies the record into the
+    // measurement session, and a reading taken from it carries both the value and the node it came from. A stub
+    // provider rather than the kit, because the link under test is the window's, and a case that needed a
+    // magnetosphere to check it would be checking the kit as well.
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
+    window.seed_demo();
+
+    // The window opens on the demo's own seeded trace -- two channels and a handful of readings -- and that is
+    // what a run **replaces**. Asserting the replacement rather than an empty start is the stronger statement:
+    // a window that appended would leave the demo's channels beside the run's, and the panels would offer a
+    // reading from a channel that belongs to an experiment the user is no longer looking at.
+    REQUIRE(window.measurements().trace().channels().size() == 2);
+    REQUIRE_FALSE(window.measurements().trace().empty());
+
+    RecordingProvider provider;
+    qp::views::model::clear_run_providers();
+    qp::views::model::mount_run_provider(&provider);
+    window.run_once();
+
+    // The record arrived, with its channel, its samples and **a run identity the ledger issued** -- which is what
+    // makes a reading taken from it traceable back to the run that produced it.
+    const qp::runtime::Trace& recorded = window.measurements().trace();
+    REQUIRE(recorded.channels().size() == 1);
+    REQUIRE(recorded.channels().front().name == std::string{"radius"});
+    REQUIRE(recorded.channels().front().dim == qp::units::dims::length);
+    REQUIRE(recorded.size() == qp::views::model::RunController::kSteps);
+    REQUIRE(recorded.run().valid());
+
+    // And the reading. The instrument measures a length, the trace's only channel is a length, and the reading
+    // must be the trace's **last sample** -- the number a lab session writes down.
+    auto* canvas = window.findChild<qp::views::NodeGraphView*>();
+    REQUIRE(canvas != nullptr);
+    const std::size_t before = window.measurements().dataset().readings().size();
+    const qp::graph::NodeId scope = window.session().graph().find_node_by_name("n3");
+    REQUIRE(scope.valid());
+    canvas->select_node(scope);
+    window.measure_selection();
+
+    REQUIRE(window.measurements().dataset().readings().size() == before + 1);
+    const auto taken = window.measurements().dataset().readings()[before].reading;
+    REQUIRE(taken.value == recorded.samples().back().values.front().value);
+    REQUIRE(taken.value == RecordingStubRun::kRadius);
+    const auto source = window.measurements().source_of(before);
+    REQUIRE(source.has_value());
+    REQUIRE(source->index == scope.index);
+    REQUIRE(source->generation == scope.generation);
+
+    // The list is a process-wide static, so the case that mounted a provider is the one that cleans it up.
+    qp::views::model::clear_run_providers();
+    REQUIRE(qp::views::model::run_providers().empty());
 }
 
 TEST_CASE("qt.views.measurement.a_reading_points_at_its_node", "[views][qt]") {

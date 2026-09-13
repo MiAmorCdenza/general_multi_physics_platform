@@ -319,12 +319,22 @@ TEST_CASE("run.controller.description_states_what_it_will_do", "[run]") {
 
 namespace {
 
-/// @brief A run that reports two particles and counts its steps, so the controller's second path is observable.
+/// @brief A run that reports two particles, counts its steps, and records a one-channel trace.
 class CountingRun final : public qp::graph::execution::IGraphRun {
 public:
     [[nodiscard]] qp::diag::Result<void> advance(std::size_t steps, double dt) override {
         if (!(dt > 0.0)) return qp::diag::ErrorCode::invalid_argument;
-        steps_ += steps;
+        // **One sample per step, not one per call.** `advance` takes a step *count* and a caller passes the whole
+        // run's worth of them, so a run that recorded once per call would hand back a one-sample "time series" --
+        // which is what the first version of this stub did, and the case that asserts `size() == kSteps` is what
+        // said so. A real run's `advance` loops, and so does the stub that stands in for one.
+        for (std::size_t step = 0; step < steps; ++step) {
+            ++steps_;
+            if (recording_) {
+                (void)trace_.append(static_cast<double>(steps_) * dt,
+                                    {qp::runtime::UncertainValue::measured(1.5, 0.0, qp::units::dims::length)});
+            }
+        }
         return {};
     }
     [[nodiscard]] qp::graph::execution::GraphRunReport report() const override {
@@ -336,9 +346,18 @@ public:
         return out;
     }
     [[nodiscard]] std::vector<double> positions() const override { return {1.0, 2.0, 3.0, 4.0, 5.0, 6.0}; }
+    void set_run(qp::runtime::RunId run) noexcept override {
+        trace_ = qp::runtime::Trace{run};
+        recording_ = trace_.add_channel(
+                         qp::runtime::Channel{"radius", qp::units::dims::length, {}})
+                         .has_value();
+    }
+    [[nodiscard]] const qp::runtime::Trace& trace() const noexcept override { return trace_; }
 
 private:
     std::size_t steps_ = 0;
+    qp::runtime::Trace trace_{qp::runtime::RunId{}};
+    bool recording_ = false;
 };
 
 /// @brief A provider that claims any non-empty graph, and refuses on demand.
@@ -403,6 +422,51 @@ TEST_CASE("views.binders.a_provider_runs_a_graph_the_operators_declined", "[run]
 
     // The list is a process-wide static: a case that left an entry behind would change every later case's
     // answer, so the leak is cleaned up by the case that made it.
+    clear_run_providers();
+    REQUIRE(run_providers().empty());
+}
+
+TEST_CASE("run.controller.a_provider_run_records_under_the_ledgers_identity", "[run]") {
+    // **The chain the whole platform is for, asserted at the seam that was missing.** A provider's run records a
+    // trace; the controller opens the ledger entry, hands the identity over *before* the first step, and copies
+    // the record out. Without this, a run of the flagship kit produced a report and a picture and nothing a
+    // measurement could be taken from -- which is what the window showed: "no readings yet", and correctly so.
+    Fixture fixture{Shape::ready};
+    StubProvider provider;
+    clear_run_providers();
+    mount_run_provider(&provider);
+
+    RunController controller{fixture.session(), {}, fixture.resolve()};
+    const RunResult ran = controller.run();
+    REQUIRE(ran.report.ok);
+
+    // The identity is the ledger's, it is **valid**, and it is the same one the record carries: a reading taken
+    // from this trace names the run that produced it, and the ledger is where that name can be looked up. An id
+    // nobody issued would make the trace a record that cannot be found.
+    REQUIRE(ran.report.run.valid());
+    REQUIRE(ran.trace.run() == ran.report.run);
+    REQUIRE(controller.ledger().find(ran.report.run) != nullptr);
+    REQUIRE(ran.report.samples == ran.trace.size());
+    REQUIRE(ran.trace.size() == RunController::kSteps);
+
+    // The channels and the samples are **copied out**, not borrowed: the run is destroyed when `run()` returns,
+    // and the view layer reads this afterwards -- the same rule positions and fields follow.
+    REQUIRE(ran.trace.channels().size() == 1);
+    REQUIRE(ran.trace.channels().front().name == std::string{"radius"});
+    REQUIRE(ran.trace.channels().front().dim == qp::units::dims::length);
+    // The first sample is one step in, at the controller's own step size: the time axis starts where the run
+    // started rather than at a wall clock, which is what makes a trace comparable between two runs.
+    REQUIRE(ran.trace.samples().front().t == RunController::kDt);
+    const auto first = ran.trace.value_at(0, 0);
+    REQUIRE(first.has_value());
+    REQUIRE(first->value == 1.5);
+
+    // And the ordering is observable, which is why it is asserted: `set_run` **rebuilds** the trace, so a
+    // controller that named the run after advancing it would hand back an empty record. A non-empty one here is
+    // the proof that the identity arrived before the first sample did -- the same order the operator path
+    // documents for the ledger, where binding comes before anything is written down.
+    REQUIRE_FALSE(ran.trace.empty());
+
     clear_run_providers();
     REQUIRE(run_providers().empty());
 }

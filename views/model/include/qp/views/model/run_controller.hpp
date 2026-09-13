@@ -39,7 +39,9 @@
  * @errors      See each declaration
  * @frozen      no
  * @tests       run.controller.refuses_a_graph_with_nothing_to_run,
- *              run.controller.damping_is_reported_not_hidden
+ *              run.controller.damping_is_reported_not_hidden,
+ *              run.controller.a_provider_run_records_under_the_ledgers_identity,
+ *              views.binders.a_provider_runs_a_graph_the_operators_declined
  */
 #pragma once
 
