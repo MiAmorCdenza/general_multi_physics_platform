@@ -40,7 +40,7 @@
 
 #include <qp/graph/domain/declaration.hpp>
 #include <qp/graph/ir.hpp>
-#include <qp/views/model/run_controller.hpp>
+#include <qp/graph/structure.hpp>
 
 #include <cstddef>
 #include <string_view>
@@ -50,6 +50,13 @@ namespace qp::views::model {
 
 /**
  * @brief What a view item is asked to draw with.
+ *
+ * **It names no view-layer type**, and that is a correction rather than a preference. The first version carried
+ * a `const RunResult*`, which tied this contract to `views/model`; a plugin implementing `IViewItem` would then
+ * depend on the view layer, and this repository has already written down why that is wrong -- the comment on
+ * `IOperatorBinder` in `execution_binders.hpp` records that `views -> plugins -> views` was a cycle, and that
+ * the interface a plugin implements therefore belongs in `core/`. A request that names only a graph, a list of
+ * declarations and a span of positions can move to `core/` unchanged, which is where it is going.
  *
  * @ownership   borrows every pointer
  * @thread      main
@@ -65,23 +72,28 @@ struct ViewRequest final {
     const qp::graph::Graph* graph = nullptr;
     /// The render-domain declarations, as `plan.render.declared()` produced them.
     const std::vector<qp::graph::DeclaredOutput>* declared = nullptr;
-    /// The last run's result. Borrowed; its `particle_positions` may be empty, which means "nothing to draw yet"
-    /// rather than an error -- a graph that has not been run is the ordinary state of a window.
-    const RunResult* run = nullptr;
+    /// The position snapshot the last run produced: **three doubles per particle**, in the run's own units.
+    ///
+    /// A plain span rather than the controller's `RunResult`, for the reason in the file comment. Null means "no
+    /// run yet", which is the ordinary state of a window rather than an error; an **empty** vector means a run
+    /// that produced no particles, and an item draws nothing for it without treating it as a failure.
+    const std::vector<double>* positions = nullptr;
+    /// Host steps the run took, for whatever label an item or a host wants to show.
+    std::size_t steps = 0;
 
     /// @brief Whether there is anything to draw from.
     ///
     /// @ownership   pure
     /// @thread      main
     /// @pre         none
-    /// @post        True exactly when a graph and a run are present
-    /// @invariant   Does not inspect the run's contents
+    /// @post        True exactly when a graph and a position snapshot are present
+    /// @invariant   Does not inspect the positions
     /// @errors      noexcept
     /// @complexity  O(1)
     /// @nondet      none
     /// @frozen      no
     /// @tests       views.items.a_scene_is_a_value_not_a_widget
-    [[nodiscard]] bool valid() const noexcept { return graph != nullptr && run != nullptr; }
+    [[nodiscard]] bool valid() const noexcept { return graph != nullptr && positions != nullptr; }
 };
 
 /**

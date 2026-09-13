@@ -422,8 +422,8 @@ public:
         ++calls;
         last_valid = request.valid();
         ViewScene out;
-        if (request.run == nullptr) return out;
-        const std::vector<double>& positions = request.run->particle_positions;
+        if (request.positions == nullptr) return out;
+        const std::vector<double>& positions = *request.positions;
         for (std::size_t i = 0; i + 2 < positions.size(); i += 3) {
             out.points.push_back(ViewScene::Point{positions[i], positions[i + 1]});
         }
@@ -470,7 +470,7 @@ TEST_CASE("views.items.a_scene_is_a_value_not_a_widget", "[run]") {
     // A request whose run carries no positions -- a graph that has not been run, which is a window's ordinary
     // state -- is still a valid request, and it produces a scene with nothing in it rather than an error.
     RunResult empty_run;
-    ViewRequest request{&graph, nullptr, &empty_run};
+    ViewRequest request{&graph, nullptr, &empty_run.particle_positions, empty_run.report.steps};
     REQUIRE(request.valid());
     const ViewScene nothing = item.scene(request);
     REQUIRE(nothing.empty());
@@ -481,7 +481,7 @@ TEST_CASE("views.items.a_scene_is_a_value_not_a_widget", "[run]") {
     // rather than the extent of the points -- an inferred fit jumps when a particle leaves the box.
     RunResult with_particles;
     with_particles.particle_positions = {1.0, 2.0, 3.0, -4.0, 5.0, 6.0, 7.0};
-    const ViewScene drawn = item.scene(ViewRequest{&graph, nullptr, &with_particles});
+    const ViewScene drawn = item.scene(ViewRequest{&graph, nullptr, &with_particles.particle_positions, with_particles.report.steps});
     REQUIRE(drawn.points.size() == 2);
     REQUIRE(drawn.points[0].x == 1.0);
     REQUIRE(drawn.points[0].y == 2.0);
@@ -492,7 +492,7 @@ TEST_CASE("views.items.a_scene_is_a_value_not_a_widget", "[run]") {
     REQUIRE_FALSE(drawn.empty());
 
     // A request with no run at all is refused by `valid()`, which is what a host checks before asking.
-    const ViewRequest absent{nullptr, nullptr, nullptr};
+    const ViewRequest absent{nullptr, nullptr, nullptr, 0};
     REQUIRE_FALSE(absent.valid());
 
     clear_view_items();
