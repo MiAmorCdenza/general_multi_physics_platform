@@ -396,6 +396,106 @@ public:
     /// @brief The corotation field, in volts per metre.
     static constexpr qp::graph::PortNumber kPortCorotationOut = 1;
 
+    /// @brief The atmosphere: an exponential **drag rate**, in per second, as a scalar field.
+    ///
+    /// The second scalar producer, and the one the pusher's drag socket was really waiting for. `field.mask` can
+    /// fill that socket with a 0 or a 1, which is a drag that switches on at a boundary; this is a drag that varies
+    /// the way an atmosphere does:
+    ///
+    ///     nu(r) = nu0 * exp(-(r - r_ref) / H)
+    ///
+    /// with `nu0` the rate at the reference radius and `H` the scale height. It is the reference implementation's
+    /// `drag_single`, and its `drag_layered` -- several scale heights, one per layer -- is a different node when a
+    /// course needs it rather than a second mode inside this one.
+    ///
+    /// ## Why the drag is the first force in this kit that takes energy away
+    ///
+    /// Every other force here is conservative: a magnetic field does no work at all, and an electric field does work
+    /// but can give it back. A drag is the first thing that makes a trajectory *decay*, and that matters for this
+    /// platform's subject rather than for its physics: a decaying quantity is what an experiment measures, and a
+    /// rate is what a report quotes. It is also the first force whose effect the run cadence had to be fixed before
+    /// anyone could see -- 8.7 milliseconds of a 0.01-per-second process is a change in the eighth decimal place.
+    ///
+    /// ## The parameters, and the units a reader has to know
+    ///
+    /// `nu0` is a **rate** (per second) and `H` is a **length** (metres), so the exponential's argument is
+    /// dimensionless as it must be. The reference radius is a parameter rather than a constant because what "the
+    /// rate at the surface" means depends on where the model's surface is, and a course that measures a decay at a
+    /// satellite altitude wants to state the altitude it is quoting the rate at.
+    static constexpr const char* kAtmosphereType = "field.atmosphere";
+    /// @brief The drag rate at the reference radius, in per second.
+    static constexpr qp::graph::PortNumber kPortAtmosphereNu0 = 1;
+    /// @brief The scale height, in metres. How far the rate falls by a factor of `e`.
+    static constexpr qp::graph::PortNumber kPortAtmosphereScaleHeight = 2;
+    /// @brief Where `nu0` is quoted, in metres.
+    static constexpr qp::graph::PortNumber kPortAtmosphereReference = 3;
+    /// @brief Where the **atmosphere** node's grid starts: after the three parameters.
+    static constexpr qp::graph::PortNumber kPortAtmosphereOrigin0 = 4;
+    /// @brief The drag table, a scalar lattice in per second.
+    static constexpr qp::graph::PortNumber kPortAtmosphereOut = 1;
+
+    /// @brief The default drag rate at the surface, in per second. Zero: no atmosphere until a course asks for one.
+    static constexpr double kDefaultAtmosphereNu0 = 0.0;
+    /// @brief The default scale height, in metres: 100 km, the thermosphere's order at low altitude.
+    static constexpr double kDefaultAtmosphereScaleHeightM = 100.0e3;
+    /// @brief Where the default `nu0` is quoted, in metres: the equator's surface.
+    static constexpr double kDefaultAtmosphereReferenceM = kEarthRadiusM;
+
+    /// @brief What an atmosphere node's parameters say.
+    ///
+    /// @ownership   owns
+    /// @thread      main
+    /// @pre         none
+    /// @post        none
+    /// @invariant   `scale_height_m > 0` and `nu0_per_s >= 0`
+    /// @errors      noexcept
+    /// @frozen      no
+    /// @tests       magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_does
+    struct AtmosphereSpec final {
+        /// The drag rate at `reference_m`, in per second.
+        double nu0_per_s = kDefaultAtmosphereNu0;
+        /// The scale height, in metres.
+        double scale_height_m = kDefaultAtmosphereScaleHeightM;
+        /// Where `nu0_per_s` is quoted, in metres.
+        double reference_m = kDefaultAtmosphereReferenceM;
+    };
+
+    /// @brief An atmosphere node's parameters, read from the node itself.
+    ///
+    /// A **negative** rate and a non-positive scale height are refused by `bake_atmosphere` rather than clamped here,
+    /// which is the split `field.mask` also uses: the reader reports what the node says, and the bake decides what
+    /// can be baked. Clamping a negative rate to zero here would turn a user's sign error into a silent no-op.
+    ///
+    /// @param node The node. Borrowed.
+    ///
+    /// @ownership   pure
+    /// @thread      main
+    /// @pre         none
+    /// @post        The three numbers the node carries, or the defaults for the ones it does not
+    /// @invariant   Reads each port once, through the same `InputView` shape the evaluator is handed
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_does
+    [[nodiscard]] static AtmosphereSpec read_atmosphere(const graph::Node& node) noexcept;
+
+    /// @brief The same reader for an evaluator's own inputs.
+    ///
+    /// @param inputs The evaluator's inputs. Borrowed for the call.
+    ///
+    /// @ownership   pure
+    /// @thread      main
+    /// @pre         none
+    /// @post        The same values `read_atmosphere` gives for the same ports
+    /// @invariant   One reader, two sources
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_does
+    [[nodiscard]] static AtmosphereSpec read_atmosphere_from(const graph::InputView& inputs) noexcept;
+
     /// @brief What a mask node's parameters say.
     ///
     /// @ownership   owns
@@ -837,6 +937,41 @@ public:
  */
 [[nodiscard]] bool resolve_field_origin(const qp::graph::Graph& graph, qp::graph::NodeId consumer,
                                         qp::graph::PortNumber socket, GridSpec& out) noexcept;
+
+/**
+ * @brief Bakes an atmosphere's exponential drag rate onto `grid`: `nu(r) = nu0 exp(-(r - r_ref) / H)`.
+ *
+ * The published table is a **scalar** f64 volume in per second -- the drag socket's own unit, as `boris.hpp`
+ * documents it -- and it is what the pusher multiplies a velocity by, once per sub-step, as `1 - nu dt`. That is
+ * a first-order damping rather than an exact exponential decay, and the difference is worth stating because this
+ * node's case checks the decay against `exp(-nu t)`: the two agree to `O((nu dt)^2)` per step, which for a rate of
+ * `0.01` per second and a step of twenty milliseconds is four parts in a hundred million. The case's tolerance is
+ * a percent, so it is testing the model rather than the integrator's expansion.
+ *
+ * A **negative rate** or a non-positive scale height is refused rather than clamped: a drag that adds energy, or a
+ * scale height of zero (an atmosphere that is a wall), are not configurations this model describes, and silently
+ * turning either into something legal would hide a user's sign error behind a plausible decay.
+ *
+ * @param spec  The rate, the scale height and where the rate is quoted, in SI.
+ * @param grid  Where to bake. At least two nodes an axis and a positive spacing.
+ * @param key   Who is publishing it.
+ * @param fields The store. Borrowed; the samples are moved into it on success.
+ *
+ * @ownership   owns the samples it publishes on success
+ * @thread      main
+ * @pre         none
+ * @post        On true, `fields.view(key)` is a readable scalar volume in hertz, equal at every node to the
+ *              exponential above evaluated there
+ * @invariant   On false the store is unchanged
+ * @errors      Returns false -- never throws -- for a negative rate, a non-positive or non-finite scale height or
+ *              reference, or a grid that cannot be baked
+ * @complexity  O(points)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_does
+ */
+[[nodiscard]] bool bake_atmosphere(const FieldNodes::AtmosphereSpec& spec, const GridSpec& grid,
+                                   qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
 
 /**
  * @brief The node evaluator that bakes this kit's field types into a store.

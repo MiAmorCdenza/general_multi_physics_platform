@@ -342,6 +342,32 @@ private:
 }
 
 /**
+ * @brief The dimension of a **rate**: 1/s, which is `T = -1` and nothing else.
+ *
+ * The third one, beside the two fields, and it is here for the same reason they are: the dimension is a property of
+ * what a table holds, and the tables this kit publishes now include a drag rate. It is also the smallest of the
+ * three -- one exponent -- which is the point worth noticing: a scalar table whose samples are "per second" and one
+ * whose samples are "dimensionless" have the same layout, so the dimension is the *only* thing that tells them
+ * apart, and a consumer that ignored it would multiply a velocity by a weight and call it a drag.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        The exponents of a reciprocal second
+ * @invariant   `T == -1`, every other exponent zero
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.baked_field.the_view_describes_the_storage
+ */
+[[nodiscard]] inline qp::abi::FieldDim per_second_dimension() noexcept {
+    qp::abi::FieldDim dim;
+    dim.T = -1;
+    return dim;
+}
+
+/**
  * @brief The trilinear read of a table somebody else owns, in **SI**.
  *
  * ## Why this is free rather than a member

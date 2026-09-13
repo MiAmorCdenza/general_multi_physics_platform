@@ -50,7 +50,8 @@
  *              magnetosphere.run.a_provider_builds_a_run_from_a_graph,
  *              magnetosphere.render.a_field_becomes_a_family_of_curves,
  *              magnetosphere.run.the_recorded_channels_are_the_ones_a_report_names,
- *              magnetosphere.run.the_cadence_resolves_the_gyration
+ *              magnetosphere.run.the_cadence_resolves_the_gyration,
+ *              magnetosphere.run.an_atmosphere_takes_the_speed_away
  */
 #pragma once
 

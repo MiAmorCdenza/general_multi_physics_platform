@@ -82,7 +82,7 @@ struct Scene final {
         // mask, the multiplier and the convection field. Each is a **type of its own** with its own port numbers,
         // which is the composition principle -- a shielding field is `mul(convection, shield)`, not a switch
         // inside a node.
-        REQUIRE(FieldNodes::mount(host) == 8);
+        REQUIRE(FieldNodes::mount(host) == 9);
         REQUIRE(PusherNodes::mount(host) == 1);
     }
 
@@ -177,7 +177,7 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // mask, the multiplier and the convection field. Each is a **type of its own** with its own port numbers,
     // which is the composition principle -- a shielding field is `mul(convection, shield)`, not a switch inside a
     // node.
-    REQUIRE(types.size() == 8);
+    REQUIRE(types.size() == 9);
     REQUIRE(types[0].type_name == FieldNodes::kDipoleType);
     REQUIRE(types[1].type_name == FieldNodes::kUniformType);
     REQUIRE(types[2].type_name == FieldNodes::kSumType);
@@ -244,9 +244,9 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // Mounting is what makes the type reachable from a running program rather than only from a test fixture. The
     // second mount registers nothing, because a name that is taken is left alone rather than duplicated.
     qp::host::PluginHost host{qp::plugin::Capability::node_types};
-    // Eight field models now, and the count is asserted rather than assumed: it is the one place a new type
+    // Nine field models now, and the count is asserted rather than assumed: it is the one place a new type
     // announces itself in the test suite, so a type that silently failed to register is a failure here.
-    REQUIRE(FieldNodes::mount(host) == 8);
+    REQUIRE(FieldNodes::mount(host) == 9);
     REQUIRE(host.node_types().find(FieldNodes::kDipoleType) != nullptr);
     REQUIRE(FieldNodes::mount(host) == 0);
 }
@@ -440,7 +440,7 @@ TEST_CASE("magnetosphere.field_nodes.a_field_scales_by_its_weight", "[magnetosph
     // where the weight belongs are both refused by `check_connection`, so the multiplier's own check is the second
     // line of defence rather than the only one.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 8);
+    REQUIRE(types.size() == 9);
     REQUIRE(types[5].type_name == FieldNodes::kMulType);
     REQUIRE(types[5].has_compute);
     const graph::PortDesc* mul_field = types[5].find_port(FieldNodes::kPortMulField, false);
@@ -566,7 +566,7 @@ TEST_CASE("magnetosphere.field_nodes.the_convection_field_is_the_potentials_grad
 
     // The type is declared like the others and allowed only where a bake is.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 8);
+    REQUIRE(types.size() == 9);
     REQUIRE(types[6].type_name == FieldNodes::kConvectionType);
     REQUIRE(types[6].has_compute);
     REQUIRE(types[6].allow_in_field_domain);
@@ -695,7 +695,7 @@ TEST_CASE("magnetosphere.field_nodes.corotation_is_the_rotation_the_field_allows
     // The type declares one socket and no grid parameters, which is the decision this node makes: it bakes on the
     // lattice of the field it reads, so there is no second grid to disagree with the first.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 8);
+    REQUIRE(types.size() == 9);
     REQUIRE(types[7].type_name == FieldNodes::kCorotationType);
     REQUIRE(types[7].has_compute);
     REQUIRE(types[7].inputs.size() == 1);
@@ -833,6 +833,124 @@ TEST_CASE("magnetosphere.plan.two_sockets_on_two_lattices_are_refused", "[magnet
     // The two index spaces, asserted as the fact that made the accessor necessary rather than only as prose.
     REQUIRE(pp::slot_index(pp::SlotName::magnetic) != static_cast<std::size_t>(pp::SlotName::magnetic));
     REQUIRE(static_cast<std::size_t>(pp::SlotName::magnetic) == 0);
+}
+
+TEST_CASE("magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_does", "[magnetosphere]") {
+    // The kit's second scalar producer and its **first dissipative force**. The shape is checked before the physics:
+    // a table whose values are wrong in a way a decay curve would hide -- the reference radius misplaced, or the
+    // scale height inverted -- still produces something that looks like an atmosphere.
+    const GridSpec grid{Vec3{-4.0 * kEarthRadiusM, -4.0 * kEarthRadiusM, -4.0 * kEarthRadiusM},
+                        Vec3{0.25 * kEarthRadiusM, 0.25 * kEarthRadiusM, 0.25 * kEarthRadiusM},
+                        33, 33, 33};
+    gfield::FieldSet fields;
+    const gfield::FieldKey key{31, FieldNodes::kPortAtmosphereOut};
+
+    FieldNodes::AtmosphereSpec spec;
+    spec.nu0_per_s = 0.02;
+    spec.scale_height_m = 0.5 * kEarthRadiusM;
+    spec.reference_m = kEarthRadiusM;
+    REQUIRE(bake_atmosphere(spec, grid, key, fields));
+    const gfield::FieldValue rates = fields.view(key);
+    REQUIRE(gfield::is_readable(rates));
+    REQUIRE_FALSE(rates.is_vector());
+    // Per second, not dimensionless: the two have the same layout, so the dimension is the only thing that tells a
+    // drag rate from a weight -- and a consumer that confused them would multiply a velocity by 0 or 1.
+    REQUIRE(rates.desc.dimension.T == -1);
+    REQUIRE(rates.desc.dimension.M == 0);
+
+    // Every node, against the closed form: the rate at the reference radius is exactly `nu0`, one scale height up
+    // it is `nu0/e`, and the value is the same at every node of the same radius -- which is what "spherically
+    // symmetric" has to mean for a table on a Cartesian lattice.
+    std::uint64_t checked = 0;
+    for (std::uint64_t point = 0; point < rates.point_count(); ++point) {
+        // The grid's node positions are recoverable from the table's own layout, so the expected value is computed
+        // from the same indices the bake used rather than sampled from the result.
+        const std::uint64_t nx = grid.nx;
+        const std::uint64_t ny = grid.ny;
+        const std::uint64_t i = point / (ny * grid.nz);
+        const std::uint64_t j = (point / grid.nz) % ny;
+        const std::uint64_t k = point % grid.nz;
+        const Vec3 position = grid.node_position(static_cast<std::uint32_t>(i), static_cast<std::uint32_t>(j),
+                                                 static_cast<std::uint32_t>(k));
+        const double radius = norm(position);
+        const double expected = spec.nu0_per_s * std::exp(-(radius - spec.reference_m) / spec.scale_height_m);
+        REQUIRE(gfield::get_component(rates, point, 0) == expected);
+        REQUIRE(nx * ny * grid.nz == rates.point_count());
+        ++checked;
+    }
+    REQUIRE(checked == rates.point_count());
+
+    // The two anchor values, read from the table rather than from the formula, so that a bake which ignored one of
+    // the three parameters fails here even if its own arithmetic is self-consistent.
+    const auto rate_at_radius = [&](double radius_m) {
+        // The equator along +x, so the radius is the coordinate and the index arithmetic is one division.
+        const double x_re = radius_m / kEarthRadiusM;
+        const double origin_re = grid.origin_m.x / kEarthRadiusM;
+        const double spacing_re = grid.spacing_m.x / kEarthRadiusM;
+        const auto i = static_cast<std::uint64_t>(std::lround((x_re - origin_re) / spacing_re));
+        const std::uint64_t at = (i * grid.ny + grid.ny / 2) * grid.nz + grid.nz / 2;
+        return gfield::get_component(rates, at, 0);
+    };
+    REQUIRE(std::abs(rate_at_radius(kEarthRadiusM) - spec.nu0_per_s) < 1.0e-15);
+    REQUIRE(std::abs(rate_at_radius(1.5 * kEarthRadiusM) - spec.nu0_per_s / 2.718281828459045) < 1.0e-15);
+    REQUIRE(rate_at_radius(2.0 * kEarthRadiusM) < rate_at_radius(1.5 * kEarthRadiusM));
+    REQUIRE(rate_at_radius(1.0 * kEarthRadiusM) > rate_at_radius(1.5 * kEarthRadiusM));
+
+    // A scale height far larger than the region is a **nearly** uniform atmosphere, and the word "nearly" is
+    // measurable rather than rhetorical: the extremes of the table span exactly `exp(-(r_max - r_min)/H)`, and the
+    // first version of this assertion demanded that the *corner* equal `nu0` -- which it does not, 3.7% down, since
+    // the corner is seven earth radii from the reference radius even when H is a million kilometres. What a
+    // closed-form decay check needs is the span, so the span is what is asserted.
+    FieldNodes::AtmosphereSpec flat = spec;
+    flat.scale_height_m = 1.0e10;
+    const gfield::FieldKey flat_key{32, FieldNodes::kPortAtmosphereOut};
+    REQUIRE(bake_atmosphere(flat, grid, flat_key, fields));
+    const gfield::FieldValue flat_rates = fields.view(flat_key);
+    double lowest = std::numeric_limits<double>::max();
+    double highest = std::numeric_limits<double>::lowest();
+    for (std::uint64_t point = 0; point < flat_rates.point_count(); ++point) {
+        const double rate = gfield::get_component(flat_rates, point, 0);
+        lowest = std::min(lowest, rate);
+        highest = std::max(highest, rate);
+    }
+    const double corner_m = std::sqrt(3.0) * 4.0 * kEarthRadiusM;
+    const double expected_span = std::exp(-(corner_m - 0.0) / flat.scale_height_m);
+    REQUIRE(std::abs(highest / lowest - 1.0 / expected_span) / (1.0 / expected_span) < 1.0e-9);
+    // Under a percent across the whole box, which is what makes this the uniform limit a decay check can use.
+    REQUIRE(highest / lowest < 1.01);
+    REQUIRE(lowest > 0.0);
+
+    // Refusals: a rate that would add energy, a scale height of zero (an atmosphere that is a wall), and a grid
+    // that cannot be baked. Clamping any of the first two would hide a sign error behind a plausible decay.
+    FieldNodes::AtmosphereSpec negative = spec;
+    negative.nu0_per_s = -0.01;
+    REQUIRE_FALSE(bake_atmosphere(negative, grid, key, fields));
+    FieldNodes::AtmosphereSpec wall = spec;
+    wall.scale_height_m = 0.0;
+    REQUIRE_FALSE(bake_atmosphere(wall, grid, key, fields));
+    FieldNodes::AtmosphereSpec nan = spec;
+    nan.nu0_per_s = std::numeric_limits<double>::quiet_NaN();
+    REQUIRE_FALSE(bake_atmosphere(nan, grid, key, fields));
+    const GridSpec too_small{Vec3{}, Vec3{1.0, 1.0, 1.0}, 1, 1, 1};
+    REQUIRE_FALSE(bake_atmosphere(spec, too_small, key, fields));
+
+    // And the type is declared with its own grid ports, three parameters first -- the same shape the mask has.
+    const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
+    REQUIRE(types.size() == 9);
+    REQUIRE(types[8].type_name == FieldNodes::kAtmosphereType);
+    REQUIRE(types[8].has_compute);
+    REQUIRE(types[8].allow_in_field_domain);
+    REQUIRE_FALSE(types[8].allow_in_particle_domain);
+    const graph::PortDesc* drag = types[8].find_port(FieldNodes::kPortAtmosphereOut, true);
+    REQUIRE(drag != nullptr);
+    REQUIRE(drag->type == qp::ports::kScalarField);
+    REQUIRE(drag->unit_symbol == std::string{"1/s"});
+    for (const graph::PortNumber number : {FieldNodes::kPortAtmosphereNu0, FieldNodes::kPortAtmosphereScaleHeight,
+                                           FieldNodes::kPortAtmosphereReference}) {
+        const graph::PortDesc* parameter = types[8].find_port(number, false);
+        REQUIRE(parameter != nullptr);
+        REQUIRE_FALSE(parameter->connectable);
+    }
 }
 
 TEST_CASE("magnetosphere.field_nodes.the_dipole_is_baked_onto_the_grid_it_declares", "[magnetosphere]") {

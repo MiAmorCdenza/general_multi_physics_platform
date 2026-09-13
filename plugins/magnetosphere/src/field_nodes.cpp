@@ -138,6 +138,10 @@ namespace {
         out = FieldNodes::kPortConvectionOrigin0;
         return true;
     }
+    if (type_name == FieldNodes::kAtmosphereType) {
+        out = FieldNodes::kPortAtmosphereOrigin0;
+        return true;
+    }
     // `field.mul` is the one type that declares no grid at all: a product is defined on the lattice its inputs
     // share, so it forwards. A caller reaching here with `mul` has failed to follow the wire, which is what the
     // walk below exists to do.
@@ -395,6 +399,48 @@ bool bake_corotation(const gfield::FieldValue& magnetic, const Vec3& origin_m, c
     }
     const qp::abi::LatticeDesc desc = table.view(volt_per_metre_dimension()).desc;
     return fields.publish(key, desc, std::move(table.data()));
+}
+
+FieldNodes::AtmosphereSpec FieldNodes::read_atmosphere_from(const graph::InputView& inputs) noexcept {
+    AtmosphereSpec spec;
+    spec.nu0_per_s = real_or(inputs, kPortAtmosphereNu0, kDefaultAtmosphereNu0);
+    spec.scale_height_m = real_or(inputs, kPortAtmosphereScaleHeight, kDefaultAtmosphereScaleHeightM);
+    spec.reference_m = real_or(inputs, kPortAtmosphereReference, kDefaultAtmosphereReferenceM);
+    return spec;
+}
+
+FieldNodes::AtmosphereSpec FieldNodes::read_atmosphere(const graph::Node& node) noexcept {
+    graph::PortValues values;
+    values.reserve(node.params.size());
+    for (const graph::ParamValue& p : node.params) values.emplace_back(p.number, p.value);
+    return read_atmosphere_from(graph::InputView{values});
+}
+
+bool bake_atmosphere(const FieldNodes::AtmosphereSpec& spec, const GridSpec& grid, gfield::FieldKey key,
+                     gfield::FieldSet& fields) {
+    if (!bakeable(grid)) return false;
+    // Refused, not clamped: see the declaration. A rate below zero is a drag that adds energy and a scale height of
+    // zero is an atmosphere that is a wall, and neither is a configuration this model describes.
+    if (!std::isfinite(spec.nu0_per_s) || spec.nu0_per_s < 0.0) return false;
+    if (!std::isfinite(spec.scale_height_m) || !(spec.scale_height_m > 0.0)) return false;
+    if (!std::isfinite(spec.reference_m)) return false;
+
+    // Hertz: a rate is an inverse time, which is a real `FieldDim` and the unit the drag socket documents.
+    const qp::abi::LatticeDesc desc =
+        qp::abi::make_lattice(qp::abi::LatticeKind::volume, qp::abi::ComponentKind::scalar,
+                              qp::abi::ElementType::f64, per_second_dimension(), grid.nx, grid.ny, grid.nz);
+
+    std::vector<double> rates(static_cast<std::size_t>(grid.point_count()), 0.0);
+    std::size_t at = 0;
+    for (std::uint32_t i = 0; i < grid.nx; ++i) {
+        for (std::uint32_t j = 0; j < grid.ny; ++j) {
+            for (std::uint32_t k = 0; k < grid.nz; ++k) {
+                const double radius = norm(grid.node_position(i, j, k));
+                rates[at++] = spec.nu0_per_s * std::exp(-(radius - spec.reference_m) / spec.scale_height_m);
+            }
+        }
+    }
+    return fields.publish(key, desc, std::move(rates));
 }
 
 std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipole;
@@ -754,8 +800,59 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     r_out.unit_symbol = "V/m";
     corotation.outputs.push_back(r_out);
 
-    return {std::move(dipole),     std::move(uniform), std::move(sum),    std::move(electric),
-            std::move(mask),       std::move(mul),     std::move(convection), std::move(corotation)};
+    // ---------------- the atmosphere ----------------
+    graph::NodeDesc atmosphere;
+    atmosphere.type_name = kAtmosphereType;
+    atmosphere.label = "Atmosphere drag";
+    atmosphere.description = "An exponential drag rate, nu = nu0 exp(-(r - r_ref)/H), as a scalar field in per "
+                            "second. Wire it into a pusher's drag socket and turn that socket on: the first force "
+                            "in this kit that takes energy away, and the first whose decay an experiment can "
+                            "measure.";
+    atmosphere.category = "field";
+    atmosphere.version = 1;
+    atmosphere.allow_in_field_domain = true;
+    atmosphere.allow_in_particle_domain = false;
+    atmosphere.has_compute = true;
+    graph::PortDesc nu0 = parameter(kPortAtmosphereNu0, "nu0", "Rate at r_ref", "1/s", 1.0e-3);
+    nu0.description = "The drag rate quoted at the reference radius. Zero, the default, is no atmosphere at all: "
+                      "a graph that wires this node and does not set a rate gets a drag of nothing rather than a "
+                      "guessed one.";
+    atmosphere.inputs.push_back(nu0);
+    graph::PortDesc height = parameter(kPortAtmosphereScaleHeight, "scale_height", "Scale height", "m", 1.0e4);
+    height.description = "How far the rate falls by a factor of e. 100 km is the thermosphere's order at low "
+                         "altitude; refuses to be zero, because an atmosphere that is a wall is not this model.";
+    atmosphere.inputs.push_back(height);
+    graph::PortDesc reference = parameter(kPortAtmosphereReference, "reference_radius", "Reference radius", "m",
+                                          kEarthRadiusM);
+    reference.description = "Where the rate above is quoted. A parameter rather than the surface, because what "
+                            "\"the rate at the surface\" means depends on where the model's surface is.";
+    atmosphere.inputs.push_back(reference);
+    for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+        const char* names[9] = {"origin_x", "origin_y", "origin_z", "spacing_x", "spacing_y",
+                                "spacing_z", "count_x",  "count_y",   "count_z"};
+        const char* labels[9] = {"Grid origin x", "Grid origin y", "Grid origin z",   "Grid spacing x",
+                                 "Grid spacing y", "Grid spacing z", "Nodes along x", "Nodes along y",
+                                 "Nodes along z"};
+        const char* units[9] = {"m", "m", "m", "m", "m", "m", "", "", ""};
+        const double steps[9] = {kEarthRadiusM, kEarthRadiusM, kEarthRadiusM, 0.1 * kEarthRadiusM,
+                                 0.1 * kEarthRadiusM, 0.1 * kEarthRadiusM, 1.0, 1.0, 1.0};
+        atmosphere.inputs.push_back(parameter(kPortAtmosphereOrigin0 + offset, names[offset], labels[offset],
+                                              units[offset], steps[offset]));
+    }
+    graph::PortDesc a_out;
+    a_out.number = kPortAtmosphereOut;
+    a_out.name = "drag";
+    a_out.label = "Drag rate";
+    a_out.description = "The baked rate, a scalar volume in per second, for a pusher's drag socket.";
+    a_out.type = qp::ports::kScalarField;
+    a_out.connectable = true;
+    a_out.required = false;
+    a_out.unit_symbol = "1/s";
+    atmosphere.outputs.push_back(a_out);
+
+    return {std::move(dipole),      std::move(uniform),    std::move(sum),      std::move(electric),
+            std::move(mask),        std::move(mul),        std::move(convection), std::move(corotation),
+            std::move(atmosphere)};
 }
 
 gfield::FieldValue DipoleEvaluator::input_field(const graph::NodeId id, const graph::PortNumber port) const noexcept {
@@ -777,6 +874,18 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
     graph::NodeId id, const graph::NodeDesc& desc,
     const std::vector<std::pair<graph::PortNumber, qp::ports::Value>>& inputs) {
     using Outcome = std::vector<std::pair<graph::PortNumber, qp::ports::Value>>;
+    if (desc.type_name == FieldNodes::kAtmosphereType) {
+        const graph::InputView atmosphere_view{inputs};
+        const FieldNodes::AtmosphereSpec spec = FieldNodes::read_atmosphere_from(atmosphere_view);
+        const GridSpec atmosphere_grid = FieldNodes::read_from(atmosphere_view, FieldNodes::kPortAtmosphereOrigin0);
+        const gfield::FieldKey atmosphere_key{id.index, FieldNodes::kPortAtmosphereOut};
+        if (!bake_atmosphere(spec, atmosphere_grid, atmosphere_key, *fields_)) {
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        Outcome out;
+        out.emplace_back(FieldNodes::kPortAtmosphereOut, qp::ports::Value{fields_->view(atmosphere_key).desc});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
     if (desc.type_name == FieldNodes::kCorotationType) {
         // The field to corotate in, and **its** geometry: the node bakes on the lattice it reads, so the two
         // cannot be put in different places. `resolve_field_origin` is the resolver the plan builder uses, and it

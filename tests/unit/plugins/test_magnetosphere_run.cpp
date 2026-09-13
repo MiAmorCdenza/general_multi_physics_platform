@@ -79,7 +79,7 @@ struct Scene final {
     Scene() {
         // Seven field models now: the dipole, the uniform field, the sum, the electric field, the region mask,
         // the multiplier and the convection field.
-        REQUIRE(FieldNodes::mount(host) == 8);
+        REQUIRE(FieldNodes::mount(host) == 9);
         REQUIRE(PusherNodes::mount(host) == 1);
         REQUIRE(EmitterNodes::mount(host) == 1);
         // The render item too, or `build_plan` cannot look its descriptor up and silently records no
@@ -98,6 +98,16 @@ struct Scene final {
     }
 
     void set(graph::NodeId id, graph::PortNumber port, double v) {
+        g.find_node_mutable(id)->set_param(port, qp::ports::Value{v});
+        g.bump_version();
+    }
+
+    /// @brief Sets a **boolean** port, which is not the same thing as setting a double to one.
+    ///
+    /// Added because a case got it wrong: the pusher's drag switch is a kBool port and the plan reads it with
+    /// s_bool(), so a node carrying 1.0 reads as *false* and the drag silently does nothing -- a run that
+    /// looks correct and decays by nothing. The helper exists so the type is in the call rather than in a comment.
+    void set_flag(graph::NodeId id, graph::PortNumber port, bool v) {
         g.find_node_mutable(id)->set_param(port, qp::ports::Value{v});
         g.bump_version();
     }
@@ -1156,6 +1166,123 @@ TEST_CASE("magnetosphere.run.the_cadence_resolves_the_gyration", "[magnetosphere
         provider.build(field_only_scene.g, field_only_scene.host.node_types());
     REQUIRE(field_only.ok());
     REQUIRE_FALSE(field_only.run->preferred_cadence().has_value());
+}
+
+TEST_CASE("magnetosphere.run.an_atmosphere_takes_the_speed_away", "[magnetosphere]") {
+    // **The first dissipative force in this kit, and the first thing here whose decay an experiment can measure.**
+    // Every other force is conservative -- a magnetic field does no work at all, an electric field gives back what
+    // it takes -- so this is the case where the trace stops being a diagnostic and becomes a measurement: the speed
+    // channel falls, and it falls by the amount the model says.
+    //
+    // The graph is the kit's own chain plus one wire: an atmosphere node whose rate is quoted at the surface and
+    // whose scale height is far larger than the region, so the rate is **nearly** constant (under a percent across
+    // the box, asserted by the atmosphere's own case). That limit is what makes a closed-form check possible:
+    // `v(t) = v(0) exp(-nu t)` for a constant rate.
+    Scene scene;
+    const Chain chain = add_chain(scene, 0.0, 6.6, 4, 0.01, 90.0);
+
+    const double nu0 = 0.01;   // per second
+    const graph::NodeId atmosphere = scene.add(FieldNodes::kAtmosphereType);
+    // Its own grid, and it must be **the dipole's**: the kernel has one grid to sample every slot with, and the plan
+    // builder now refuses a graph whose bound sockets disagree. Copying the dipole's parameters is what a user does,
+    // and the refusal is what tells them when they did not.
+    scene.set(atmosphere, FieldNodes::kPortAtmosphereNu0, nu0);
+    scene.set(atmosphere, FieldNodes::kPortAtmosphereScaleHeight, 1.0e10);
+    scene.set(atmosphere, FieldNodes::kPortAtmosphereReference, kEarthRadiusM);
+    for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+        const double value = offset < 3 ? -8.0 * kEarthRadiusM
+                                         : (offset < 6 ? 0.25 * kEarthRadiusM : 65.0);
+        scene.set(atmosphere, FieldNodes::kPortAtmosphereOrigin0 + offset, value);
+    }
+    scene.wire(atmosphere, FieldNodes::kPortAtmosphereOut, chain.pusher, PusherNodes::kPortDrag);
+    scene.set_flag(chain.pusher, PusherNodes::kPortUseDrag, true);
+
+    MagnetosphereRunProvider provider;
+    qp::graph::execution::RunBuildResult built = provider.build(scene.g, scene.host.node_types());
+    // Catch2 prints the sentence when it is not empty, which is how this case reports *why* a graph the kit should
+    // accept was refused.
+    REQUIRE(built.refusal == std::string{});
+    REQUIRE(built.ok());
+    built.run->set_run(qp::runtime::RunId{31});
+    const std::optional<qp::graph::execution::RunCadence> cadence = built.run->preferred_cadence();
+    REQUIRE(cadence.has_value());
+    REQUIRE(built.run->advance(cadence->steps, cadence->dt).has_value());
+
+    const qp::runtime::Trace& record = built.run->trace();
+    REQUIRE(record.size() == cadence->steps + 1);
+    std::size_t speed_slot = record.channels().size();
+    for (std::size_t slot = 0; slot < record.channels().size(); ++slot) {
+        if (record.channels()[slot].name == std::string{MagnetosphereRun::kSpeedChannel}) speed_slot = slot;
+    }
+    REQUIRE(speed_slot < record.channels().size());
+
+    const auto speed_at = [&record, speed_slot](std::size_t index) {
+        const auto value = record.value_at(static_cast<std::uint64_t>(index), speed_slot);
+        REQUIRE(value.has_value());
+        return value->value;
+    };
+    const double first = speed_at(0);
+    const double last = speed_at(record.size() - 1);
+    REQUIRE(first > 0.0);
+    REQUIRE(last < first);
+
+    // **The closed form.** The elapsed time is the sample count times the step, and `nu0` is the rate the node was
+    // given; the only approximation between them and the measurement is the kernel's `1 - nu dt` damping, which
+    // differs from an exponential by `O((nu dt)^2)` per step -- four parts in a hundred million at this step size,
+    // so a one-percent tolerance is testing the model rather than the expansion.
+    const double elapsed_s = static_cast<double>(record.size() - 1) * cadence->dt / kNormalizedPerSecond;
+    const double predicted = first * std::exp(-nu0 * elapsed_s);
+    REQUIRE(std::abs(last - predicted) / predicted < 0.01);
+    // And the decay is large enough to be a measurement rather than a rounding: 0.01 per second over eighty seconds
+    // takes away more than half the speed.
+    REQUIRE(last / first < 0.7);
+    REQUIRE(last / first > 0.3);
+    // The magnetic field still does no work, so what the drag took is the *whole* of the change: a run whose energy
+    // fell for another reason would be a different finding, and this is the assertion that separates them.
+    std::size_t energy_slot = record.channels().size();
+    for (std::size_t slot = 0; slot < record.channels().size(); ++slot) {
+        if (record.channels()[slot].name == std::string{MagnetosphereRun::kEnergyChannel}) energy_slot = slot;
+    }
+    REQUIRE(energy_slot < record.channels().size());
+    const auto energy_at = [&record, energy_slot](std::size_t index) {
+        const auto value = record.value_at(static_cast<std::uint64_t>(index), energy_slot);
+        REQUIRE(value.has_value());
+        return value->value;
+    };
+    // Energy goes as the square of the speed, so it decays at twice the rate: `exp(-2 nu t)`.
+    const double predicted_energy = energy_at(0) * std::exp(-2.0 * nu0 * elapsed_s);
+    REQUIRE(std::abs(energy_at(record.size() - 1) - predicted_energy) / predicted_energy < 0.01);
+
+    // A graph that wires the atmosphere and does **not** turn the drag socket on is not dragged: the switch is the
+    // reference implementation's own, and a run that quietly applied it anyway would make the node's absence mean
+    // nothing.
+    Scene no_switch;
+    const Chain chain2 = add_chain(no_switch, 0.0, 6.6, 4, 0.01, 90.0);
+    const graph::NodeId quiet = no_switch.add(FieldNodes::kAtmosphereType);
+    no_switch.set(quiet, FieldNodes::kPortAtmosphereNu0, nu0);
+    no_switch.set(quiet, FieldNodes::kPortAtmosphereScaleHeight, 1.0e10);
+    no_switch.set(quiet, FieldNodes::kPortAtmosphereReference, kEarthRadiusM);
+    for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+        const double value = offset < 3 ? -8.0 * kEarthRadiusM
+                                         : (offset < 6 ? 0.25 * kEarthRadiusM : 65.0);
+        no_switch.set(quiet, FieldNodes::kPortAtmosphereOrigin0 + offset, value);
+    }
+    no_switch.wire(quiet, FieldNodes::kPortAtmosphereOut, chain2.pusher, PusherNodes::kPortDrag);
+    qp::graph::execution::RunBuildResult undragged = provider.build(no_switch.g, no_switch.host.node_types());
+    REQUIRE(undragged.ok());
+    undragged.run->set_run(qp::runtime::RunId{32});
+    REQUIRE(undragged.run->advance(cadence->steps, cadence->dt).has_value());
+    const qp::runtime::Trace& steady = undragged.run->trace();
+    std::size_t steady_speed = steady.channels().size();
+    for (std::size_t slot = 0; slot < steady.channels().size(); ++slot) {
+        if (steady.channels()[slot].name == std::string{MagnetosphereRun::kSpeedChannel}) steady_speed = slot;
+    }
+    REQUIRE(steady_speed < steady.channels().size());
+    const auto steady_first = steady.value_at(0, steady_speed);
+    const auto steady_last = steady.value_at(static_cast<std::uint64_t>(steady.size() - 1), steady_speed);
+    REQUIRE(steady_first.has_value());
+    REQUIRE(steady_last.has_value());
+    REQUIRE(std::abs(steady_last->value - steady_first->value) / steady_first->value < 1.0e-9);
 }
 
 TEST_CASE("magnetosphere.field_nodes.a_uniform_field_is_uniform", "[magnetosphere]") {
