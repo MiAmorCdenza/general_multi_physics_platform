@@ -67,6 +67,7 @@
 #include <qp/plugins/magnetosphere/field_nodes.hpp>
 #include <qp/plugins/magnetosphere/plan.hpp>
 #include <qp/plugins/magnetosphere/run.hpp>
+#include <qp/plugins/magnetosphere/view_item.hpp>
 #endif
 
 #include <QApplication>
@@ -222,6 +223,10 @@ int main(int argc, char** argv) {
     // The kit's whole-graph run provider. The operator loop drives one operator over a state of a few doubles
     // per particle; this kit's graph has to be baked and launched first, so pressing Run on it goes through
     // `IGraphRunProvider` instead -- see `views/model/run_providers.hpp`.
+    // The drawing side of the same kit: the item that answers `render.particles`. Mounted beside the run
+    // provider, and the window offers it every declaration a run reports.
+    qp::plugins::magnetosphere::ParticleViewItem particle_item;
+    qp::graph::mount_view_item(&particle_item);
     qp::views::model::mount_run_provider(&magnetosphere_run);
     const std::size_t mounted_field_types = qp::plugins::magnetosphere::FieldNodes::mount(content_host);
     const std::size_t mounted_pushers = qp::plugins::magnetosphere::PusherNodes::mount(content_host);

@@ -18,6 +18,7 @@
 #include <qp/views/model/execution_binders.hpp>
 #include <qp/views/model/export_controller.hpp>
 
+#include "particle_view.hpp"
 #include "confidence_panel.hpp"
 #include "fit_panel.hpp"
 #include "measurement_panel.hpp"
@@ -186,6 +187,15 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
     // the readings say what was measured, and this says whether the numbers behind them can be
     // trusted. Putting them in different corners is how a user reads one and not the other.
     addDockWidget(Qt::RightDockWidgetArea, confidence_dock);
+    // The particles, in a dock of their own. The widget is found by type when a run finishes rather than held in
+    // a member, because the window already owns it by parentage and a second reference to a widget the dock
+    // owns is a second thing to keep in step. The scene it is handed is a **copy**: a widget that kept a pointer
+    // into a run would paint one run's picture beside another run's numbers.
+    auto* particle_dock = new QDockWidget(tr("Particles"), this);
+    auto* particle_view = new ParticleView(particle_dock);
+    particle_dock->setWidget(particle_view);
+    particle_dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
+    addDockWidget(Qt::RightDockWidgetArea, particle_dock);
     splitDockWidget(dock, confidence_dock, Qt::Vertical);
 
     fit_panel_ = new FitPanel(fit_, this);
@@ -852,6 +862,26 @@ void EditorWindow::run_once() {
     // The status line speaks first: it is where every other message in this window goes, and a user who
     // pressed a button is looking for a response in one consistent place.
     status_->setText(QString::fromStdString(result.report.message));
+
+    // What the graph asked to have **drawn**, handed to whichever view item claims a declaration. This comes
+    // before the failure branch on purpose: the declarations are filled whether or not the run succeeded --
+    // what a graph declares is a property of the graph -- and a refused run should still show the last picture
+    // rather than a blank panel.
+    if (auto* particle_view = findChild<ParticleView*>()) {
+        const qp::graph::Graph& graph = session_.graph();
+        for (const qp::graph::DeclaredOutput& declaration : result.render_declared) {
+            const qp::graph::Node* node = graph.find_node(declaration.node);
+            if (node == nullptr) continue;
+            for (qp::graph::IViewItem* item : qp::graph::view_items()) {
+                if (item == nullptr || !item->draws(node->type_name)) continue;
+                const qp::graph::ViewRequest request{&graph, &result.render_declared,
+                                                     &result.particle_positions, result.report.steps};
+                if (!request.valid()) break;
+                particle_view->set_scene(item->scene(request));
+                break;
+            }
+        }
+    }
 
     if (!result.report.ok) {
         // A failed run leaves the panels alone. Replacing good readings with nothing because a run was

@@ -1,0 +1,93 @@
+/**
+ * @file particle_view.cpp
+ * @brief The mapping from scene units to pixels, and nothing else.
+ *
+ * The fit is deliberately **uniform**: one scale for both axes, chosen as the smaller of the two the bounds
+ * would allow, so a ring of particles stays a ring. A widget that stretched each axis to fill its rectangle
+ * would draw a circle as an ellipse and a physical picture would be a lie about the shape of an orbit -- the one
+ * thing a student is meant to read off it.
+ *
+ * The origin is placed at the centre of the widget and the y axis is **flipped**, because the scene's `y` is the
+ * graph's `y` (north up in the equatorial plane) while a widget's `y` grows downward.
+ */
+#include "particle_view.hpp"
+
+#include <QPainter>
+#include <QPaintEvent>
+#include <QPen>
+
+#include <algorithm>
+#include <cmath>
+#include <utility>
+
+namespace qp::views {
+namespace {
+
+/// @brief The point size of one particle, in pixels.
+constexpr double kPointRadius = 3.0;
+/// @brief The margin kept between the fitted content and the widget's edge, in pixels.
+constexpr double kMarginPixels = 8.0;
+
+}  // namespace
+
+ParticleView::ParticleView(QWidget* parent) : QWidget(parent) {
+    setMinimumSize(220, 220);
+    setAutoFillBackground(true);
+}
+
+void ParticleView::set_scene(qp::graph::ViewScene scene) {
+    scene_ = std::move(scene);
+    update();
+}
+
+QString ParticleView::empty_text() {
+    return QStringLiteral("Nothing to draw yet -- press Run.");
+}
+
+void ParticleView::paintEvent(QPaintEvent* event) {
+    QWidget::paintEvent(event);
+    QPainter painter{this};
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    if (scene_.points.empty() || !scene_.has_bounds) {
+        painter.drawText(rect(), Qt::AlignCenter, empty_text());
+        return;
+    }
+
+    // The uniform fit: the smaller of the two scales, so equal distances stay equal on screen.
+    const double width = static_cast<double>(std::max(1, rect().width())) - 2.0 * kMarginPixels;
+    const double height = static_cast<double>(std::max(1, rect().height())) - 2.0 * kMarginPixels;
+    const double span_x = scene_.x_max - scene_.x_min;
+    const double span_y = scene_.y_max - scene_.y_min;
+    if (!(span_x > 0.0) || !(span_y > 0.0)) {
+        painter.drawText(rect(), Qt::AlignCenter, empty_text());
+        return;
+    }
+    const double scale = std::min(width / span_x, height / span_y);
+    const double centre_x = rect().center().x();
+    const double centre_y = rect().center().y();
+    const double scene_centre_x = 0.5 * (scene_.x_min + scene_.x_max);
+    const double scene_centre_y = 0.5 * (scene_.y_min + scene_.y_max);
+
+    // The Earth, at the scene's origin: without it a ring of dots is a ring of dots, and with it the picture is
+    // a magnetosphere. Drawn first so the particles sit on top.
+    const QPointF origin{centre_x + (0.0 - scene_centre_x) * scale, centre_y - (0.0 - scene_centre_y) * scale};
+    const double planet_radius = std::max(2.0, scale);   // one earth radius, at the scene's own scale
+    painter.setBrush(QColor(60, 110, 180));
+    painter.setPen(Qt::NoPen);
+    painter.drawEllipse(origin, planet_radius, planet_radius);
+
+    painter.setBrush(QColor(240, 200, 90));
+    painter.setPen(QPen(QColor(120, 90, 20), 1.0));
+    for (const qp::graph::ViewScene::Point& point : scene_.points) {
+        const QPointF where{centre_x + (point.x - scene_centre_x) * scale,
+                            centre_y - (point.y - scene_centre_y) * scale};
+        painter.drawEllipse(where, kPointRadius, kPointRadius);
+    }
+    painter.setPen(QPen(QColor(90, 90, 90), 1.0));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawText(rect().adjusted(6, 4, -6, -4), Qt::AlignTop | Qt::AlignLeft,
+                     QStringLiteral("%1 R_E").arg(scene_.x_max, 0, 'g', 3));
+}
+
+}  // namespace qp::views

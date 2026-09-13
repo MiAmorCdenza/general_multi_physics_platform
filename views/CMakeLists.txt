@@ -73,6 +73,8 @@ add_library(qp_views STATIC
     qt/fit_panel.hpp
     qt/editor_window.cpp
     qt/editor_window.hpp
+    qt/particle_view.cpp
+    qt/particle_view.hpp
     qt/theme.cpp
     qt/theme.hpp
     qt/icons.cpp

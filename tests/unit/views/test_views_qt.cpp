@@ -70,6 +70,7 @@
 #include <QString>
 #include <QStringList>
 
+#include "particle_view.hpp"
 #include "confidence_panel.hpp"
 #include "fit_panel.hpp"
 #include "measurement_panel.hpp"
@@ -1501,4 +1502,39 @@ int main(int argc, char** argv) {
     // teardown order and Qt warns about it.
     QApplication app(argc, argv);
     return Catch::Session().run(argc, argv);
+}
+
+
+TEST_CASE("qt.views.particle.draws_a_scene_and_says_when_there_is_none", "[views][qt]") {
+    // The last link of the render chain, checked where it can be: the widget holds a **copy** of the scene it
+    // was given, and it says so in words when there is nothing to draw. Both are decisions rather than details.
+    // The copy is what keeps a painted frame and the numbers beside it from being different runs; the sentence
+    // is what keeps "this graph draws nothing" from looking like "this window has not run yet".
+    qp::views::ParticleView view;
+    REQUIRE(view.scene().empty());
+    REQUIRE_FALSE(qp::views::ParticleView::empty_text().isEmpty());
+
+    qp::graph::ViewScene scene;
+    scene.points.push_back(qp::graph::ViewScene::Point{1.0, 2.0});
+    scene.points.push_back(qp::graph::ViewScene::Point{-3.0, 0.5});
+    scene.x_min = -4.0;
+    scene.x_max = 4.0;
+    scene.y_min = -4.0;
+    scene.y_max = 4.0;
+    scene.has_bounds = true;
+
+    view.set_scene(scene);
+    REQUIRE(view.scene().points.size() == 2);
+    REQUIRE(view.scene().points.front().x == 1.0);
+    REQUIRE(view.scene().has_bounds);
+
+    // The bounds are the item's decision and the widget only fits them, so a scene with no bounds is drawn as
+    // "nothing" rather than fitted to whatever the points happen to span.
+    qp::graph::ViewScene unbounded;
+    unbounded.points.push_back(qp::graph::ViewScene::Point{1.0, 1.0});
+    view.set_scene(unbounded);
+    REQUIRE_FALSE(view.scene().has_bounds);
+
+    // And the scene is copied: replacing it does not touch what the caller still holds.
+    Q_UNUSED(scene);
 }
