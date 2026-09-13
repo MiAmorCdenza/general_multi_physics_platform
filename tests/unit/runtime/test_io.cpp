@@ -241,6 +241,87 @@ TEST_CASE("io.registry.duplicate_is_refused", "[io]") {
     }
 }
 
+TEST_CASE("io.export.a_fit_table_is_a_third_subject", "[io]") {
+    // **One code for every table a format cannot write, and the subject says which.** The first version of this was
+    // `readings_not_supported`, which was the minimal shape while there was one table to refuse; a second subject is
+    // the condition under which a minimal shape is replaced by the complete one, because a third code would have
+    // followed the second and all three would have said one thing. What a caller does about it is the same either
+    // way, and `to_string(ExportSubject)` is what makes the sentence specific.
+    ExportCapabilities tables{};
+    tables.keeps_uncertainty = true;
+    tables.keeps_readings = true;
+    tables.keeps_fit = true;
+    const FakeExporter writer{"qp.tables", {"tables"}, tables};
+    ExportCapabilities series_only{};
+    series_only.keeps_uncertainty = true;
+    const FakeExporter series{"qp.series", {"series"}, series_only};
+    // A format that keeps an error bar but has no shape for a parameter table: the capability that decides is the
+    // fit's, not the uncertainty's.
+    ExportCapabilities readings_only{};
+    readings_only.keeps_uncertainty = true;
+    readings_only.keeps_readings = true;
+    const FakeExporter no_fit{"qp.no_fit", {"nofit"}, readings_only};
+
+    FitResult fit;
+    fit.model = "linear";
+    fit.coefficients = {0.01, 0.5};
+    fit.covariance = {1.0e-12, 0.0, 0.0, 4.0e-6};
+    fit.chi_squared = 1.2e-4;
+    fit.degrees_of_freedom = 7;
+    fit.r_squared = 0.9998;
+
+    ExportRequest request;
+    request.subject = ExportSubject::fit;
+    request.fit = &fit;
+    REQUIRE(check_export(writer, request) == ExportRefusal::ok);
+    // **Two refusals, in the order that makes them different findings.** A format that writes only a series is
+    // refused for the *table*: it has no shape for parameters whatever the session holds, so the subject comes
+    // first, exactly as it does for the readings.
+    REQUIRE(check_export(series, request) == ExportRefusal::subject_not_supported);
+    REQUIRE(check_export(no_fit, request) == ExportRefusal::subject_not_supported);
+    // The fit's uncertainty, by contrast, is the result rather than a property of the session, so that check is
+    // **absolute**: a format that has a shape for the table and no place for the error bar is refused even with
+    // `require_uncertainty` false, which is the difference from the readings path.
+    ExportCapabilities fit_no_error_bars{};
+    fit_no_error_bars.keeps_fit = true;
+    const FakeExporter bare_fit{"qp.bare_fit", {"barefit"}, fit_no_error_bars};
+    request.require_uncertainty = false;
+    REQUIRE(check_export(bare_fit, request) == ExportRefusal::uncertainty_not_supported);
+    // ... and the sentence can name the table, because the subject is a value with a name.
+    REQUIRE(std::string{to_string(request.subject)} == "fit");
+    REQUIRE(std::string{to_string(ExportRefusal::subject_not_supported)} == "subject_not_supported");
+
+    // A subject with nothing behind it, a fit with no coefficients, and labels that stop halfway: three different
+    // findings, each refused before anything is written.
+    ExportRequest missing = request;
+    missing.fit = nullptr;
+    REQUIRE(check_export(writer, missing) == ExportRefusal::subject_missing);
+    FitResult empty;
+    request.fit = &empty;
+    REQUIRE(check_export(writer, request) == ExportRefusal::nothing_to_write);
+    request.fit = &fit;
+    const std::vector<std::string> one_label{"a"};
+    request.coefficient_labels = &one_label;
+    REQUIRE(check_export(writer, request) == ExportRefusal::shape_mismatch);
+    const std::vector<std::string> two_labels{"a", "b"};
+    request.coefficient_labels = &two_labels;
+    REQUIRE(check_export(writer, request) == ExportRefusal::ok);
+    // The labels are optional, and an **empty** one means "nobody named the rows" rather than "the first row is
+    // unnamed" -- the same rule the readings table follows.
+    const std::vector<std::string> none;
+    request.coefficient_labels = &none;
+    REQUIRE(check_export(writer, request) == ExportRefusal::ok);
+    request.coefficient_labels = nullptr;
+    REQUIRE(check_export(writer, request) == ExportRefusal::ok);
+
+    // The other two subjects are untouched by the third: a request written before fits existed still means the trace.
+    const Trace trace = make_trace(1, 2);
+    ExportRequest as_series;
+    as_series.trace = &trace;
+    REQUIRE(as_series.subject == ExportSubject::trace);
+    REQUIRE(check_export(writer, as_series) == ExportRefusal::ok);
+}
+
 TEST_CASE("io.export.a_readings_table_is_not_a_series", "[io]") {
     // **Two subjects, because a format writes one table per file.** A trace is a series -- one row per sample, one
     // column per channel -- and the readings are one row per measurement with its own uncertainty and no time axis.
@@ -263,10 +344,10 @@ TEST_CASE("io.export.a_readings_table_is_not_a_series", "[io]") {
     REQUIRE(check_export(table, request) == ExportRefusal::ok);
     // A format with no shape for a readings table is refused **by name**, which is what tells a caller to choose
     // another format rather than another policy -- and it is refused before the data is even looked at.
-    REQUIRE(check_export(neither, request) == ExportRefusal::readings_not_supported);
+    REQUIRE(check_export(neither, request) == ExportRefusal::subject_not_supported);
     Dataset empty{"length", qp::units::dims::length};
     request.readings = &empty;
-    REQUIRE(check_export(neither, request) == ExportRefusal::readings_not_supported);
+    REQUIRE(check_export(neither, request) == ExportRefusal::subject_not_supported);
     REQUIRE(check_export(table, request) == ExportRefusal::nothing_to_write);
 
     // A subject with nothing behind it is a caller's bug, and the two are different findings: a missing pointer is
@@ -289,7 +370,7 @@ TEST_CASE("io.export.a_readings_table_is_not_a_series", "[io]") {
     REQUIRE(check_export(table, request) == ExportRefusal::ok);
 
     // The names are stable, because a refusal reaches a user and a log line.
-    REQUIRE(std::string{to_string(ExportRefusal::readings_not_supported)} == "readings_not_supported");
+    REQUIRE(std::string{to_string(ExportRefusal::subject_not_supported)} == "subject_not_supported");
     REQUIRE(std::string{to_string(ExportRefusal::subject_missing)} == "subject_missing");
     REQUIRE(std::string{to_string(ExportSubject::trace)} == "trace");
     REQUIRE(std::string{to_string(ExportSubject::readings)} == "readings");

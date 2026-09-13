@@ -427,6 +427,10 @@ void EditorWindow::build_file_menu() {
     readings_action_->setToolTip(tr("Write the session's readings, with their uncertainties and their sources"));
     connect(readings_action_, &QAction::triggered, this, &EditorWindow::file_export_readings);
 
+    export_fit_action_ = file->addAction(tr("Export &fit..."));
+    export_fit_action_->setToolTip(tr("Write the fitted parameters, with their standard uncertainties"));
+    connect(export_fit_action_, &QAction::triggered, this, &EditorWindow::file_export_fit);
+
     // Greyed out rather than hidden when nothing is mounted: a menu entry that disappears teaches the
     // user nothing, and one that is present but unavailable says "this build has no format for that".
     const bool has_format = document_controller_.default_format() != nullptr;
@@ -577,7 +581,8 @@ bool EditorWindow::export_document(const std::string& path) {
     // caller that already knows where to write gets the same answer the dialog path would have given.
     const qp::runtime::ExportRefusal ready = measurements_.export_readiness(*format);
     if (ready != qp::runtime::ExportRefusal::ok) {
-        status_->setText(QString::fromStdString(qp::views::model::describe_export_refusal(ready)));
+        status_->setText(QString::fromStdString(qp::views::model::describe_export_refusal(
+            ready, qp::runtime::ExportSubject::trace)));
         return false;
     }
 
@@ -672,7 +677,8 @@ void EditorWindow::file_export() {
 
     const qp::runtime::ExportRefusal ready = measurements_.export_readiness(*format);
     if (ready != qp::runtime::ExportRefusal::ok) {
-        status_->setText(QString::fromStdString(qp::views::model::describe_export_refusal(ready)));
+        status_->setText(QString::fromStdString(qp::views::model::describe_export_refusal(
+            ready, qp::runtime::ExportSubject::trace)));
         return;
     }
 
@@ -704,7 +710,8 @@ void EditorWindow::file_export_readings() {
     qp::runtime::IExporter* format = formats.front();
     const qp::runtime::ExportRefusal ready = measurements_.readings_readiness(*format);
     if (ready != qp::runtime::ExportRefusal::ok) {
-        status_->setText(QString::fromStdString(qp::views::model::describe_export_refusal(ready)));
+        status_->setText(QString::fromStdString(qp::views::model::describe_export_refusal(
+            ready, qp::runtime::ExportSubject::readings)));
         return;
     }
 
@@ -721,6 +728,74 @@ void EditorWindow::file_export_readings() {
         return;
     }
     (void)export_readings_document(path.toStdString());
+}
+
+void EditorWindow::file_export_fit() {
+    // **Three exports, one shape.** The same order as the other two -- the format list, the pre-flight, then the
+    // dialog -- and with one difference that belongs to a fit: there has to *be* a fit. The panel owns the result
+    // (it is what ran it), so this reads the panel's result rather than fitting again, and "not fitted" is refused
+    // with a sentence instead of writing an empty file for it.
+    const std::vector<qp::runtime::IExporter*> formats = qp::views::model::export_formats().all();
+    if (formats.empty() || formats.front() == nullptr) {
+        status_->setText(tr("no export format is available in this build"));
+        return;
+    }
+    qp::runtime::IExporter* format = formats.front();
+
+    const std::optional<qp::runtime::FitResult>& fit = fit_panel_->result();
+    if (!fit.has_value()) {
+        // A sentence about the *session*, not about the format: nothing has been fitted, so there is nothing to
+        // choose a format for.
+        status_->setText(tr("nothing is fitted yet: choose a channel and a degree in the fit panel first"));
+        return;
+    }
+
+    const qp::runtime::ExportRefusal ready = qp::views::model::fit_readiness(*format, *fit);
+    if (ready != qp::runtime::ExportRefusal::ok) {
+        status_->setText(QString::fromStdString(qp::views::model::describe_export_refusal(
+            ready, qp::runtime::ExportSubject::fit)));
+        return;
+    }
+
+    const qp::runtime::FormatDesc& desc = format->format();
+    QStringList patterns;
+    for (const std::string& extension : desc.extensions) {
+        patterns << QStringLiteral("*.") + QString::fromStdString(extension);
+    }
+    const QString filter = QString::fromStdString(desc.label) + QStringLiteral(" (") +
+                           patterns.join(QStringLiteral(" ")) + QStringLiteral(")");
+    const QString path = QFileDialog::getSaveFileName(this, tr("Export fit"), QString{}, filter);
+    if (path.isEmpty()) {
+        status_->setText(tr("export cancelled"));
+        return;
+    }
+    (void)export_fit_document(path.toStdString());
+}
+
+std::vector<std::string> EditorWindow::fit_coefficient_labels() const {
+    // The names the panel's own rows carry, from the model layer's one rule: a table whose `parameter` column said
+    // `k0` where the window says `a` is a table a reader cannot line up with what they saw.
+    std::vector<std::string> labels;
+    if (!fit_panel_->result().has_value()) return labels;
+    const std::size_t count = fit_panel_->result()->coefficients.size();
+    labels.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        labels.push_back(qp::views::model::fit_coefficient_name(index));
+    }
+    return labels;
+}
+
+bool EditorWindow::export_fit_document(const std::string& path) {
+    const std::vector<qp::runtime::IExporter*> formats = qp::views::model::export_formats().all();
+    const std::optional<qp::runtime::FitResult>& fit = fit_panel_->result();
+    if (formats.empty() || formats.front() == nullptr || !fit.has_value()) {
+        status_->setText(tr("nothing is fitted yet"));
+        return false;
+    }
+    const qp::views::model::ExportReport report =
+        qp::views::model::export_fit(*fit, *formats.front(), fit_coefficient_labels(), path);
+    status_->setText(QString::fromStdString(report.message));
+    return report.ok;
 }
 
 std::vector<std::string> EditorWindow::reading_labels() const {

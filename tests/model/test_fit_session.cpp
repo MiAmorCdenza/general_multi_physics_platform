@@ -22,6 +22,8 @@
  */
 #include <catch2/catch_test_macros.hpp>
 
+#include <algorithm>
+
 #include <qp/views/model/fit_session.hpp>
 
 #include <qp/runtime/run/run.hpp>
@@ -65,6 +67,31 @@ std::string exclusion_names(const FitReport& report) {
 }
 
 }  // namespace
+
+TEST_CASE("fit.session.coefficients_are_named_the_same_way_everywhere", "[fit][model]") {
+    // **One naming rule, two consumers.** The fit panel has named its rows `a`, `b`, `c` since it was written, and
+    // the export of a fit has to name them the same way: a table whose `parameter` column says `k0` where the window
+    // says `a` is a table a reader cannot line up with what they saw. The rule lives in the model layer now, and this
+    // case pins the two properties that make it usable as an identity: it is stable, and it is distinct.
+    REQUIRE(fit_coefficient_name(0) == "a");
+    REQUIRE(fit_coefficient_name(1) == "b");
+    REQUIRE(fit_coefficient_name(2) == "c");
+    REQUIRE(fit_coefficient_name(25) == "z");
+    // Past `z` the counted form, never the character after it: `{` is not a name, and a name that depended on how
+    // many coefficients happen to exist would make two sessions' files disagree about what `b` is.
+    REQUIRE(fit_coefficient_name(26) == "c26");
+    REQUIRE(fit_coefficient_name(100) == "c100");
+
+    // Distinct for every index a fit can have, and stable under repetition -- the two properties a saved report
+    // relies on. `frozen: yes` in the contract is what this asserts.
+    std::vector<std::string> names;
+    for (std::size_t index = 0; index < 200; ++index) {
+        names.push_back(fit_coefficient_name(index));
+        REQUIRE(fit_coefficient_name(index) == names.back());
+    }
+    std::sort(names.begin(), names.end());
+    REQUIRE(std::adjacent_find(names.begin(), names.end()) == names.end());
+}
 
 TEST_CASE("fit.session.points_come_from_a_named_channel", "[fit]") {
     // The ordinary case: a channel sampled against time becomes (t, y, sigma) triples in trace order, and the

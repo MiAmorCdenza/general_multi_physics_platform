@@ -102,9 +102,28 @@ ExportRefusal check_export(const IExporter& exporter, const ExportRequest& reque
     // **Which table, first.** A request whose subject and pointers disagree is a caller's bug, and it is refused
     // before anything else is looked at: the alternative is a writer that finds no data, writes an empty table and
     // reports success, which is the failure mode every other code here exists to prevent.
+    if (request.subject == ExportSubject::fit) {
+        if (request.fit == nullptr) return ExportRefusal::subject_missing;
+        if (!capabilities.keeps_fit) return ExportRefusal::subject_not_supported;
+        const FitResult& fit = *request.fit;
+        if (fit.coefficients.empty()) return ExportRefusal::nothing_to_write;
+        // The labels are optional and a **short** vector is refused, exactly as for the readings: a parameter table
+        // whose rows stop being named halfway down is worse than one whose rows were never named, because the reader
+        // trusts what is there.
+        if (request.coefficient_labels != nullptr && !request.coefficient_labels->empty() &&
+            request.coefficient_labels->size() < fit.coefficients.size()) {
+            return ExportRefusal::shape_mismatch;
+        }
+        // **A fitted parameter without its uncertainty is the number a report overstates.** That is the fit panel's
+        // own sentence about its third column, and it is why the policy is not optional here the way it is for a
+        // series: a format that cannot keep an error bar cannot write this table honestly at all.
+        if (!capabilities.keeps_uncertainty) return ExportRefusal::uncertainty_not_supported;
+        return ExportRefusal::ok;
+    }
+
     if (request.subject == ExportSubject::readings) {
         if (request.readings == nullptr) return ExportRefusal::subject_missing;
-        if (!capabilities.keeps_readings) return ExportRefusal::readings_not_supported;
+        if (!capabilities.keeps_readings) return ExportRefusal::subject_not_supported;
         const Dataset& readings = *request.readings;
         if (readings.readings().empty()) return ExportRefusal::nothing_to_write;
         // The labels are optional, but a vector that is present and **short** is a caller who believes it named
@@ -115,8 +134,10 @@ ExportRefusal check_export(const IExporter& exporter, const ExportRequest& reque
             return ExportRefusal::shape_mismatch;
         }
         // A readings table carries uncertainties by construction -- that is what a reading *is* -- so the policy
-        // flag means the same thing here as it does for a series, and a format with no place for the error bars
-        // cannot write this table honestly either.
+        // flag means the same thing here as it does for a series. It stays **conditional** here, and the fit's
+        // version of this check is absolute: a session may legitimately hold readings nobody quantified (a
+        // hand-entered number with no error), while a fit's coefficients always have one, and dropping it would not
+        // lose an error bar but the result itself.
         if (request.require_uncertainty && !capabilities.keeps_uncertainty) {
             return ExportRefusal::uncertainty_not_supported;
         }

@@ -489,4 +489,29 @@ private:
     FitRequest request_{};
 };
 
+/**
+ * @brief The name of a fitted coefficient: `a` for a line's intercept, then `b`, `c`, ...
+ *
+ * **In the model layer because two things need it now.** The fit panel has named its rows this way since it was
+ * written, and the export of a fit has to name them the same way -- a table whose `parameter` column says `k0` where
+ * the window says `a` is a table a reader cannot line up with what they saw. One rule, one place.
+ *
+ * Past `z` the names become `c26`, `c27`, ...: never `{`, and never a name that depends on how many coefficients
+ * happen to exist.
+ *
+ * @param index Zero-based coefficient index.
+ *
+ * @ownership   owns the result
+ * @thread      any
+ * @pre         none
+ * @post        A short stable name, distinct for every index
+ * @invariant   The same index gives the same name in every build and every session
+ * @errors      May allocate; allocation failure terminates
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      yes -- a saved report quotes these names
+ * @tests       fit.session.coefficients_are_named_the_same_way_everywhere
+ */
+[[nodiscard]] std::string fit_coefficient_name(std::size_t index);
+
 }  // namespace qp::views::model

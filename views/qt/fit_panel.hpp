@@ -47,7 +47,10 @@
 
 #include <qp/views/model/fit_session.hpp>
 
+#include <qp/runtime/store/store.hpp>
+
 #include <cstddef>
+#include <optional>
 #include <string>
 #include <vector>
 class QComboBox;
@@ -153,6 +156,28 @@ public:
     /// @brief The text of the summary line, as displayed.
     [[nodiscard]] QString summary_text() const;
 
+    /**
+     * @brief The fit result this panel last computed, or nothing when no fit ran.
+     *
+     * **Exposed so that the export writes the numbers on the screen** rather than fitting a second time. The panel is
+     * the thing that runs the fit -- it owns the channel choice, the degree and the exclusions -- and a second run
+     * from another place would be a second source of one number, which is the failure this repository is arranged
+     * against. Nothing means "not fitted", which is a state the export refuses with a sentence rather than writing an
+     * empty file for.
+     *
+     * @ownership   borrows from this object for the call
+     * @thread      ui
+     * @pre         none
+     * @post        The result of the most recent `refresh()`, or nothing when it produced none
+     * @invariant   Identical to what the table currently shows
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.fit.an_export_writes_the_numbers_on_the_screen
+     */
+    [[nodiscard]] const std::optional<qp::runtime::FitResult>& result() const noexcept { return result_; }
+
     /// @brief The lines of the "what was left out" list, in the report's order.
     [[nodiscard]] QStringList exclusion_lines() const;
 
@@ -194,6 +219,9 @@ private:
     /// How many coefficient rows the table currently has, so a shorter fit clears the rest rather than leaving
     /// the previous degree's rows behind -- which would show two models at once.
     std::size_t shown_rows_ = 0;
+
+    /// The last fit this panel computed, kept so the export writes **these** numbers. See `result()`.
+    std::optional<qp::runtime::FitResult> result_{};
 };
 
 }  // namespace qp::views

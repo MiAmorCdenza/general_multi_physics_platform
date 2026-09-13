@@ -114,6 +114,61 @@ public:
     [[nodiscard]] const qp::runtime::FormatDesc& format() const noexcept override;
 
     /**
+     * @brief The fitted parameters: one row per coefficient, plus the fit's own quality numbers.
+     *
+     * **The other number a lab report quotes, and the one a grade usually rests on.** The fit panel says it about its
+     * own third column -- "a coefficient without its error bar is the number a lab report overstates, and this column
+     * is the reason the fit was worth doing at all" -- and until this existed that column could not leave the window.
+     *
+     * The table has **one row shape for everything the fit produces**, which is why there is no second table and no
+     * comment header:
+     *
+     * ```
+     * model,parameter,value,uncertainty
+     * linear,a,0.01010,1.4e-06
+     * linear,b,0.51200,0.00300
+     * linear,chi_squared,1.2e-04,
+     * linear,degrees_of_freedom,7,
+     * linear,r_squared,0.99980,
+     * ```
+     *
+     *   - **`model` is a column rather than a line of prose.** This format refuses `#` comment lines by contract --
+     *     they would turn the first row of every reader's table into a row of data -- so the fit's identity has to be
+     *     a field, and repeating it on each row is what keeps the file machine-readable and self-describing.
+     *   - **`parameter` names the row**, and the names of the coefficients are the **caller's**: the panel already
+     *     names a line's intercept `a` and its slope `b`, and an exporter that invented its own names would print a
+     *     table that does not match the window it came from. The quality rows' names are the format's own and are
+     *     fixed here, because they are this table's vocabulary rather than a model's.
+     *   - **the uncertainty of a quality number is an empty field**, not `0`: nobody quantified the error of a
+     *     chi-squared, and the platform's rule is that unquantified is not zero. A coefficient whose covariance is
+     *     missing writes an empty field for the same reason, which is also what the panel shows in words
+     *     ("not fitted") rather than as a number.
+     *   - **`degrees_of_freedom` is written as it stands**, including the `-1` the fit result uses for "not
+     *     applicable": a reader of the file has to be able to see that the fit did not define it, and `0` would say
+     *     something else.
+     *
+     * @param fit    The fit result. Borrowed, and never re-fitted here: an exporter that fitted again would be a
+     *               second source of one number.
+     * @param labels One label per coefficient, or null. Borrowed.
+     * @param out    Receives the table on success.
+     *
+     * @ownership   owns the text it appends
+     * @thread      main
+     * @pre         none
+     * @post        On ok, `out` holds a header line and one line per coefficient plus one per quality number
+     * @invariant   `out` is untouched when the call is refused
+     * @errors      `nothing_to_write` for a fit with no coefficients; `shape_mismatch` for a label vector that is
+     *              present, not empty, and shorter than the coefficient count
+     * @complexity  O(coefficients)
+     * @nondet      none
+     * @frozen      no
+     * @tests       csv.export.a_fit_table_carries_the_error_bar
+     */
+    [[nodiscard]] qp::runtime::ExportRefusal to_fit_text(const qp::runtime::FitResult& fit,
+                                                         const std::vector<std::string>* labels,
+                                                         std::string& out);
+
+    /**
      * @brief The readings table: one row per measurement, with its uncertainty and where it came from.
      *
      * **The platform's own loop ends in a report, and until this existed the artifact that report quotes could not be

@@ -29,6 +29,7 @@
 #include <qp/units/dimensions.hpp>
 
 #include <chrono>
+#include <cstdlib>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -130,6 +131,121 @@ namespace rt = qp::runtime;
 
 }  // namespace
 
+TEST_CASE("csv.export.a_fit_table_carries_the_error_bar", "[csv][export]") {
+    // **The number a lab report is graded on, out of the window at last.** The fit panel says it about its own third
+    // column -- "a coefficient without its error bar is the number a lab report overstates, and this column is the
+    // reason the fit was worth doing at all" -- and this is that column in a file.
+    //
+    // One row shape for everything the fit produces, which is why there is no second table and no comment header: a
+    // series of rows, each `model,parameter,value,uncertainty`.
+    CsvExporter exporter;
+
+    rt::FitResult fit;
+    fit.model = "linear";
+    fit.coefficients = {0.01010, 0.51200};
+    fit.covariance = {1.96e-12, 0.0, 0.0, 9.0e-6};
+    fit.residuals = {-1.0e-5, 2.0e-5};
+    fit.chi_squared = 1.2e-4;
+    fit.degrees_of_freedom = 7;
+    fit.r_squared = 0.99980;
+
+    const std::vector<std::string> labels{"a", "b"};
+    std::string table;
+    REQUIRE(exporter.to_fit_text(fit, &labels, table) == rt::ExportRefusal::ok);
+    const std::vector<std::vector<std::string>> rows = parse_rows(table);
+
+    // Two coefficients and three quality numbers, under one header.
+    REQUIRE(rows.size() == 6);
+    REQUIRE(rows[0].size() == 4);
+    REQUIRE(rows[0][0] == "model");
+    REQUIRE(rows[0][1] == "parameter");
+    REQUIRE(rows[0][2] == "value");
+    REQUIRE(rows[0][3] == "uncertainty");
+
+    // The model is a **column**, repeated on every row: this format refuses comment lines by contract, so the fit's
+    // identity has to be a field or the file does not say which model produced these numbers.
+    for (const std::vector<std::string>& row : rows) {
+        if (&row == &rows[0]) continue;
+        REQUIRE(row[0] == "linear");
+    }
+    // The coefficient rows, with the names the panel shows and the error bar beside each value.
+    REQUIRE(rows[1][1] == "a");
+    REQUIRE(rows[1][2] == "0.0101");
+    REQUIRE(rows[2][1] == "b");
+    REQUIRE(rows[2][2] == "0.512");
+    // **The uncertainty column is compared as a number, not as a decimal spelling.** The value travels through a
+    // square root -- `coefficient_uncertainty(i)` is `sqrt(covariance[i][i])` -- and this format writes the shortest
+    // string that reads back as the same double, so `sqrt(1.96e-12)` is written `1.4000000000000001e-06` while
+    // `sqrt(9.0e-6)` happens to be written `0.003`. Asserting either spelling would be asserting a property of
+    // decimal conversion rather than the property that matters: the file's number is the fit's number.
+    const auto number_at = [&rows](std::size_t row, std::size_t column) {
+        REQUIRE_FALSE(rows[row][column].empty());
+        return std::strtod(rows[row][column].c_str(), nullptr);
+    };
+    REQUIRE(number_at(1, 3) == fit.coefficient_uncertainty(0).value());
+    REQUIRE(number_at(2, 3) == fit.coefficient_uncertainty(1).value());
+    // The quality numbers, and their uncertainty is an **empty field rather than a zero**: nobody quantified the
+    // error of a chi-squared, and the platform's rule is that unquantified is not zero.
+    REQUIRE(rows[3][1] == "chi_squared");
+    REQUIRE(rows[3][2] == "0.00012");
+    REQUIRE(rows[3][3].empty());
+    REQUIRE(rows[4][1] == "degrees_of_freedom");
+    REQUIRE(rows[4][2] == "7");
+    REQUIRE(rows[4][3].empty());
+    REQUIRE(rows[5][1] == "r_squared");
+    REQUIRE(rows[5][2] == "0.9998");
+    REQUIRE(rows[5][3].empty());
+
+    // **A coefficient whose covariance is missing writes an empty field**, not a zero and not a NaN: a fit that
+    // could not produce an error bar must not publish one, and the panel says the same thing in words.
+    rt::FitResult without_covariance;
+    without_covariance.model = "linear";
+    without_covariance.coefficients = {0.5};
+    without_covariance.degrees_of_freedom = -1;
+    REQUIRE_FALSE(without_covariance.has_covariance());
+    std::string bare;
+    REQUIRE(exporter.to_fit_text(without_covariance, nullptr, bare) == rt::ExportRefusal::ok);
+    const std::vector<std::vector<std::string>> bare_rows = parse_rows(bare);
+    REQUIRE(bare_rows[1][2] == "0.5");
+    REQUIRE(bare_rows[1][3].empty());
+    // The degrees of freedom are written **as they stand, including `-1`**: a reader has to be able to see that the
+    // fit did not define it, and `0` would say something else.
+    // Row 0 is the header, row 1 the single coefficient, so the quality numbers start at **row 2** in this table
+    // (the same three rows, one fewer coefficient than the case above).
+    REQUIRE(bare_rows[2][1] == "chi_squared");
+    REQUIRE(bare_rows[3][1] == "degrees_of_freedom");
+    REQUIRE(bare_rows[3][2] == "-1");
+    // The model is carried on these rows too.
+    REQUIRE(bare_rows[1][0] == "linear");
+    // ... and a fit that did not name its model still says something in that column rather than leaving it empty:
+    // an anonymous parameter table is a table nobody can check.
+    rt::FitResult anonymous;
+    anonymous.coefficients = {0.25};
+    std::string nameless;
+    REQUIRE(exporter.to_fit_text(anonymous, nullptr, nameless) == rt::ExportRefusal::ok);
+    REQUIRE(parse_rows(nameless)[1][0] == "unnamed");
+
+    // A fit with no coefficients, and labels that stop halfway: both refused, and the caller's string untouched.
+    rt::FitResult nothing;
+    std::string untouched;
+    REQUIRE(exporter.to_fit_text(nothing, nullptr, untouched) == rt::ExportRefusal::nothing_to_write);
+    REQUIRE(untouched.empty());
+    const std::vector<std::string> one{"a"};
+    REQUIRE(exporter.to_fit_text(fit, &one, untouched) == rt::ExportRefusal::shape_mismatch);
+    REQUIRE(untouched.empty());
+
+    // The capability, and the file: the bytes on disk are the string that was checked.
+    REQUIRE(exporter.format().capabilities.keeps_fit);
+    const TempDir dir;
+    rt::ExportRequest request;
+    request.subject = rt::ExportSubject::fit;
+    request.fit = &fit;
+    request.coefficient_labels = &labels;
+    request.path = dir.path("fit.csv");
+    REQUIRE(exporter.write(request) == rt::ExportRefusal::ok);
+    REQUIRE(read_file(request.path) == table);
+}
+
 TEST_CASE("csv.export.a_readings_table_carries_the_kind_and_the_source", "[csv][export]") {
     // **The platform's own loop ends in a report, and this is the artifact that report quotes.** A trace is a
     // series -- one row per sample, one column per channel -- while the product of measurement, record and
@@ -228,7 +344,7 @@ TEST_CASE("csv.export.a_readings_table_carries_the_kind_and_the_source", "[csv][
     missing.readings = nullptr;
     REQUIRE(rt::check_export(exporter, missing) == rt::ExportRefusal::subject_missing);
     // The names are stable, because a refusal reaches a user and a log.
-    REQUIRE(std::string{rt::to_string(rt::ExportRefusal::readings_not_supported)} == "readings_not_supported");
+    REQUIRE(std::string{rt::to_string(rt::ExportRefusal::subject_not_supported)} == "subject_not_supported");
     REQUIRE(std::string{rt::to_string(rt::ExportRefusal::subject_missing)} == "subject_missing");
     REQUIRE(std::string{rt::to_string(rt::ExportSubject::readings)} == "readings");
     REQUIRE(std::string{rt::to_string(rt::ExportSubject::trace)} == "trace");

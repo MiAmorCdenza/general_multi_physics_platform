@@ -111,18 +111,24 @@ struct ExportReport final {
 /**
  * @brief A sentence for an export refusal, saying what the user can do about it.
  *
+ * @param refusal The code the pre-flight or the writer returned.
+ * @param subject Which table the request named. **Part of the answer rather than context**: one code covers every
+ *                table a format has no shape for, so a sentence that did not name the subject would tell a user
+ *                "this format cannot write that" about a table they may not have been thinking of.
+ *
  * @ownership   owns the result
  * @thread      main
  * @pre         none
  * @post        Non-empty for every enumerator, including `ok`
- * @invariant   Depends only on its argument
+ * @invariant   Depends only on its arguments
  * @errors      May allocate; allocation failure terminates
  * @complexity  O(1)
  * @nondet      none
  * @frozen      no
  * @tests       export.refuses_before_writing
  */
-[[nodiscard]] std::string describe_export_refusal(qp::runtime::ExportRefusal refusal);
+[[nodiscard]] std::string describe_export_refusal(qp::runtime::ExportRefusal refusal,
+                                                  qp::runtime::ExportSubject subject);
 
 /**
  * @brief Runs the pre-flight and, if it passes, writes the panel's trace with `format`.
@@ -182,5 +188,69 @@ struct ExportReport final {
  */
 [[nodiscard]] ExportReport export_readings(const MeasurementModel& model, qp::runtime::IExporter& format,
                                            const std::vector<std::string>& labels, const std::string& path);
+
+/**
+ * @brief The request that would export `fit`, with the policy a fit always carries.
+ *
+ * A free function rather than a method, because **the model does not own the fit**: the panel runs it and holds the
+ * result, and this layer contributes the policy. That is also why the fit is passed in rather than re-computed -- an
+ * exporter that fitted again would be a second source of one number, and the two could differ.
+ *
+ * The policy is `require_uncertainty = true`, unconditionally. For a series the flag is conditional ("this session
+ * has quantified something"); for a fit it is not, because a coefficient without its standard uncertainty is not a
+ * weaker result but a different one -- the sentence the fit panel puts on its own third column.
+ *
+ * @param fit    The result to export. Borrowed for the call.
+ * @param path   Where the export would go. Not read here; carried so the request is complete.
+ * @param labels One label per coefficient, or null. Borrowed.
+ *
+ * @ownership   observes `fit` and `labels` for the call; the returned request borrows both
+ * @thread      main
+ * @pre         `labels` names every coefficient, or is null or empty
+ * @post        `subject` is `fit`, `fit` is `&fit`, and `require_uncertainty` is true
+ * @invariant   `fit_readiness(format, fit)` equals `check_export(format, fit_export_request(fit, path, labels))`
+ * @errors      May allocate (the path is copied); allocation failure terminates
+ * @complexity  O(path)
+ * @nondet      none
+ * @frozen      no
+ * @tests       export.a_fit_table_leaves_the_window
+ */
+[[nodiscard]] qp::runtime::ExportRequest fit_export_request(const qp::runtime::FitResult& fit, std::string path,
+                                                           const std::vector<std::string>* labels);
+
+/**
+ * @brief Whether `format` can write this fit, asked before any dialog.
+ *
+ * @ownership   pure
+ * @thread      main
+ * @pre         none
+ * @post        The same answer `check_export` gives for `fit_export_request`
+ * @invariant   Never writes and never touches the filesystem
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       export.a_fit_table_leaves_the_window
+ */
+[[nodiscard]] qp::runtime::ExportRefusal fit_readiness(const qp::runtime::IExporter& format,
+                                                      const qp::runtime::FitResult& fit) noexcept;
+
+/**
+ * @brief The same pre-flight and write, for the **fitted parameters**.
+ *
+ * @ownership   observes `fit` and `labels`, owns the result
+ * @thread      main
+ * @pre         `labels` names every coefficient, or is empty
+ * @post        On success the file at `path` holds the fit table; on any other answer this call created no file
+ * @invariant   `report.refusal == check_export(format, fit_export_request(fit, path, labels))` whenever the write
+ *              did not itself fail
+ * @errors      Never throws except on allocation failure, which terminates
+ * @complexity  O(coefficients) plus the write
+ * @nondet      only through the filesystem
+ * @frozen      no
+ * @tests       export.a_fit_table_leaves_the_window
+ */
+[[nodiscard]] ExportReport export_fit(const qp::runtime::FitResult& fit, qp::runtime::IExporter& format,
+                                      const std::vector<std::string>& labels, const std::string& path);
 
 }  // namespace qp::views::model

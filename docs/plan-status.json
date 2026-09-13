@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "**平台自身闭环补上最后一环：读数表（readings）有了出口**——此前 `ExportRequest` 只带 `const Trace*`，于是「测量→记录→不确定度→报告」里的「报告」只能导出轨迹，导不出学生记下的那张表（每次测量一行、各自带标准不确定度与来源）。三条决定都由分层逼出：**请求带 subject 而不是两个指针**（一个格式一个文件一张表，两张都带等于让格式替用户决定）、**能力单独声明 `keeps_readings` 并具名拒绝 `readings_not_supported`**（告诉调用方换格式而不是换策略）、**来源列由调用方解析**（`runtime/io` 不许知道图是什么；解析不到写空字段而不是猜）。表为 `index,value [m],uncertainty [m],kind,source,valid`：`kind` 把「unknown 写空字段、exact 写 0」带进文件，`valid` 保住一条被否决的读数（store 特意标记而不删除）。实现中踩到并记录的两件事：新能力字段一开始插在 `ExportCapabilities` 最前，导致按位置初始化的聚合体全部错位（`with_uncertainty()` 两个变一个）——**聚合体按位置初始化就是一种形状，新字段一律追加**，与端口号同一条规矩；以及头文件注释里写了中文被方言门禁 D2 抓住（源码注释一律英文，第二次）。新增四处用例（io 的主题与拒绝、CSV 的六列表头与三种不确定度写法、模型的策略同一份、窗口的端到端写盘）；用例 183→187；GCC 849 / MSVC 851 双绿，四个分区与八个自检全绿。",
+  "updated": "**两张表与一个大缺陷。**（一）**`ExportSubject::fit`：拟合参数能出窗口了**——`fit_session.hpp` 自己写着「它的不确定度就是要交上去报告被打分的东西」，而那一列此前出不了窗口；表是**一种行形状** `model,parameter,value,uncertainty`（系数一行一个、名字与面板行名同一条规则；`chi_squared`/`degrees_of_freedom`/`r_squared` 同样行、不确定度写空字段；`model` 是列而不是注释行，因为 CSV 按契约拒绝 `#` 注释）。同时把 `readings_not_supported` 换成 `subject_not_supported`——一个主题时那是够用的最小形状，第二个主题到来正是「最小形状必须被完整版本替换」的条件；代价是句子失去具体性，所以把主题带进句子（`describe_export_refusal(refusal, subject)`）。（二）**真正的发现：`if(TARGET qp::plugins::analysis)` 永远是假的**——根 CMake 里 `views` 排在 `plugins` 之前，而 CMake 的 TARGET 判断只看得见已添加的目标：于是 **qp_views 从不链接分析插件、应用在任何构建里都显示「本构建没有拟合器」（功能一次都没跑过）**，而三条断言拟合的用例一直走 `#else` 分支、断言「没有拟合器」而通过——**一个不可能失败的绿用例比缺用例更糟**，这正是那条守卫的注释想避免的事而它自己从未生效。把 `plugins` 移到 `views` 之前（层级门禁保证方向安全）后测量：ninja 里带该宏的目标 **0→16**，`qt.views.fit.*` 断言数 **3→86**，并立刻抓出我两处错误（`MeasurementModel::clear()` 不存在、面板按 6 位有效数字显示而我按等值断言）。用例 187→191。",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -81,7 +81,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 849,
+    "ctest_registered": 853,
     "compilers_green": [
       "gcc-15.2.0-i686",
       "msvc-19.51-x64"

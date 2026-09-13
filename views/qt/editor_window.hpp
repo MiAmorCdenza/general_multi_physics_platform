@@ -314,6 +314,13 @@ public:
     /// shortcut, because one `Ctrl+E` is a habit and two are a coin toss.
     void file_export_readings();
 
+    /// @brief Exports the **fitted parameters**, asking the format first, and asking the panel for the fit.
+    ///
+    /// The third Export entry. It refuses with a sentence when nothing has been fitted, which is a fact about the
+    /// session rather than about a format -- and it reads the panel's result rather than fitting again, so the file
+    /// holds the numbers that are on the screen.
+    void file_export_fit();
+
     /// @brief The document controller: what a save writes and what an open installs.
     [[nodiscard]] qp::views::model::DocumentController& document_controller() noexcept {
         return document_controller_;
@@ -342,6 +349,12 @@ public:
     /// both the dataset and the graph, and `runtime/io` may not know what a node is -- and a reading whose source is
     /// not a node in this graph gets an empty label rather than a guess.
     bool export_readings_document(const std::string& path);
+
+    /// @brief Exports the fitted parameters to `path`, after the pre-flight.
+    bool export_fit_document(const std::string& path);
+
+    /// @brief One label per coefficient, named as the panel names its rows.
+    [[nodiscard]] std::vector<std::string> fit_coefficient_labels() const;
 
     /// @brief One label per reading: the name of the node it came from, or empty when it came from nowhere.
     ///
@@ -443,6 +456,10 @@ private:
     QAction* export_action_ = nullptr;
     /// The readings export, beside the trace's: two tables of one session, two files, one menu.
     QAction* readings_action_ = nullptr;
+    /// The fit export, third of the three tables this window can write. **Not it_action_**, which the View menu
+    /// already uses for the toggle that shows the fit panel: one name for two actions is how a menu entry ends up
+    /// wired to the wrong slot.
+    QAction* export_fit_action_ = nullptr;
 
     // The View menu's actions, kept for the same reason: a test drives the same path the menu does.
     QAction* fit_action_ = nullptr;

@@ -46,6 +46,8 @@
 #include <catch2/catch_session.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include <cmath>
+
 #include <QApplication>
 #include <QAction>
 #include <QColor>
@@ -1121,6 +1123,66 @@ TEST_CASE("qt.views.fit.shows_the_models_report", "[views][qt]") {
     // answer for a trace that changed under the panel.
     panel->choose_channel("nonesuch");
     REQUIRE(panel->chosen_channel() == "displacement");
+}
+
+TEST_CASE("qt.views.fit.an_export_writes_the_numbers_on_the_screen", "[views][qt]") {
+    // **One fit, one source.** The panel is what runs the fit -- it owns the channel, the degree and the exclusions --
+    // and the export of a fit reads the panel's result rather than fitting again. This case pins the two halves of
+    // that: the result the panel offers is the result it is showing, and it is **withdrawn** when the panel stops
+    // showing a fit. An export that wrote a fit the window no longer displays would be a file about a state the user
+    // cannot see.
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
+
+    qp::views::FitPanel* panel = window.fit_panel();
+    REQUIRE(panel != nullptr);
+    // **Before the demo is seeded there is no trace at all**, so the panel has no fit and offers none rather than
+    // offering a zero. (After `seed_demo` there *is* a fit without anyone asking: the demo's trace is quantified and
+    // the panel selects its first channel, which is the ordinary state of a window that has just run something.)
+    REQUIRE_FALSE(panel->result().has_value());
+
+    window.seed_demo();
+    panel->show_channels();
+    panel->choose_degree(2);
+#if defined(QP_HAS_ANALYSIS_PLUGIN)
+    const qp::views::model::FitReport report = window.fit().report();
+    REQUIRE(report.fittable());
+    // The result is there once the fit has run, its coefficients are the ones on the screen, and every one of them
+    // has an uncertainty -- the column the export exists to carry.
+    REQUIRE(panel->result().has_value());
+    const std::vector<std::vector<QString>>& rows = panel->coefficient_rows();
+    const qp::runtime::FitResult& result = *panel->result();
+    REQUIRE(result.coefficients.size() == rows.size());
+    for (std::size_t index = 0; index < rows.size(); ++index) {
+        REQUIRE_FALSE(rows[index][1].isEmpty());
+        // **The table shows a rounded number and the result holds the double**, so the two are compared with the
+        // panel's own display precision in mind: its formatter is `QString::number(v, 'g', 6)` -- six significant
+        // figures, because "a fitted coefficient is never known to seventeen digits". Asserting equality would be
+        // asserting that a display is lossless, which is not what this case is about; what it is about is that the
+        // value the export will write is the value on the screen.
+        const double shown = rows[index][1].toDouble();
+        const double exact = result.coefficients[index];
+        REQUIRE(std::abs(shown - exact) <= 1.0e-5 * std::abs(exact));
+        // The name column is the model layer's one rule, which is what the export's parameter column will say.
+        REQUIRE(rows[index][0] == QString::fromStdString(qp::views::model::fit_coefficient_name(index)));
+        // And every coefficient has an uncertainty to carry: the column the export exists for.
+        REQUIRE(result.coefficient_uncertainty(index).has_value());
+        REQUIRE_FALSE(rows[index][2].isEmpty());
+    }
+
+    // **Withdrawn when the panel stops showing a fit.** Starting a new recording empties the trace -- the dataset of
+    // readings is a separate record and deliberately untouched -- so the fit then has no points, the report refuses,
+    // and the panel clears both its table and its result. An export after this must find nothing rather than write
+    // the fit the panel used to show.
+    window.measurements().reset_trace(qp::runtime::RunId{7});
+    panel->refresh();
+    REQUIRE_FALSE(panel->result().has_value());
+    REQUIRE(panel->coefficient_rows().empty());
+#else
+    // A build with no fitter has nothing to offer, and that is not the same as "not fitted yet" -- but both are
+    // "nothing to export", which is the property this case is about.
+    REQUIRE_FALSE(panel->result().has_value());
+#endif
 }
 
 TEST_CASE("qt.views.fit.a_refusal_is_shown_by_name", "[views][qt]") {

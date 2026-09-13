@@ -2765,6 +2765,43 @@ C7 从 190 处归零；四个分区、层级、方言、编码与 Qt 模块门�
 
 用例 183→187；GCC 849 / MSVC 851 全绿。
 
+### 9.49 拟合结果终于能出窗口——以及它顺手抓到的那个**大缺陷**：`views` 比 `plugins` 先配置，于是拟合功能从来没进过应用
+
+**两个问题，一个是我要做的，另一个是做它的时候撞出来的，而第二个比第一个重要。**
+
+**一、`ExportSubject::fit`：平台的第三张表。** 上一轮把读数表做出了口，这一轮轮到拟合参数——而 `fit_session.hpp` 从写下那天起就写着
+「它的不确定度就是要交上去报告被打分的东西」，同时那一列**出不了窗口**。设计沿用已经立好的形状：请求带 `subject`（`trace`/`readings`/`fit`）、
+能力单独声明（`keeps_fit`，**追加在结构体末尾**——上一轮刚用一次红灯换来的规矩）、拒绝具名。表是**一种行形状**：
+`model,parameter,value,uncertainty`——系数一行一个（名字由调用方给，和面板的行名同一条规则），质量数字（`chi_squared`、
+`degrees_of_freedom`、`r_squared`）用同样的行、不确定度写**空字段**（没人量化过 χ² 的误差，而「没量化」不等于 0）；
+`model` 是**列**而不是注释行，因为 CSV 导出器按契约拒绝 `#` 注释（那会把每个读者表格的第一行变成数据）。
+
+**二、`readings_not_supported` 被换成 `subject_not_supported`。** 一个主题时它是够用的最小形状；第二个主题到来正是「最小形状必须被
+完整版本替换」的条件——三个几乎重复的拒码会一个接一个地长出来，而 `ExportSubject` 本来就是用来回答「哪张表」的。
+**代价是句子会失去具体性，所以把主题带进句子**：`describe_export_refusal(refusal, subject)`，"this format cannot write a table of
+fitted parameters" 是可行动的，"cannot write that" 不是。
+
+**三、真正的发现：`if(TARGET qp::plugins::analysis)` 永远是假的。** 追自己那条新用例的断言数（只跑了 3 条）时发现：根 `CMakeLists.txt`
+里 `add_subdirectory(views)` 排在 `add_subdirectory(plugins)` **之前**，而 CMake 的 `TARGET` 判断只能看见**已经添加过**的目标。
+于是 `views/CMakeLists.txt` 里那条被注释解释得头头是道的守卫（"PUBLIC, not PRIVATE ... A PRIVATE definition left the test in the
+branch for a build with no fitter, and that branch passes -- so the case reported success while asserting nothing about a fit"）
+**从未生效**：
+
+- **应用里根本没有拟合器**：`qp_views` 从不链接 `qp::plugins::analysis`，拟合面板在任何构建里都显示 "this build has no fit plugin"——
+  也就是说这个功能在应用里一次都没跑过；
+- **三条断言拟合的用例一直在断言「没有拟合器」而通过**。`qt.views.fit.coefficients_come_with_their_uncertainties` 的正分支
+  （"no coefficient is ever shown without its error bar"）从未被编译过，`#else` 分支断言 `summary_text()` 含 "no fit plugin"，
+  而它当然含——**一个不可能失败的绿用例比缺一个用例更糟**，这正是那条注释想避免的事，而它自己没生效。
+
+修法是把 `plugins` 移到 `views` **之前**（方向由层级门禁保证安全：插件依赖 core，从不依赖 views），而**修好之后的测量是**：
+`build-msvc/build.ninja` 里带该宏的目标从 **0 个变成 16 个**，`qt.views.fit.*` 四个用例的断言数从 **3 条变成 86 条**——
+83 条真实的拟合断言回到构建里，并立刻抓出我自己两处错误（`MeasurementModel::clear()` 不存在、面板显示的是 6 位有效数字而我按等值断言）。
+
+**这一节因此是两个条目**：第三张表（§9.49 上半）与「一个不可能失败的用例背后是功能根本没进应用」（下半）。后者是这一轮最值钱的产出，
+而它是被「一个用例为什么只跑了三条断言」这个问题找出来的。
+
+用例 187→191；GCC 与 MSVC 双绿，Qt 侧断言数 +83。
+
 ### 9.9 内容的**类别**已经完成，具体内容仍需继续写（框架完成度审计）
 
 > 判据只有一条，而且是这个仓库从第一天起就写下的那一条：**加这一类内容是否需要新接口。** 如果不需要，

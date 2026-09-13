@@ -494,9 +494,9 @@ TEST_CASE("measurement.model.a_readings_request_names_the_table", "[measurement]
     // A format with no shape for a readings table is refused **by name**, which is what tells a caller to pick
     // another format rather than another policy -- and it is refused **before the data is looked at**, because the
     // format cannot write this kind of table whatever the session holds.
-    REQUIRE(m.readings_readiness(traces_only) == rt::ExportRefusal::readings_not_supported);
+    REQUIRE(m.readings_readiness(traces_only) == rt::ExportRefusal::subject_not_supported);
     Session empty;
-    REQUIRE(empty.model().readings_readiness(traces_only) == rt::ExportRefusal::readings_not_supported);
+    REQUIRE(empty.model().readings_readiness(traces_only) == rt::ExportRefusal::subject_not_supported);
 
     // With a format that *can* write the table, the two answers separate: a session with readings is ready, and one
     // with none has nothing to write -- a different sentence, and the one a user with an empty panel should see.

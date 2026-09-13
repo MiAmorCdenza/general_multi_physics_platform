@@ -20,6 +20,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <qp/views/model/export_controller.hpp>
+#include <qp/views/model/fit_session.hpp>
 
 #include <qp/plugins/csv/csv_exporter.hpp>
 
@@ -220,10 +221,82 @@ TEST_CASE("export.a_readings_table_is_written_with_its_sources", "[export]") {
     const ExportReport refused = export_readings(fuller.model, csv_exporter(), one_label, dir.path("no.csv"));
     REQUIRE_FALSE(refused.ok);
     REQUIRE(refused.refusal == rt::ExportRefusal::shape_mismatch);
-    REQUIRE(refused.message.find("disagree") != std::string::npos);
+    // The sentence changed when the refusal taxonomy became orthogonal: `shape_mismatch` now says what actually
+    // disagrees -- the table and its labels -- rather than "the samples and channels", which was the only case it had
+    // when it was written.
+    REQUIRE(refused.message.find("line up") != std::string::npos);
     // No file, because the refusal came first: the whole point of a pre-flight rather than an error after a write.
     std::string absent;
     REQUIRE(rt::read_whole_file(dir.path("no.csv"), absent) != rt::FileOutcome::ok);
+}
+
+TEST_CASE("export.a_fit_table_leaves_the_window", "[export]") {
+    // The third export path, end to end: a request built from a fit the **panel** produced, the pre-flight, and the
+    // file. What makes it worth a case of its own is the policy: a fit always requires the uncertainty, and the
+    // request says so unconditionally -- for the readings the flag depends on what the session quantified, and here
+    // it cannot, because a coefficient without its error bar is not a weaker result but a different one.
+    const TempDir dir;
+    const std::string path = dir.path("fit.csv");
+
+    rt::FitResult fit;
+    fit.model = "linear";
+    fit.coefficients = {0.0101, 0.512};
+    fit.covariance = {1.0201e-8, 0.0, 0.0, 9.0e-6};
+    fit.chi_squared = 1.2e-4;
+    fit.degrees_of_freedom = 7;
+    fit.r_squared = 0.9998;
+
+    const std::vector<std::string> labels{fit_coefficient_name(0), fit_coefficient_name(1)};
+    const rt::ExportRequest request = fit_export_request(fit, path, &labels);
+    REQUIRE(request.subject == rt::ExportSubject::fit);
+    REQUIRE(request.fit == &fit);
+    REQUIRE(request.coefficient_labels == &labels);
+    REQUIRE(request.path == path);
+    // **Unconditional**, and the property this case exists for.
+    REQUIRE(request.require_uncertainty);
+
+    // The readiness question and the export's pre-flight are the same question.
+    REQUIRE(fit_readiness(csv_exporter(), fit) == rt::ExportRefusal::ok);
+
+    const ExportReport report = export_fit(fit, csv_exporter(), labels, path);
+    REQUIRE(report.ok);
+    REQUIRE(report.refusal == rt::ExportRefusal::ok);
+    REQUIRE(report.format_name == "qp.csv");
+    REQUIRE(report.path == path);
+    REQUIRE(report.message.find("2 fitted parameters") != std::string::npos);
+    REQUIRE(report.message.find(path) != std::string::npos);
+
+    // The file: the coefficients by the names the window shows, each with its uncertainty, and the quality numbers
+    // with an empty uncertainty field.
+    std::string contents;
+    REQUIRE(rt::read_whole_file(path, contents) == rt::FileOutcome::ok);
+    REQUIRE(contents.find("model,parameter,value,uncertainty") != std::string::npos);
+    REQUIRE(contents.find("linear,a,0.0101,") != std::string::npos);
+    REQUIRE(contents.find("linear,b,0.512,0.003") != std::string::npos);
+    REQUIRE(contents.find("linear,chi_squared,0.00012,\n") != std::string::npos);
+    REQUIRE(contents.find("linear,degrees_of_freedom,7,\n") != std::string::npos);
+    REQUIRE(contents.find("linear,r_squared,0.9998,\n") != std::string::npos);
+
+    // Nothing fitted is nothing to write, and the request says so by carrying no fit at all: a caller that hands the
+    // pre-flight an empty subject is refused rather than written an empty file for.
+    const rt::ExportRequest missing = fit_export_request(fit, path, &labels);
+    rt::ExportRequest no_fit = missing;
+    no_fit.fit = nullptr;
+    REQUIRE(rt::check_export(csv_exporter(), no_fit) == rt::ExportRefusal::subject_missing);
+    // A fit with no coefficients is a different finding again.
+    const rt::FitResult empty;
+    REQUIRE(rt::check_export(csv_exporter(), fit_export_request(empty, path, nullptr)) ==
+            rt::ExportRefusal::nothing_to_write);
+
+    // And the sentence a user sees names the table, because one refusal code covers every table a format cannot
+    // write: "this format cannot write a table of fitted parameters" is actionable, "cannot write that" is not.
+    const std::string sentence = describe_export_refusal(rt::ExportRefusal::subject_not_supported,
+                                                         rt::ExportSubject::fit);
+    REQUIRE(sentence.find("fitted parameters") != std::string::npos);
+    const std::string readings_sentence = describe_export_refusal(rt::ExportRefusal::subject_not_supported,
+                                                                  rt::ExportSubject::readings);
+    REQUIRE(readings_sentence.find("readings") != std::string::npos);
+    REQUIRE(readings_sentence != sentence);
 }
 
 TEST_CASE("export.refuses_before_writing", "[export]") {

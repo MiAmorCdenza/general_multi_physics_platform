@@ -164,4 +164,12 @@ FitReport FitSession::report() const {
     return out;
 }
 
+std::string fit_coefficient_name(std::size_t index) {
+    // The rule the panel used before this moved here, kept letter for letter: `a` for a line's intercept, `b` for its
+    // slope, and past `z` the counted form rather than the character after it. A name that depended on how many
+    // coefficients happen to exist would make two sessions' files disagree about what `b` is.
+    if (index > 25) return "c" + std::to_string(index);
+    return std::string(1, static_cast<char>('a' + index));
+}
+
 }  // namespace qp::views::model

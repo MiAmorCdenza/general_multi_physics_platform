@@ -277,11 +277,20 @@ add_subdirectory(core)
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/views/model")
     add_subdirectory(views/model)
 endif()
-if(QP_BUILD_VIEWS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/views")
-    add_subdirectory(views)
-endif()
+# **Plugins before views, and the order is a correctness requirement rather than a preference.** `views/CMakeLists.txt`
+# links the analysis plugin and sets `QP_HAS_ANALYSIS_PLUGIN` behind `if(TARGET qp::plugins::analysis)`, and a `TARGET`
+# test can only be true for a target that has already been added. With the two the other way round the guard was
+# always false: the Qt application shipped with **no fitter** -- the fit panel said "this build has no fit plugin" in
+# every build -- and the cases asserting that a coefficient arrives with its uncertainty were compiled into the branch
+# for a build without one, where they passed by asserting exactly that. A green test that cannot fail is worse than a
+# missing one, and this order is what made three of them unfailable.
+#
+# The direction is safe by the layer rule the gate enforces: plugins depend on core, never on views.
 if(QP_BUILD_PLUGINS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/plugins")
     add_subdirectory(plugins)
+endif()
+if(QP_BUILD_VIEWS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/views")
+    add_subdirectory(views)
 endif()
 
 # -- Tests --------------------------------------------------------------------

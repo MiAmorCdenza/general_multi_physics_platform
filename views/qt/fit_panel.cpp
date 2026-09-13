@@ -59,10 +59,12 @@ std::vector<qp::plugins::analysis::Point> to_analysis_points(const std::vector<m
 
 #endif
 
-/// @brief The name of a coefficient: `a` for a line's intercept, then `b`, `c`, ...
+/// @brief The name of a coefficient, from the **model** layer's one rule.
+///
+/// It used to be defined here, and moving it was part of exporting a fit: the table's `parameter` column has to say
+/// `a` where the window says `a`, and two naming rules would drift the first time one of them changed.
 QString coefficient_name(std::size_t index) {
-    if (index > 25) return QStringLiteral("c%1").arg(index);
-    return QString(QChar(static_cast<char>('a' + index)));
+    return QString::fromStdString(model::fit_coefficient_name(index));
 }
 
 }  // namespace
@@ -204,6 +206,9 @@ void FitPanel::refresh() {
         summary_->setText(summary_lines.join(QStringLiteral("\n")));
         table_->setRowCount(0);
         shown_rows_ = 0;
+        // **The result goes with the table**, at every site that empties it: an export that wrote a fit the panel is
+        // no longer showing would be a file about a state the user cannot see.
+        result_.reset();
         excluded_->setText(exclusion_lines().join(QStringLiteral("\n")));
         excluded_->setVisible(!excluded_->text().isEmpty());
 #if !defined(QP_HAS_ANALYSIS_PLUGIN)
@@ -227,12 +232,16 @@ void FitPanel::refresh() {
         summary_->setText(summary_lines.join(QStringLiteral("\n")));
         table_->setRowCount(0);
         shown_rows_ = 0;
+        // **The result goes with the table**, at every site that empties it: an export that wrote a fit the panel is
+        // no longer showing would be a file about a state the user cannot see.
+        result_.reset();
         excluded_->setText(exclusion_lines().join(QStringLiteral("\n")));
         excluded_->setVisible(!excluded_->text().isEmpty());
         return;
     }
 
     const qp::runtime::FitResult& result = fit.value();
+    result_ = result;
     const double reduced = qp::plugins::analysis::reduced_chi_squared(result).value_or(std::nan(""));
     summary_lines << tr("chi-squared %1 over %2 degrees of freedom")
                          .arg(number(result.chi_squared))

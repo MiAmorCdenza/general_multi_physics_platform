@@ -168,6 +168,9 @@ const rt::FormatDesc& CsvExporter::format() const noexcept {
     // Declared here so a caller can ask before choosing a format rather than discovering it when the write is
     // refused -- the argument the uncertainty flag already carries.
     d.capabilities.keeps_readings = true;
+    // ... and a parameter table, which is the same CSV shape with different columns: one row per quantity, its unit
+    // implied by the model rather than carried in a cell.
+    d.capabilities.keeps_fit = true;
         // One table per file. Two traces in one CSV would need a second header row in the middle, which
         // readers do not agree on and which a spreadsheet shows as data.
         d.capabilities.multi_dataset = false;
@@ -195,6 +198,75 @@ rt::ExportRefusal CsvExporter::to_text(const rt::Trace& trace, std::string& out)
         out += kByteOrderMark;
     }
     out += rendered;
+    return rt::ExportRefusal::ok;
+}
+
+rt::ExportRefusal CsvExporter::to_fit_text(const rt::FitResult& fit, const std::vector<std::string>* labels,
+                                           std::string& out) {
+    if (fit.coefficients.empty()) return rt::ExportRefusal::nothing_to_write;
+    // Present and short is a caller's bug, exactly as in the readings table: a `parameter` column that stops naming
+    // its rows halfway down is worse than one that never named them.
+    if (labels != nullptr && !labels->empty() && labels->size() < fit.coefficients.size()) {
+        return rt::ExportRefusal::shape_mismatch;
+    }
+
+    // One row shape for everything the fit produced. The model is repeated on every row because this format has
+    // nowhere else to put it -- `#` comment lines are refused by contract, since they would turn the first row of
+    // every reader's table into data -- and a file that does not say which model produced `a` and `b` is a file
+    // whose numbers cannot be checked.
+    const std::string model = fit.model.empty() ? std::string{"unnamed"} : fit.model;
+    std::string table;
+    append_field(table, "model");
+    table += ',';
+    append_field(table, "parameter");
+    table += ',';
+    append_field(table, "value");
+    table += ',';
+    append_field(table, "uncertainty");
+    table += '\n';
+
+    const auto row = [&](std::string_view parameter, const std::optional<double>& value,
+                         const std::optional<double>& uncertainty) {
+        append_field(table, model);
+        table += ',';
+        append_field(table, parameter);
+        table += ',';
+        if (value.has_value()) {
+            append_number(table, *value);
+        } else {
+            append_field(table, "");       // nothing to write is an empty field, never a zero
+        }
+        table += ',';
+        if (uncertainty.has_value()) {
+            append_number(table, *uncertainty);
+        } else {
+            append_field(table, "");
+        }
+        table += '\n';
+    };
+
+    for (std::size_t index = 0; index < fit.coefficients.size(); ++index) {
+        // The label is the caller's, because the panel already names these rows: inventing `k0`, `k1` here would
+        // print a table that does not match the window it came from. Unlabelled rows get an empty field.
+        const std::string name = (labels != nullptr && index < labels->size()) ? (*labels)[index] : std::string{};
+        row(name, fit.coefficients[index], fit.coefficient_uncertainty(index));
+    }
+
+    // The fit's own numbers, in the same shape. Their uncertainties are **absent rather than zero**: nobody
+    // quantified the error of a chi-squared, and the platform's central rule is that unquantified is not zero.
+    row("chi_squared", fit.chi_squared, std::nullopt);
+    // Written as it stands, including the `-1` that means "not applicable": a reader has to be able to see that the
+    // fit did not define this, and `0` would say something else.
+    row("degrees_of_freedom", static_cast<double>(fit.degrees_of_freedom), std::nullopt);
+    // Absent when the fit cannot define one -- every ordinate the same -- and `0` would read as "the model explains
+    // nothing", which is a different statement from "undefined".
+    row("r_squared", fit.r_squared, std::nullopt);
+
+    const bool needs_mark = std::any_of(table.begin(), table.end(),
+                                        [](unsigned char c) { return c >= 0x80; });
+    out.clear();
+    if (needs_mark) out += kByteOrderMark;
+    out += table;
     return rt::ExportRefusal::ok;
 }
 
@@ -276,9 +348,12 @@ rt::ExportRefusal CsvExporter::write(const rt::ExportRequest& request) noexcept 
     if (ready != rt::ExportRefusal::ok) return ready;
 
     std::string text;
-    const rt::ExportRefusal rendered = request.subject == rt::ExportSubject::readings
-                                           ? to_readings_text(*request.readings, request.reading_labels, text)
-                                           : to_text(*request.trace, text);
+    const rt::ExportRefusal rendered =
+        request.subject == rt::ExportSubject::readings
+            ? to_readings_text(*request.readings, request.reading_labels, text)
+            : request.subject == rt::ExportSubject::fit
+                  ? to_fit_text(*request.fit, request.coefficient_labels, text)
+                  : to_text(*request.trace, text);
     if (rendered != rt::ExportRefusal::ok) return rendered;
 
     // The bytes reach the disk through `runtime/file`, which is the one place that knows how a UTF-8 path

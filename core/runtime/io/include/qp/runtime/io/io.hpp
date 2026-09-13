@@ -104,6 +104,20 @@ struct ExportCapabilities final {
      * than discovered when the write fails, which is the same argument the uncertainty flag carries.
      */
     bool keeps_readings = false;
+
+    /**
+     * Whether the format has a shape for a **table of fitted parameters**.
+     *
+     * A third kind of table, and a third question -- appended here rather than inserted above, because a positional
+     * aggregate **is** a shape and a field added at the front silently re-labels every one of them. That was learned
+     * on `keeps_readings`, which cost a red case (`with_uncertainty` returned one format instead of two) before the
+     * rule was written down.
+     *
+     * A format that writes a readings table almost always writes this one, and the two are still declared
+     * separately, for the reason every capability here is declared rather than inferred: "almost always" is not a
+     * fact about a format, and a caller must be able to find out before choosing one.
+     */
+    bool keeps_fit = false;
 };
 
 /**
@@ -161,12 +175,18 @@ enum class ExportRefusal : std::uint8_t {
     /// the choice was between reporting success on a failed write and reusing a code that means
     /// something else.
     could_not_write = 5,
-    /// The request names a subject the format has no shape for: a readings table, in a format that writes a series.
+    /// The request names a subject the format has no shape for: a table, in a format that writes a series.
     ///
-    /// A separate code from `uncertainty_not_supported` because it is a different problem with a different fix: that
-    /// one says "this format would lose your error bars", this one says "this format cannot write this *kind* of
-    /// table at all" -- the caller picks another format rather than another policy.
-    readings_not_supported = 6,
+    /// **One code for every subject, and the subject names itself.** The first version of this was
+    /// `readings_not_supported`, which was the minimal shape while there was one table to be refused; a second
+    /// subject (the fitted parameters) is the condition under which a minimal shape is replaced by the complete one,
+    /// because `fit_not_supported` beside `readings_not_supported` would be two codes for one condition and a third
+    /// would follow. What a caller does about it is the same either way -- pick another format rather than another
+    /// policy -- and `ExportSubject` says which table was refused, so a sentence can still be specific.
+    ///
+    /// Kept distinct from `uncertainty_not_supported`, which is a different problem with a different fix: that one
+    /// says "this format would lose your error bars", this one says "this format cannot write this *kind* of table".
+    subject_not_supported = 6,
     /// The request names a subject and does not carry it: `subject == readings` with no `readings` pointer.
     ///
     /// A caller's bug rather than a format's limitation, and it is refused for the reason `shape_mismatch` is: the
@@ -183,7 +203,7 @@ enum class ExportRefusal : std::uint8_t {
         case ExportRefusal::nothing_to_write: return "nothing_to_write";
         case ExportRefusal::shape_mismatch: return "shape_mismatch";
         case ExportRefusal::could_not_write: return "could_not_write";
-        case ExportRefusal::readings_not_supported: return "readings_not_supported";
+        case ExportRefusal::subject_not_supported: return "subject_not_supported";
         case ExportRefusal::subject_missing: return "subject_missing";
     }
     return "unknown";
@@ -219,13 +239,21 @@ enum class ExportRefusal : std::uint8_t {
  * @invariant   A value of this type names exactly one of the two tables
  * @errors      noexcept
  * @frozen      no
- * @tests       io.export.a_readings_table_is_not_a_series
+ * @tests       io.export.a_readings_table_is_not_a_series,
+ *              io.export.a_fit_table_is_a_third_subject
  */
 enum class ExportSubject : std::uint8_t {
     /// The run's series: one row per sample, one column per channel.
     trace = 0,
     /// The measurements: one row per reading, with its uncertainty and its source.
     readings = 1,
+    /// The fitted parameters: one row per coefficient, with its standard uncertainty, plus the fit's own quality
+    /// numbers.
+    ///
+    /// The third artifact of one session, and the one a grade usually rests on: a lab report quotes the readings and
+    /// then the fitted numbers, and of the two the uncertainty of a coefficient is what the result *is*. It is a
+    /// table rather than a series for the same reason the readings are -- no time axis, one row per quantity.
+    fit = 2,
 };
 
 /// @brief Stable short name of a subject, for a message or a log line.
@@ -233,6 +261,7 @@ enum class ExportSubject : std::uint8_t {
     switch (subject) {
         case ExportSubject::trace: return "trace";
         case ExportSubject::readings: return "readings";
+        case ExportSubject::fit: return "fit";
     }
     return "unknown";
 }
@@ -253,6 +282,17 @@ struct ExportRequest final {
     /// Borrowed, like the trace, and for the same reason: an exporter owns no data. What a reading *is* lives in
     /// `runtime/store`, which is why this is a `Dataset` and not a list of numbers.
     const Dataset* readings = nullptr;
+    /// The fitted parameters. Set when `subject == fit`.
+    ///
+    /// Borrowed, and read only: an export never runs a fit. Whoever ran it -- the fit panel, a script, a future
+    /// headless tool -- owns the result, and an exporter that fitted again would be a second source of one number,
+    /// which is the failure this whole repository is arranged against. A caller with nothing fitted has nothing to
+    /// export, and says so before choosing a file name.
+    const FitResult* fit = nullptr;
+    /// One label per coefficient, naming it as the model names it -- `a` and `b` for a line's intercept and slope.
+    /// Optional, and the same rule as `reading_labels`: a vector that is present and short is refused rather than
+    /// padded.
+    const std::vector<std::string>* coefficient_labels = nullptr;
     /// One label per reading, naming where it came from -- a node's name, a device's, a file's. Optional.
     ///
     /// **A label rather than a `NodeId`, and this is the layering rule showing up in a signature.** The dataset
