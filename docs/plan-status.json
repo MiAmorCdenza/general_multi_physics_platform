@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "粒子域接进应用第二片：运行控制器的第二条路径接通（`check_run` 拒绝后遍历应用挂载的提供者，拒绝句原样透传，成功则填报告与粒子快照），并补上它自己的用例；同时修掉一个活过一整轮的**潜在链接错误**——提供者列表的三个定义被写进了一个没被编译的文件，而上一轮只构建了库与一个不拉运行控制器的测试，所以没被发现",
+  "updated": "粒子域接进应用第三片：渲染链条打通——`render.particles` 声明节点、`RunResult::render_declared` 生产者、`IViewItem`/`ViewScene` 契约（已按正确分层搬进 `core/graph/domain`）、套件的 `ParticleViewItem`；剩下的只有 Qt 侧宿主与端到端",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -158,7 +158,7 @@
       "path": "core/graph/domain",
       "layer": "L1",
       "state": "verified",
-      "note": "域声明与执行计划：Domain 枚举只在 domain 模块定义一次（validate 改为参数化，不再自己定义一份）。field 是烘焙语义（可阻塞、可分配），particle 是逐帧语义（不阻塞、不分配、不抛、无虚调用），render 是声明式（不求值）。计划把节点分到三条执行序列并按拓扑排序。"
+      "note": "域声明与执行计划：Domain 枚举只在 domain 模块定义一次（validate 改为参数化，不再自己定义一份）。field 是烘焙语义（可阻塞、可分配），particle 是逐帧语义（不阻塞、不分配、不抛、无虚调用），render 是声明式（不求值）。计划把节点分到三条执行序列并按拓扑排序。【本轮：渲染域的**另一端**。】`view_items.hpp` 新增 `IViewItem`（`name`/`draws`/`scene`）、`ViewScene`（一个**值**：2-D 点 + 要 fit 的边界）与 `ViewRequest`（图 + 声明 + 位置快照 + 步数），外加一份挂载列表。**它住在这里而不是 `views/model`**，因为插件要实现它：`execution_binders.hpp` 已经记下`views → plugins → views` 那个环，结论是插件要实现的接口必须住在 `core/`。第一版 `ViewRequest` 拿着 `const RunResult*`（视图层类型），改成纯快照之后才能原样搬过来。"
     },
     {
       "path": "core/graph/kernels",
