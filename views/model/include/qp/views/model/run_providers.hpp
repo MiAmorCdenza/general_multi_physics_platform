@@ -57,7 +57,8 @@ namespace qp::views::model {
  * @complexity  O(1)
  * @nondet      none
  * @frozen      no
- * @tests       views.binders.mounted_once_and_in_order
+ * @tests       views.binders.mounted_once_and_in_order,
+ *              views.binders.a_provider_runs_a_graph_the_operators_declined
  */
 void mount_run_provider(qp::graph::execution::IGraphRunProvider* provider) noexcept;
 

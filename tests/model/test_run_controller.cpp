@@ -32,6 +32,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <qp/views/model/run_controller.hpp>
+#include <qp/views/model/run_providers.hpp>
 
 #include <qp/views/model/demo_library.hpp>
 #include <qp/graph/ir/node_type_registry.hpp>
@@ -313,4 +314,95 @@ TEST_CASE("run.controller.description_states_what_it_will_do", "[run]") {
     // The product of the two, so an edit to either constant shows up in the sentence.
     REQUIRE(text.find(std::to_string(RunController::kSteps * RunController::kDt)) !=
             std::string::npos);
+}
+
+
+namespace {
+
+/// @brief A run that reports two particles and counts its steps, so the controller's second path is observable.
+class CountingRun final : public qp::graph::execution::IGraphRun {
+public:
+    [[nodiscard]] qp::diag::Result<void> advance(std::size_t steps, double dt) override {
+        if (!(dt > 0.0)) return qp::diag::ErrorCode::invalid_argument;
+        steps_ += steps;
+        return {};
+    }
+    [[nodiscard]] qp::graph::execution::GraphRunReport report() const override {
+        qp::graph::execution::GraphRunReport out;
+        out.steps = steps_;
+        out.particles = 2;
+        out.live = 2;
+        out.note = "counting run";
+        return out;
+    }
+    [[nodiscard]] std::vector<double> positions() const override { return {1.0, 2.0, 3.0, 4.0, 5.0, 6.0}; }
+
+private:
+    std::size_t steps_ = 0;
+};
+
+/// @brief A provider that claims any non-empty graph, and refuses on demand.
+class StubProvider final : public qp::graph::execution::IGraphRunProvider {
+public:
+    [[nodiscard]] std::string_view name() const noexcept override { return "stub"; }
+    [[nodiscard]] bool claims(const qp::graph::Graph& graph) const noexcept override {
+        return graph.node_count() > 0;
+    }
+    [[nodiscard]] qp::graph::execution::RunBuildResult build(const qp::graph::Graph&,
+                                                             const qp::graph::INodeCatalog&) override {
+        qp::graph::execution::RunBuildResult out;
+        if (refuse) {
+            out.refusal = "nothing to bake";
+            return out;
+        }
+        out.run = std::make_unique<CountingRun>();
+        return out;
+    }
+    bool refuse = false;
+};
+
+}  // namespace
+
+TEST_CASE("views.binders.a_provider_runs_a_graph_the_operators_declined", "[run]") {
+    // **The second path, and the ordering that makes it safe.** The provider list is consulted only after the
+    // operator loop has declined, so a graph both could run keeps the answer it had before providers existed.
+    // The graph here is the fixture's spring-damper -- a type an operator *would* claim -- handed **no
+    // binders**, which is the same shape the "nothing to run" case uses. The two cases therefore differ in
+    // exactly the thing under test: one mounted provider.
+    Fixture fixture{Shape::ready};
+    StubProvider provider;
+
+    clear_run_providers();
+    RunController alone{fixture.session(), {}, fixture.resolve()};
+    const RunResult refused = alone.run();
+    REQUIRE_FALSE(refused.report.ok);
+    REQUIRE(refused.report.message.find("no node") != std::string::npos);
+    REQUIRE(refused.particle_positions.empty());
+
+    // With one mounted: the report is filled from the provider's own report, and the snapshot -- the one thing
+    // a canvas reads -- comes through `particle_positions`.
+    mount_run_provider(&provider);
+    RunController with_provider{fixture.session(), {}, fixture.resolve()};
+    const RunResult ran = with_provider.run();
+    REQUIRE(ran.report.ok);
+    REQUIRE(ran.report.steps == RunController::kSteps);
+    REQUIRE(ran.report.operator_name == std::string{"stub"});
+    REQUIRE(ran.report.message == std::string{"counting run"});
+    REQUIRE(ran.particle_positions.size() == 6);
+    REQUIRE(ran.particle_positions.front() == 1.0);
+    REQUIRE(ran.particle_positions.back() == 6.0);
+
+    // A refusal passes the provider's own sentence through unchanged: this layer has no vocabulary for "a
+    // magnetic socket nobody wired", and inventing one would be worse than repeating the kit's.
+    provider.refuse = true;
+    RunController declining{fixture.session(), {}, fixture.resolve()};
+    const RunResult declined = declining.run();
+    REQUIRE_FALSE(declined.report.ok);
+    REQUIRE(declined.report.message == std::string{"nothing to bake"});
+    REQUIRE(declined.particle_positions.empty());
+
+    // The list is a process-wide static: a case that left an entry behind would change every later case's
+    // answer, so the leak is cleaned up by the case that made it.
+    clear_run_providers();
+    REQUIRE(run_providers().empty());
 }
