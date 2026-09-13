@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "粒子域接进应用第三片：渲染链条打通——`render.particles` 声明节点、`RunResult::render_declared` 生产者、`IViewItem`/`ViewScene` 契约（已按正确分层搬进 `core/graph/domain`）、套件的 `ParticleViewItem`；剩下的只有 Qt 侧宿主与端到端",
+  "updated": "粒子域接进应用：运行提供者接口、(1)(2) 两项完成并验证（GCC 798 / MSVC 800 全绿）；渲染链条四段已通（render.particles 声明 → RunResult::render_declared 生产者 → ParticleViewItem 绘制者 → ViewScene 值），**只剩把场景画到屏幕上**——步骤、文件与行号锚点、以及为什么只能在 MSVC 树验证，全部写在 docs/plan-tree.md 第 9.19 节",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
