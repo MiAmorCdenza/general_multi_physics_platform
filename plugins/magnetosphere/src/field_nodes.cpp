@@ -209,6 +209,13 @@ bool resolve_field_origin(const graph::Graph& graph, graph::NodeId consumer, gra
             port = FieldNodes::kPortBlendInner;
             continue;
         }
+        // The mix has no grid either, and it forwards on its **first** socket -- the field that carries the lattice
+        // and the dimension, which is the one a reader is looking at when they ask.
+        if (source->type_name == FieldNodes::kMixType) {
+            current = source_id;
+            port = FieldNodes::kPortMixA;
+            continue;
+        }
         return false;   // a type this build does not know how to ask
     }
     return false;
@@ -701,6 +708,115 @@ bool bake_magnetopause(const FieldNodes::MagnetopauseSpec& spec, const GridSpec&
     return fields.publish(key, desc, std::move(weights));
 }
 
+bool bake_mix(const gfield::FieldValue& a, const gfield::FieldValue& b, const gfield::FieldValue& weight,
+              const GridSpec& grid, double correction, gfield::FieldKey key, gfield::FieldSet& fields) {
+    if (!gfield::is_readable(a) || !gfield::is_readable(b) || !gfield::is_readable(weight)) return false;
+    if (a.kind() != gfield::Kind::Volume || b.kind() != gfield::Kind::Volume ||
+        weight.kind() != gfield::Kind::Volume) {
+        return false;
+    }
+    if (!a.is_vector() || !b.is_vector() || weight.is_vector()) return false;
+    if (a.desc.element != qp::abi::ElementType::f64 || b.desc.element != qp::abi::ElementType::f64 ||
+        weight.desc.element != qp::abi::ElementType::f64) {
+        return false;
+    }
+    for (int axis = 0; axis < 3; ++axis) {
+        if (a.desc.count[axis] != b.desc.count[axis] || a.desc.count[axis] != weight.desc.count[axis]) {
+            return false;
+        }
+    }
+    if (a.desc.count[0] != grid.nx || a.desc.count[1] != grid.ny || a.desc.count[2] != grid.nz) return false;
+    if (!same_dimension(a.desc.dimension, b.desc.dimension)) return false;
+    if (!bakeable(grid)) return false;
+    if (!std::isfinite(correction) || correction < 0.0 || correction > 1.0) return false;
+
+    const auto* first = static_cast<const double*>(a.data);
+    const auto* second = static_cast<const double*>(b.data);
+    const auto* weights = static_cast<const double*>(weight.data);
+    if (first == nullptr || second == nullptr || weights == nullptr) return false;
+
+    const std::uint32_t nx = grid.nx;
+    const std::uint32_t ny = grid.ny;
+    const std::uint32_t nz = grid.nz;
+    // The weight's gradient, differenced on the table: central in the interior and one-sided on the six faces, where
+    // there is only one side to look at. See the declaration for what that costs and where it is exact.
+    const auto weight_at = [&](std::uint32_t i, std::uint32_t j, std::uint32_t k) {
+        return weights[(static_cast<std::size_t>(i) * ny + j) * nz + k];
+    };
+    const auto gradient = [&](std::uint32_t i, std::uint32_t j, std::uint32_t k) {
+        const std::uint32_t i0 = i > 0 ? i - 1 : i;
+        const std::uint32_t i1 = i + 1 < nx ? i + 1 : i;
+        const std::uint32_t j0 = j > 0 ? j - 1 : j;
+        const std::uint32_t j1 = j + 1 < ny ? j + 1 : j;
+        const std::uint32_t k0 = k > 0 ? k - 1 : k;
+        const std::uint32_t k1 = k + 1 < nz ? k + 1 : k;
+        const double dx = (static_cast<double>(i1) - static_cast<double>(i0)) * grid.spacing_m.x;
+        const double dy = (static_cast<double>(j1) - static_cast<double>(j0)) * grid.spacing_m.y;
+        const double dz = (static_cast<double>(k1) - static_cast<double>(k0)) * grid.spacing_m.z;
+        return Vec3{(weight_at(i1, j, k) - weight_at(i0, j, k)) / dx,
+                    (weight_at(i, j1, k) - weight_at(i, j0, k)) / dy,
+                    (weight_at(i, j, k1) - weight_at(i, j, k0)) / dz};
+    };
+
+    BakedField table{grid.origin_m, grid.spacing_m, nx, ny, nz};
+
+    // **The flux function needs its gauge fixed, and the other blend is why it did not notice.** Integrating
+    // `-dB_x` in `z` recovers `psi` only up to a function of `x`; through `d psi / d z = -dB_x` the divergence is
+    // cancelled whatever that function is, which is what makes `field.blend` exact with a one-dimensional weight --
+    // there the correction has a single component and its `x` derivative never enters. With a weight that varies in
+    // `x` **and** `z` the correction has an `x` component too, and its derivative does enter: the residual is
+    // `d w / d z * dB_z(z_min)`, the gauge showing up as a source layer of its own. Adding the anchor plane's
+    // integral, `G(x) = integral of dB_z in x along the bottom layer`, makes `d psi / d x = dB_z` as well, which is
+    // what a flux function satisfies. The measurement that found this: without the gauge term the poloidal pair the
+    // case builds came out at **0.55** of the uncorrected divergence -- the correction doubling the very layer it
+    // was meant to remove.
+    std::vector<double> gauge(static_cast<std::size_t>(nx) * ny, 0.0);
+    for (std::uint32_t i = 1; i < nx; ++i) {
+        for (std::uint32_t j = 0; j < ny; ++j) {
+            const std::size_t here = (static_cast<std::size_t>(i) * ny + j) * nz;
+            const std::size_t before = (static_cast<std::size_t>(i - 1) * ny + j) * nz;
+            const double now = second[here * 3 + 2] - first[here * 3 + 2];
+            const double earlier = second[before * 3 + 2] - first[before * 3 + 2];
+            gauge[static_cast<std::size_t>(i) * ny + j] =
+                gauge[static_cast<std::size_t>(i - 1) * ny + j] + 0.5 * (now + earlier) * grid.spacing_m.x;
+        }
+    }
+
+    for (std::uint32_t i = 0; i < nx; ++i) {
+        for (std::uint32_t j = 0; j < ny; ++j) {
+            // `psi_b - psi_a` for this column, integrated upward in `z` with the two fields differenced **inside**
+            // the recurrence -- the same anchor rule the other blend uses, and for the same reason: the constant a
+            // table cannot determine cancels in the difference instead of being chosen twice. The gauge term is a
+            // function of `x` and `y` alone, so it is the same at every node of the column.
+            double dpsi = gauge[static_cast<std::size_t>(i) * ny + j];
+            for (std::uint32_t k = 0; k < nz; ++k) {
+                const std::size_t point = (static_cast<std::size_t>(i) * ny + j) * nz + k;
+                const double w = weights[point];
+                const Vec3 left{first[point * 3 + 0], first[point * 3 + 1], first[point * 3 + 2]};
+                const Vec3 right{second[point * 3 + 0], second[point * 3 + 1], second[point * 3 + 2]};
+                if (k > 0) {
+                    const std::size_t before = point - 1;
+                    const double now = right.x - left.x;
+                    const double earlier = second[before * 3 + 0] - first[before * 3 + 0];
+                    dpsi -= 0.5 * (now + earlier) * grid.spacing_m.z;
+                }
+                // The potential is the one a **poloidal** pair of fields has: `A = psi y_hat`. `grad w x (0, psi, 0)`
+                // is then the term the product rule contributes, and with the gauge fixed above it is exact wherever
+                // the inputs have no `y` structure. See the declaration for why this construction rather than the
+                // reference's `(B x r) / 2`.
+                const Vec3 potential{0.0, dpsi, 0.0};
+                const Vec3 term = cross(gradient(i, j, k), potential) * correction;
+                table.set_node(i, j, k,
+                               Vec3{left.x * (1.0 - w) + right.x * w + term.x,
+                                    left.y * (1.0 - w) + right.y * w + term.y,
+                                    left.z * (1.0 - w) + right.z * w + term.z});
+            }
+        }
+    }
+    const qp::abi::LatticeDesc desc = table.view(a.desc.dimension).desc;
+    return fields.publish(key, desc, std::move(table.data()));
+}
+
 std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipole;
     dipole.type_name = kDipoleType;
     dipole.label = "Dipole field";
@@ -1164,6 +1280,70 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     magnetopause_out.unit_symbol = "1";
     magnetopause.outputs.push_back(magnetopause_out);
 
+    // ---------------- the mix ----------------
+    graph::NodeDesc mix;
+    mix.type_name = kMixType;
+    mix.label = "Mix by weight";
+    mix.description = "Blends the two fields on its first two sockets by the weight on the third, and adds the "
+                      "vector-potential term that keeps the blend divergence-free -- the reference's magnetopause "
+                      "mixing. The weight can be any scalar table here, which is what the other blend cannot do: it "
+                      "owns a sigmoid and therefore owns its derivative, while this one differentiates the table "
+                      "and pays for it. No grid of its own: all three inputs must already share one.";
+    mix.category = "field";
+    mix.version = 1;
+    mix.allow_in_field_domain = true;
+    mix.allow_in_particle_domain = false;
+    mix.has_compute = true;
+    graph::PortDesc mix_first;
+    mix_first.number = kPortMixA;
+    mix_first.name = "a";
+    mix_first.label = "Field at weight zero";
+    mix_first.description = "The field that wins where the weight is zero. It carries the lattice and the dimension "
+                            "the mix is built and described in.";
+    mix_first.type = qp::ports::kVectorField;
+    mix_first.connectable = true;
+    mix_first.required = true;
+    mix.inputs.push_back(mix_first);
+    graph::PortDesc mix_second;
+    mix_second.number = kPortMixB;
+    mix_second.name = "b";
+    mix_second.label = "Field at weight one";
+    mix_second.description = "The field that wins where the weight is one. Same lattice and same dimension: two "
+                             "lattices are refused rather than fitted, and tesla mixed with volts per metre is "
+                             "refused rather than added.";
+    mix_second.type = qp::ports::kVectorField;
+    mix_second.connectable = true;
+    mix_second.required = true;
+    mix.inputs.push_back(mix_second);
+    graph::PortDesc mix_weight;
+    mix_weight.number = kPortMixWeight;
+    mix_weight.name = "weight";
+    mix_weight.label = "Weight";
+    mix_weight.description = "The weight table, dimensionless, from a mask, a magnetopause or any other producer of "
+                             "a scalar field. Its gradient is differenced from the table, so a weight that is "
+                             "linear where it matters is reproduced exactly and a curved one is corrected to the "
+                             "difference's own order.";
+    mix_weight.type = qp::ports::kScalarField;
+    mix_weight.connectable = true;
+    mix_weight.required = true;
+    mix.inputs.push_back(mix_weight);
+    graph::PortDesc mix_correction =
+        parameter(kPortMixCorrection, "correction", "Correction", "1", kDefaultMixCorrection);
+    mix_correction.description = "How much of the vector-potential term to apply: 1 keeps the mix divergence-free "
+                                 "where the potentials it can build are genuine, 0 is the straight blend the case "
+                                 "measures against.";
+    mix.inputs.push_back(mix_correction);
+    graph::PortDesc mix_out;
+    mix_out.number = kPortMixOut;
+    mix_out.name = "field";
+    mix_out.label = "Field";
+    mix_out.description = "The mixed field, described exactly as the field on the first socket is.";
+    mix_out.type = qp::ports::kVectorField;
+    mix_out.connectable = true;
+    mix_out.required = false;
+    mix_out.unit_symbol = "T";
+    mix.outputs.push_back(mix_out);
+
     // ---------------- the convection field ----------------
     graph::NodeDesc convection;
     convection.type_name = kConvectionType;
@@ -1339,7 +1519,7 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     return {std::move(dipole),      std::move(uniform),    std::move(sum),        std::move(electric),
             std::move(mask),        std::move(mul),        std::move(convection), std::move(corotation),
             std::move(atmosphere),  std::move(sheet),      std::move(blend),      std::move(resample),
-            std::move(magnetopause)};
+            std::move(magnetopause), std::move(mix)};
 }
 
 gfield::FieldValue DipoleEvaluator::input_field(const graph::NodeId id, const graph::PortNumber port) const noexcept {
@@ -1494,6 +1674,29 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
         }
         Outcome out;
         out.emplace_back(FieldNodes::kPortWeight, qp::ports::Value{fields_->view(magnetopause_key).desc});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
+    if (desc.type_name == FieldNodes::kMixType) {
+        // Three tables in and one out, no grid to read: like a sum or a product, a mix is defined on the lattice its
+        // inputs share, and the geometry those tables cannot carry comes from the resolver.
+        const graph::InputView mix_view{inputs};
+        const double mix_correction = real_or(mix_view, FieldNodes::kPortMixCorrection,
+                                              FieldNodes::kDefaultMixCorrection);
+        GridSpec mix_grid;
+        if (graph_ == nullptr || !resolve_field_origin(*graph_, id, FieldNodes::kPortMixA, mix_grid)) {
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        const gfield::FieldKey mix_key{id.index, FieldNodes::kPortMixOut};
+        const gfield::FieldValue mix_a = input_field(id, FieldNodes::kPortMixA);
+        const gfield::FieldValue mix_b = input_field(id, FieldNodes::kPortMixB);
+        const gfield::FieldValue mix_weight = input_field(id, FieldNodes::kPortMixWeight);
+        if (!bake_mix(mix_a, mix_b, mix_weight, mix_grid, mix_correction, mix_key, *fields_)) {
+            // A missing socket, three lattices that do not agree, two dimensions that do not, or a correction
+            // outside `[0, 1]`: refusals rather than approximations.
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        Outcome out;
+        out.emplace_back(FieldNodes::kPortMixOut, qp::ports::Value{fields_->view(mix_key).desc});
         return qp::diag::Result<Outcome>{std::move(out)};
     }
     if (desc.type_name == FieldNodes::kMaskType) {

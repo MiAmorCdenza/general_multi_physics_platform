@@ -825,6 +825,77 @@ public:
     /// @tests       magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose
     [[nodiscard]] static MagnetopauseSpec read_magnetopause_from(const graph::InputView& inputs) noexcept;
 
+    /// @brief Mixes two fields by **any** weight field, with the correction that keeps the result divergence-free.
+    ///
+    /// ## Why there are two blends, and what each one is for
+    ///
+    /// `field.blend` interpolates between its two sockets along `x` with a sigmoid it owns, and it can do that
+    /// **exactly** because it owns the weight and therefore owns the weight's derivative. This node takes a weight
+    /// **table** -- whatever a mask, a magnetopause or a future model publishes -- and pays for that freedom: the
+    /// derivative of a table is a difference, so the correction it can apply is the same term built from a
+    /// difference rather than from the closed form.
+    ///
+    /// That is the reopening condition `field.blend` wrote down, at the point where it is cashed: a weight that
+    /// arrives with its derivative -- a pair, or a model -- makes the correction exact again, and the node that
+    /// publishes such a weight is the one that knows it analytically.
+    ///
+    /// ## The correction, and where it is exact
+    ///
+    /// A blend of two fields is `(1 - w) A + w C`, whose divergence carries `grad w . (C - A)` -- a source layer
+    /// wherever the weight changes. The cure is to blend the **vector potentials** instead: for `A_a` and `A_c` with
+    /// `curl A_a = A` and `curl A_c = C`,
+    ///
+    ///     curl (w A_c + (1 - w) A_a) = (1 - w) A + w C + grad w x (A_c - A_a),
+    ///
+    /// which is a curl and therefore exactly divergence-free **whatever the weight is**. So the whole question is
+    /// which potentials are available, and a table does not carry one.
+    ///
+    /// This node builds the potential a **poloidal** pair of fields has: `A = psi y_hat`, with `psi` recovered by
+    /// integrating `-B_x` in `z` -- the same rule, the same shared anchor and the same restriction `field.blend`
+    /// documents. Where the inputs vary in `y` the construction is the right shape and the wrong value, and the case
+    /// says which regime it is measuring rather than claiming the exact one everywhere.
+    ///
+    /// ## Why not the reference's potential
+    ///
+    /// The reference uses `A = (B x r) / 2`, which is a genuine potential exactly when `B` is **uniform**, and it
+    /// multiplies the resulting term by `clamp(r / 10 R_e, 0, 1)` -- switching the correction off inside ten earth
+    /// radii. Measuring that construction here is what settled it: with a dipole on one socket and a uniform field
+    /// on the other, mixed by a magnetopause weight, its worst divergence came out **0.74 times the uncorrected
+    /// one**, that is, the term made the field worse -- over exactly the region the reference's damping silences.
+    /// The damping was a patch for a construction that does not hold there. With the poloidal potential the same
+    /// measurement improves instead (both numbers are in the case), so that is what this node builds, and the
+    /// reopening condition is a field that publishes its own vector potential: then neither approximation is needed
+    /// and the correction is exact everywhere.
+    ///
+    /// ## The gradient is a difference of the table, and the boundary is said out loud
+    ///
+    /// `grad w` is a central difference in the interior and a one-sided difference on the boundary faces, where
+    /// there is only one side to look at. That makes the correction second order inside and first order in the two
+    /// boundary layers, which is a property of differentiating a table rather than a defect of the model -- and it
+    /// is the reason a linear weight is used in the exactness case: a central difference reproduces a linear
+    /// function exactly, so the only error left there is the potential's own.
+    ///
+    /// ## What is not ported
+    ///
+    /// The reference's `clamp(r / 10 R_e, 0, 1)` factor is gone, and the measurement above is why it existed: it
+    /// silenced a correction that was making things worse near the Earth. With a construction that does not need
+    /// silencing, the damping has nothing left to do -- and if a future model wants one, it comes back as a measured
+    /// decision with a number beside it rather than as a copied constant.
+    static constexpr const char* kMixType = "field.mix";
+    /// @brief The field that wins where the weight is zero.
+    static constexpr qp::graph::PortNumber kPortMixA = 1;
+    /// @brief The field that wins where the weight is one.
+    static constexpr qp::graph::PortNumber kPortMixB = 2;
+    /// @brief The weight table, dimensionless: `0` gives the first socket, `1` the second.
+    static constexpr qp::graph::PortNumber kPortMixWeight = 3;
+    /// @brief How much of the divergence-free correction to apply.
+    static constexpr qp::graph::PortNumber kPortMixCorrection = 4;
+    /// @brief The mixed field.
+    static constexpr qp::graph::PortNumber kPortMixOut = 1;
+
+    /// @brief The default correction factor: all of the term the vector potentials contribute.
+    static constexpr double kDefaultMixCorrection = 1.0;
+
     /// @brief The default drag rate at the surface, in per second. Zero: no atmosphere until a course asks for one.
     static constexpr double kDefaultAtmosphereNu0 = 0.0;
     /// @brief The default scale height, in metres: 100 km, the thermosphere's order at low altitude.
@@ -1544,6 +1615,51 @@ public:
  */
 [[nodiscard]] bool bake_magnetopause(const FieldNodes::MagnetopauseSpec& spec, const GridSpec& grid,
                                      qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
+
+/**
+ * @brief Blends two fields by a published weight table, with the vector-potential divergence correction.
+ *
+ * The construction and the reopening condition are argued on `kMixType`. What belongs here is the call's shape, the
+ * two things it must be told that a table cannot say, and what it refuses.
+ *
+ * ## Everything comes from tables and the geometry comes from the caller
+ *
+ * Three tables in, one out, and **no grid of its own**: a mix is defined on the lattice its inputs share, like a sum
+ * or a product, so `abi::LatticeDesc`'s missing positions are supplied by the caller exactly as they are for those
+ * nodes. The two fields must carry the same dimension -- mixing tesla with volts per metre is not a mixed quantity
+ * -- and the port types cannot catch that, because both sockets hold vector fields.
+ *
+ * ## Refusals
+ *
+ * Unreadable or non-volume inputs, a field where the weight belongs or a weight where a field belongs, counts that
+ * disagree between any two of the three tables, a grid that disagrees with them, dimensions that differ, and a
+ * correction outside `[0, 1]` are all refused rather than approximated: a mix that quietly became a straight blend
+ * would look like a field and be a bug.
+ *
+ * @param a        The field that wins where the weight is zero. Readable f64 volume of vectors.
+ * @param b        The field that wins where the weight is one. Same lattice and dimension as `a`.
+ * @param weight   The weight table. A readable f64 volume of **scalars**, on the same lattice.
+ * @param grid     Where the samples are: origin, spacing and counts.
+ * @param correction The fraction of the vector-potential term to apply: `1` is the construction above, `0` the
+ *                 straight blend the case measures against.
+ * @param key      Who is publishing, for the store's key.
+ * @param fields   The store. Mutated on success.
+ *
+ * @ownership   owns the samples it publishes on success
+ * @thread      main
+ * @pre         none
+ * @post        On true, `fields.view(key)` is `(1 - w) a + w b + correction * (grad w x (A_b - A_a))` at every node,
+ *              described exactly as `a` is
+ * @invariant   On false the store is unchanged
+ * @errors      Returns false -- never throws -- for the refusals listed above
+ * @complexity  O(points)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.a_mix_blends_the_potentials_not_the_fields
+ */
+[[nodiscard]] bool bake_mix(const qp::graph::field::FieldValue& a, const qp::graph::field::FieldValue& b,
+                            const qp::graph::field::FieldValue& weight, const GridSpec& grid, double correction,
+                            qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
 
 /**
  * @brief The node evaluator that bakes this kit's field types into a store.

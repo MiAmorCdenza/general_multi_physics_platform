@@ -119,13 +119,13 @@ struct Scene final {
     graph::EvalResult result{};
 
     Scene() {
-        // Twelve field models now: the dipole, the uniform field, the sum, the uniform electric field, the region
+        // Fourteen field models now: the dipole, the uniform field, the sum, the uniform electric field, the region
         // mask, the multiplier, the convection field, the corotation field, the atmosphere, the current sheet, the
-        // blend and the resampler. Each is a **type of its own** with its own port numbers, which is the
-        // composition principle -- a shielding field is `mul(convection, shield)` -- and two of them could not be
-        // composed out of the others: no wiring of sums and products keeps a field divergence-free (the blend), and
-        // none of them moves a field onto another lattice (the resampler).
-        REQUIRE(FieldNodes::mount(host) == 13);
+        // blend, the resampler, the magnetopause and the mix. Each is a **type of its own** with its own port
+        // numbers, which is the composition principle -- a shielding field is `mul(convection, shield)` -- and three
+        // of them could not be composed out of the others: no wiring of sums and products keeps a field
+        // divergence-free (the two blends), and none of them moves a field onto another lattice (the resampler).
+        REQUIRE(FieldNodes::mount(host) == 14);
         REQUIRE(PusherNodes::mount(host) == 1);
     }
 
@@ -220,7 +220,7 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // mask, the multiplier and the convection field. Each is a **type of its own** with its own port numbers,
     // which is the composition principle -- a shielding field is `mul(convection, shield)`, not a switch inside a
     // node.
-    REQUIRE(types.size() == 13);
+    REQUIRE(types.size() == 14);
     REQUIRE(types[0].type_name == FieldNodes::kDipoleType);
     REQUIRE(types[1].type_name == FieldNodes::kUniformType);
     REQUIRE(types[2].type_name == FieldNodes::kSumType);
@@ -287,9 +287,9 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // Mounting is what makes the type reachable from a running program rather than only from a test fixture. The
     // second mount registers nothing, because a name that is taken is left alone rather than duplicated.
     qp::host::PluginHost host{qp::plugin::Capability::node_types};
-    // Twelve field models now, and the count is asserted rather than assumed: it is the one place a new type
+    // Fourteen field models now, and the count is asserted rather than assumed: it is the one place a new type
     // announces itself in the test suite, so a type that silently failed to register is a failure here.
-    REQUIRE(FieldNodes::mount(host) == 13);
+    REQUIRE(FieldNodes::mount(host) == 14);
     REQUIRE(host.node_types().find(FieldNodes::kDipoleType) != nullptr);
     REQUIRE(FieldNodes::mount(host) == 0);
 }
@@ -483,7 +483,7 @@ TEST_CASE("magnetosphere.field_nodes.a_field_scales_by_its_weight", "[magnetosph
     // where the weight belongs are both refused by `check_connection`, so the multiplier's own check is the second
     // line of defence rather than the only one.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 13);
+    REQUIRE(types.size() == 14);
     REQUIRE(types[5].type_name == FieldNodes::kMulType);
     REQUIRE(types[5].has_compute);
     const graph::PortDesc* mul_field = types[5].find_port(FieldNodes::kPortMulField, false);
@@ -720,7 +720,7 @@ TEST_CASE("magnetosphere.field_nodes.a_blend_does_not_open_a_divergence", "[magn
     // The declaration: the type's own port numbers, both sockets vector fields, and three parameters that are
     // typed into a panel rather than wired from a node.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 13);
+    REQUIRE(types.size() == 14);
     REQUIRE(types[10].type_name == FieldNodes::kBlendType);
     REQUIRE(types[10].has_compute);
     REQUIRE(types[10].allow_in_field_domain);
@@ -845,7 +845,7 @@ TEST_CASE("magnetosphere.field_nodes.the_convection_field_is_the_potentials_grad
 
     // The type is declared like the others and allowed only where a bake is.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 13);
+    REQUIRE(types.size() == 14);
     REQUIRE(types[6].type_name == FieldNodes::kConvectionType);
     REQUIRE(types[6].has_compute);
     REQUIRE(types[6].allow_in_field_domain);
@@ -974,7 +974,7 @@ TEST_CASE("magnetosphere.field_nodes.corotation_is_the_rotation_the_field_allows
     // The type declares one socket and no grid parameters, which is the decision this node makes: it bakes on the
     // lattice of the field it reads, so there is no second grid to disagree with the first.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 13);
+    REQUIRE(types.size() == 14);
     REQUIRE(types[7].type_name == FieldNodes::kCorotationType);
     REQUIRE(types[7].has_compute);
     REQUIRE(types[7].inputs.size() == 1);
@@ -1274,7 +1274,7 @@ TEST_CASE("magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_
 
     // And the type is declared with its own grid ports, three parameters first -- the same shape the mask has.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 13);
+    REQUIRE(types.size() == 14);
     REQUIRE(types[8].type_name == FieldNodes::kAtmosphereType);
     REQUIRE(types[8].has_compute);
     REQUIRE(types[8].allow_in_field_domain);
@@ -1440,7 +1440,7 @@ TEST_CASE("magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_impl
 
     // The type declares its own grid ports after its two parameters, and publishes tesla.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 13);
+    REQUIRE(types.size() == 14);
     REQUIRE(types[9].type_name == FieldNodes::kCurrentSheetType);
     REQUIRE(types[9].has_compute);
     REQUIRE(types[9].allow_in_field_domain);
@@ -1596,7 +1596,7 @@ TEST_CASE("magnetosphere.field_nodes.a_resample_moves_the_samples_and_adds_no_in
     // The declaration: its own numbers, nine grid ports that are typed rather than wired, and a grid of its own --
     // which is what makes it the node a pusher can be pointed at when the field it wants is on another lattice.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 13);
+    REQUIRE(types.size() == 14);
     REQUIRE(types[11].type_name == FieldNodes::kResampleType);
     REQUIRE(types[11].has_compute);
     REQUIRE(types[11].allow_in_field_domain);
@@ -1768,7 +1768,7 @@ TEST_CASE("magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose",
     REQUIRE(read.width_m == FieldNodes::kDefaultMagnetopauseWidthM);
 
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 13);
+    REQUIRE(types.size() == 14);
     REQUIRE(types[12].type_name == FieldNodes::kMagnetopauseType);
     REQUIRE(types[12].has_compute);
     REQUIRE(types[12].allow_in_field_domain);
@@ -1782,6 +1782,228 @@ TEST_CASE("magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose",
         REQUIRE(port != nullptr);
         REQUIRE_FALSE(port->connectable);
     }
+}
+
+TEST_CASE("magnetosphere.field_nodes.a_mix_blends_the_potentials_not_the_fields", "[magnetosphere]") {
+    // **The second blend, and the reason there are two.** `field.blend` interpolates along `x` with a sigmoid it
+    // owns, so it owns the derivative too and its correction is exact. This node takes a weight **table** -- a
+    // mask's, a magnetopause's, anything that publishes a scalar field -- and pays for that freedom with a
+    // differentiated gradient. The construction is the same idea one layer up: blend the **vector potentials**
+    // rather than the fields, and the result is a curl, hence exactly divergence-free whatever the weight is.
+    //
+    // The case is built so the first half has an exact answer. Two **uniform** fields whose difference is along the
+    // weight's own gradient, and a weight that is **linear** in `x`: a linear function's central difference is
+    // exact, and a uniform difference field's potential `A = (B x r) / 2` is genuine, so every number below is
+    // closed-form -- including the divergence, which the correction must take from `dw/dx * dB_x` to nothing.
+    const double re = kEarthRadiusM;
+    const GridSpec grid{Vec3{-4.0 * re, -4.0 * re, -4.0 * re}, Vec3{0.25 * re, 0.25 * re, 0.25 * re}, 33, 33, 33};
+    gfield::FieldSet fields;
+    const double first_t = 2.0e-8;
+    const double second_t = 6.0e-8;
+    const double difference_t = second_t - first_t;
+    const gfield::FieldKey first_key{71, FieldNodes::kPortMixA};
+    const gfield::FieldKey second_key{72, FieldNodes::kPortMixB};
+    REQUIRE(bake_uniform(Vec3{first_t, 0.0, 0.0}, grid, first_key, fields, tesla_dimension()));
+    REQUIRE(bake_uniform(Vec3{second_t, 0.0, 0.0}, grid, second_key, fields, tesla_dimension()));
+
+    const double weight_slope = 1.0 / (8.0 * re);
+    const gfield::FieldKey linear_weight_key{73, FieldNodes::kPortMixWeight};
+    std::vector<double> linear(static_cast<std::size_t>(grid.point_count()), 0.0);
+    std::size_t at = 0;
+    for (std::uint32_t i = 0; i < grid.nx; ++i) {
+        const double x = grid.origin_m.x + static_cast<double>(i) * grid.spacing_m.x;
+        for (std::uint32_t j = 0; j < grid.ny; ++j) {
+            for (std::uint32_t k = 0; k < grid.nz; ++k) linear[at++] = 0.5 + weight_slope * x;
+        }
+    }
+    // A **scalar** table, built by the case rather than by a node: the weight's provenance is the experiment here,
+    // and a linear shape is the one whose difference is exact.
+    REQUIRE(fields.publish(linear_weight_key,
+                           qp::abi::make_lattice(qp::abi::LatticeKind::volume, qp::abi::ComponentKind::scalar,
+                                                 qp::abi::ElementType::f64, qp::abi::kDimensionless, grid.nx,
+                                                 grid.ny, grid.nz),
+                           std::move(linear)));
+    const gfield::FieldValue weight = fields.view(linear_weight_key);
+    REQUIRE(gfield::is_readable(weight));
+    REQUIRE(weight.is_scalar());
+
+    const gfield::FieldKey straight_key{74, FieldNodes::kPortMixOut};
+    const gfield::FieldKey corrected_key{75, FieldNodes::kPortMixOut};
+    REQUIRE(bake_mix(fields.view(first_key), fields.view(second_key), weight, grid, 0.0, straight_key, fields));
+    REQUIRE(bake_mix(fields.view(first_key), fields.view(second_key), weight, grid, 1.0, corrected_key, fields));
+    const gfield::FieldValue straight = fields.view(straight_key);
+    const gfield::FieldValue corrected = fields.view(corrected_key);
+    REQUIRE(gfield::is_readable(straight));
+    REQUIRE(gfield::is_readable(corrected));
+    // Tesla, described from the first socket, on the lattice the inputs share.
+    REQUIRE(corrected.desc.dimension.M == 1);
+    REQUIRE(corrected.desc.dimension.T == -2);
+    REQUIRE(corrected.point_count() == grid.point_count());
+
+    // Every node against the closed form. The `x` row is the convex combination and nothing else (the potential's
+    // term has no `x` component here); the `y` row is exactly zero, because a poloidal potential has one component
+    // and `grad w` has none in `y`; and the `z` row is the correction alone, `g dpsi` with `dpsi` the integral of
+    // `-dB_x` from the anchor -- which is `-g dB_x (z - z_min)`, the anchor showing up as the gauge offset
+    // `field.blend` documents.
+    const double g = weight_slope * difference_t;
+    const double anchor_z = grid.origin_m.z;
+    for (std::uint32_t i = 0; i < grid.nx; ++i) {
+        const double x = grid.origin_m.x + static_cast<double>(i) * grid.spacing_m.x;
+        const double w = 0.5 + weight_slope * x;
+        for (std::uint32_t j = 0; j < grid.ny; ++j) {
+            for (std::uint32_t k = 0; k < grid.nz; ++k) {
+                const double z = grid.origin_m.z + static_cast<double>(k) * grid.spacing_m.z;
+                const std::uint64_t point = (static_cast<std::uint64_t>(i) * grid.ny + j) * grid.nz + k;
+                REQUIRE(gfield::get_component(corrected, point, 0) == first_t * (1.0 - w) + second_t * w);
+                REQUIRE(gfield::get_component(corrected, point, 1) == 0.0);
+                REQUIRE(relative_to(gfield::get_component(corrected, point, 2), -g * (z - anchor_z)) < 1.0e-14);
+                // And with the correction switched off the same table is the straight blend: the two differ by the
+                // potential's term and by nothing else.
+                REQUIRE(gfield::get_component(straight, point, 0) == first_t * (1.0 - w) + second_t * w);
+                REQUIRE(gfield::get_component(straight, point, 1) == 0.0);
+                REQUIRE(gfield::get_component(straight, point, 2) == 0.0);
+            }
+        }
+    }
+
+    // **The measurement the whole construction exists for.** The straight blend's divergence is the closed form
+    // `dw/dx * dB_x`; the corrected one is the difference operator's own floor. Both are measured with the same
+    // central differences the field's case uses.
+    const double straight_divergence = worst_divergence(straight, grid.spacing_m);
+    const double corrected_divergence = worst_divergence(corrected, grid.spacing_m);
+    const double predicted = std::abs(g);
+    CAPTURE(straight_divergence, corrected_divergence, predicted);
+    // The straight blend's divergence is the closed form `dw/dx * dB_x` to six parts in a million -- the weight is
+    // linear, so the difference that produced it is exact and what is left is the order the arithmetic ran in. The
+    // corrected one is **fourteen orders of magnitude** smaller, which is not a tolerance but the difference
+    // operator's own floor: this is the regime where the construction is not an approximation at all.
+    REQUIRE(relative_to(straight_divergence, predicted) < 1.0e-6);
+    REQUIRE(corrected_divergence * 1.0e10 < straight_divergence);
+
+    // **The regime where the potential is only an approximation, measured rather than claimed.** A dipole on one
+    // socket and a uniform field on the other, mixed by the magnetopause's own weight: `A = (B x r) / 2` is not a
+    // potential of a dipole, so the correction reduces the divergence instead of removing it, and the factor is
+    // reported here rather than asserted as if it were exact. The box **starts three earth radii out**: a box with
+    // the dipole at its centre has a node on the singularity, and the first version of this measurement read a
+    // divergence of 3e22 T/m because of it -- the same lesson the resample's convergence study learned, in a
+    // different costume.
+    const GridSpec wide{Vec3{3.0 * re, -12.0 * re, -12.0 * re}, Vec3{0.4 * re, 0.4 * re, 0.4 * re}, 48, 61, 61};
+    const gfield::FieldKey dipole_key{76, FieldNodes::kPortMixA};
+    const gfield::FieldKey sheath_key{77, FieldNodes::kPortMixB};
+    const gfield::FieldKey boundary_key{78, FieldNodes::kPortMixWeight};
+    REQUIRE(bake_dipole(0.0, kDipoleMomentAm2, wide, dipole_key, fields));
+    // The outer field is along `x` on purpose: the source layer a straight blend leaves is `grad w . (b - a)`, so a
+    // field whose difference is **orthogonal** to the weight's gradient everywhere measures nothing. The first
+    // version of this half used an axial outer field, and the naive divergence came out at the difference
+    // operator's own floor -- a measurement of the experiment rather than of the node.
+    REQUIRE(bake_uniform(Vec3{5.0e-9, 0.0, 0.0}, wide, sheath_key, fields, tesla_dimension()));
+    REQUIRE(bake_magnetopause(FieldNodes::MagnetopauseSpec{}, wide, boundary_key, fields));
+    const gfield::FieldKey naive_mix_key{79, FieldNodes::kPortMixOut};
+    const gfield::FieldKey corrected_mix_key{80, FieldNodes::kPortMixOut};
+    REQUIRE(bake_mix(fields.view(dipole_key), fields.view(sheath_key), fields.view(boundary_key), wide, 0.0,
+                     naive_mix_key, fields));
+    REQUIRE(bake_mix(fields.view(dipole_key), fields.view(sheath_key), fields.view(boundary_key), wide, 1.0,
+                     corrected_mix_key, fields));
+    const double naive_divergence = worst_divergence(fields.view(naive_mix_key), wide.spacing_m);
+    const double reduced_divergence = worst_divergence(fields.view(corrected_mix_key), wide.spacing_m);
+    CAPTURE(naive_divergence, reduced_divergence);
+    // Measured: 5.3 times smaller with the correction in force, against 0.74 -- that is, **worse** -- for the
+    // reference's `(B x r) / 2` potential on the same pair. The factor is modest because a dipole has a `y`
+    // structure off the plane this is measured on, so the poloidal potential is not exact here either; what the
+    // number is for is to show which side of one the correction is on, and the case keeps ten percent of room
+    // because it is a measurement rather than a model constant.
+    REQUIRE(reduced_divergence < naive_divergence);
+    REQUIRE(reduced_divergence * 3.0 < naive_divergence);
+
+    // **And where the potential is genuine.** A Harris sheet against a uniform field: both vary in `x` and `z` only,
+    // which is exactly the family a poloidal potential describes, so here the construction is not an approximation
+    // and the correction takes the divergence down to the difference operator's floor. This pair is also **not** a
+    // uniform difference, which is the other regime the reference's potential needs and this one does not.
+    const gfield::FieldKey sheet_key{87, FieldNodes::kPortMixA};
+    const gfield::FieldKey uniform_key{88, FieldNodes::kPortMixB};
+    FieldNodes::SheetSpec sheet;
+    REQUIRE(bake_current_sheet(sheet, wide, sheet_key, fields));
+    REQUIRE(bake_uniform(Vec3{0.0, 0.0, 1.0e-8}, wide, uniform_key, fields, tesla_dimension()));
+    const gfield::FieldKey poloidal_naive_key{89, FieldNodes::kPortMixOut};
+    const gfield::FieldKey poloidal_corrected_key{90, FieldNodes::kPortMixOut};
+    REQUIRE(bake_mix(fields.view(sheet_key), fields.view(uniform_key), fields.view(boundary_key), wide, 0.0,
+                     poloidal_naive_key, fields));
+    REQUIRE(bake_mix(fields.view(sheet_key), fields.view(uniform_key), fields.view(boundary_key), wide, 1.0,
+                     poloidal_corrected_key, fields));
+    const double poloidal_naive = worst_divergence(fields.view(poloidal_naive_key), wide.spacing_m);
+    const double poloidal_corrected = worst_divergence(fields.view(poloidal_corrected_key), wide.spacing_m);
+    // Measured: 38 times smaller. Not to the floor, and the reason is stated rather than tuned away -- the weight's
+    // gradient is a **difference** of the logistic table (`O(h^2 w''')`, about three percent at this spacing), and
+    // the correction can only cancel the source layer as well as that difference knows it. The family is what is
+    // being asserted: on inputs the potential describes, the correction removes the layer instead of doubling it.
+    REQUIRE(poloidal_corrected * 20.0 < poloidal_naive);
+
+    // A weight that is **constant** switches the boundary off entirely, and then the mix is exactly one of its
+    // inputs -- with no correction at all, because a constant's gradient is zero. Both ends are asserted exactly:
+    // a blend that left a trace of the other field where its weight says it does not exist would be a blend whose
+    // ends mean something else.
+    const gfield::FieldKey zero_key{81, FieldNodes::kPortMixWeight};
+    const gfield::FieldKey one_key{82, FieldNodes::kPortMixWeight};
+    std::vector<double> zeros(static_cast<std::size_t>(wide.point_count()), 0.0);
+    std::vector<double> ones(static_cast<std::size_t>(wide.point_count()), 1.0);
+    const qp::abi::LatticeDesc scalar_desc =
+        qp::abi::make_lattice(qp::abi::LatticeKind::volume, qp::abi::ComponentKind::scalar,
+                              qp::abi::ElementType::f64, qp::abi::kDimensionless, wide.nx, wide.ny, wide.nz);
+    REQUIRE(fields.publish(zero_key, scalar_desc, std::move(zeros)));
+    REQUIRE(fields.publish(one_key, scalar_desc, std::move(ones)));
+    const gfield::FieldKey only_first_key{83, FieldNodes::kPortMixOut};
+    const gfield::FieldKey only_second_key{84, FieldNodes::kPortMixOut};
+    REQUIRE(bake_mix(fields.view(dipole_key), fields.view(sheath_key), fields.view(zero_key), wide, 1.0,
+                     only_first_key, fields));
+    REQUIRE(bake_mix(fields.view(dipole_key), fields.view(sheath_key), fields.view(one_key), wide, 1.0,
+                     only_second_key, fields));
+    for (std::uint64_t point = 0; point < wide.point_count(); ++point) {
+        for (std::uint64_t component = 0; component < 3; ++component) {
+            REQUIRE(gfield::get_component(fields.view(only_first_key), point, component) ==
+                    gfield::get_component(fields.view(dipole_key), point, component));
+            REQUIRE(gfield::get_component(fields.view(only_second_key), point, component) ==
+                    gfield::get_component(fields.view(sheath_key), point, component));
+        }
+    }
+
+    // Refusals: a vector where the weight belongs and a scalar where a field belongs (the port types catch the
+    // first of those at connection time and the bake catches it too), a third lattice, two dimensions, a grid that
+    // disagrees with the tables, and a correction outside `[0, 1]`.
+    REQUIRE_FALSE(bake_mix(fields.view(first_key), fields.view(second_key), fields.view(first_key), grid, 1.0,
+                           corrected_key, fields));
+    REQUIRE_FALSE(bake_mix(weight, fields.view(second_key), fields.view(linear_weight_key), grid, 1.0,
+                           corrected_key, fields));
+    const GridSpec other{Vec3{-4.0 * re, -4.0 * re, -4.0 * re}, Vec3{0.5 * re, 0.5 * re, 0.5 * re}, 17, 17, 17};
+    const gfield::FieldKey coarse_key{85, FieldNodes::kPortMixB};
+    REQUIRE(bake_uniform(Vec3{second_t, 0.0, 0.0}, other, coarse_key, fields, tesla_dimension()));
+    REQUIRE_FALSE(bake_mix(fields.view(first_key), fields.view(coarse_key), weight, grid, 1.0, corrected_key,
+                           fields));
+    REQUIRE_FALSE(bake_mix(fields.view(first_key), fields.view(second_key), weight, other, 1.0, corrected_key,
+                           fields));
+    const gfield::FieldKey volts_key{86, FieldNodes::kPortMixB};
+    REQUIRE(bake_uniform(Vec3{0.0, 1.0, 0.0}, grid, volts_key, fields, volt_per_metre_dimension()));
+    REQUIRE_FALSE(bake_mix(fields.view(first_key), fields.view(volts_key), weight, grid, 1.0, corrected_key,
+                           fields));
+    REQUIRE_FALSE(bake_mix(fields.view(first_key), fields.view(second_key), weight, grid, 1.5, corrected_key,
+                           fields));
+    REQUIRE_FALSE(bake_mix(fields.view(first_key), fields.view(second_key), weight, grid, -0.1, corrected_key,
+                           fields));
+    REQUIRE_FALSE(bake_mix(gfield::FieldValue{}, fields.view(second_key), weight, grid, 1.0, corrected_key, fields));
+
+    // The declaration: its own numbers, a scalar weight socket, and the correction typed in rather than wired.
+    const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
+    REQUIRE(types.size() == 14);
+    REQUIRE(types[13].type_name == FieldNodes::kMixType);
+    REQUIRE(types[13].has_compute);
+    REQUIRE(types[13].allow_in_field_domain);
+    REQUIRE_FALSE(types[13].allow_in_particle_domain);
+    REQUIRE(types[13].find_port(FieldNodes::kPortMixA, false)->type == qp::ports::kVectorField);
+    REQUIRE(types[13].find_port(FieldNodes::kPortMixB, false)->type == qp::ports::kVectorField);
+    REQUIRE(types[13].find_port(FieldNodes::kPortMixWeight, false)->type == qp::ports::kScalarField);
+    REQUIRE_FALSE(types[13].find_port(FieldNodes::kPortMixCorrection, false)->connectable);
+    const graph::PortDesc* mixed_out = types[13].find_port(FieldNodes::kPortMixOut, true);
+    REQUIRE(mixed_out != nullptr);
+    REQUIRE(mixed_out->unit_symbol == std::string{"T"});
 }
 
 TEST_CASE("magnetosphere.field_nodes.the_dipole_is_baked_onto_the_grid_it_declares", "[magnetosphere]") {
