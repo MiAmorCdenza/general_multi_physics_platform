@@ -28,7 +28,8 @@ add_library(qp_views_model STATIC
     run_controller.cpp
     execution_binders.cpp
     document_controller.cpp
-    export_controller.cpp)
+    export_controller.cpp
+    view_items.cpp)
 
 add_library(qp::views_model ALIAS qp_views_model)
 
@@ -52,4 +53,5 @@ target_link_libraries(qp_views_model
            qp::runtime_store qp::runtime_trace qp::runtime_run qp::runtime_io
            qp::runtime_file qp::authoring_document qp::authoring_persist
            qp::graph_structure qp::graph_eval qp::graph_execution
-    PRIVATE qp_warnings qp_sanitize)
+    PRIVATE qp_warnings qp_sanitize
+    qp::graph_domain)
