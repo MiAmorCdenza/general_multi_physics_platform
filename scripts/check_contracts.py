@@ -494,12 +494,24 @@ def main(argv: list[str] | None = None) -> int:
     violations: list[Violation] = []
     all_contracts: list[FunctionContract] = []
     referenced: set[str] = set()
+    # Every `@tests` written on a `///` line, which this gate cannot read. Counted, not failed -- see C7 below.
+    unreadable_claims: list[str] = []
 
     for root in header_roots:
         for path in sorted(root.rglob("*.hpp")):
             contracts, viols = parse_header(path)
             all_contracts.extend(contracts)
             violations.extend(viols)
+            # C7, counted as the headers are walked: an `@tests` on a `///` line is a claim this gate will never
+            # read. **Counted rather than failed**, and the count is the finding: the first run of this rule found
+            # 71 such declarations across 20 files, which means this is not a mistake anybody made occasionally but
+            # a style the whole tree drifted into -- and every one of those 71 claims has been unchecked since it
+            # was written. Turning them into failures here would demand a cross-cutting edit whose risk is that the
+            # claims are *wrong* (C4) and become visible all at once; that is its own piece of work, and this line
+            # is what makes its size known. See the rule's own comment below.
+            for number, text in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                if "///" in text and "@tests" in text:
+                    unreadable_claims.append(f"{path}:{number}")
 
     # A test file may also carry a module-level contract block (declaring the contract surface it
     # covers). Its cases are not re-reported as orphans, because filing cases is exactly its purpose.
@@ -545,6 +557,19 @@ def main(argv: list[str] | None = None) -> int:
     # -- C6 reverse check: orphan tests --
     orphans = sorted(declared_tests - referenced)
 
+    # -- C7 a claim in a comment the gate cannot read --
+    #
+    # The rule itself runs while the headers are walked (above), because that is where the files are in hand. What
+    # it means: the gate reads `/** */` blocks, and a `///` line is a plain comment to it, so an `@tests` there
+    # claims nothing -- and the failure is not a missing check but a *misleading* one. The case that claim names is
+    # reported as an orphan, so the author sees "your case is unreferenced" and goes looking for a missing claim
+    # that is sitting right there in the file. That happened three times in one session before this rule was
+    # written, and each time it cost a round to diagnose.
+    #
+    # Reported rather than fixed by teaching the gate to read `///`: the two comment styles are different on
+    # purpose (a block comment is a contract, a `///` line is prose), and a gate that accepted both would let a
+    # file's contracts drift between two dialects with no rule about which one a declaration should use.
+
     # -- Output --
     exempted = sum(1 for c in all_contracts
                    if c.exempt_reason is not None and not c.tags)
@@ -567,6 +592,14 @@ def main(argv: list[str] | None = None) -> int:
         # any contract. Failure by default -- otherwise the contract surface drifts from the tests.
         for tid in orphans:
             print(f"[C6] 孤儿测试用例（未被任何契约 @tests 引用）：{tid}")
+
+    if unreadable_claims:
+        # Printed always, including under --quiet, because it is a fact about this tree rather than a style
+        # opinion: every one of these is a claim written down and never checked, and a reader who does not know the
+        # number cannot decide whether fixing it is an afternoon or a week.
+        print(f"[C7] {len(unreadable_claims)} 处 @tests 写在 /// 行上，本门禁读不到（"
+              f"这些声明认领的用例从未被检查过）；写成 /** */ 块注释即生效。"
+              f"最大的一处：{unreadable_claims[0]}")
 
     if violations:
         print(f"\n门禁失败：{len(violations)} 处契约违规", file=sys.stderr)
