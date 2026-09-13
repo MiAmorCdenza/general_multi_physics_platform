@@ -565,6 +565,23 @@ FieldNodes::SheetSpec FieldNodes::read_sheet_from(const graph::InputView& inputs
     // The hinge, and the one place an `InputView` is needed rather than a node: a wired tilt exists only in the
     // inputs. Zero when nothing is wired, which is the unhinged sheet.
     spec.hinge_degrees = real_or(inputs, kPortSheetHinge, 0.0);
+    spec.bz_tesla = real_or(inputs, kPortSheetBz, 0.0);
+    // The profile: the reference's `model`, where index zero -- the enum's default, and the model this node always
+    // was -- means the unflared Harris sheet. A value that is not the flaring index leaves it unflared rather than
+    // inventing a third profile.
+    const qp::ports::Value model = inputs.get(kPortSheetModel);
+    spec.flaring = model.valid() && model.as_i64() == 1;
+    // **The index, applied last because it replaces the parameters rather than adding to them.** This is the same
+    // ordering the magnetopause's evaluator branch uses for its own Kp socket: the three numbers below are one
+    // model's answer for one day, and mixing a wired index with a typed lobe field would describe a day nobody
+    // chose. A non-finite index is ignored rather than clamped -- there is no edge to clamp a NaN to, and picking a
+    // fallback silently would be choosing a day on the author's behalf.
+    const qp::ports::Value driven_kp = inputs.get(kPortSheetKp);
+    if (driven_kp.valid() && std::isfinite(driven_kp.to_double())) {
+        spec.b0_tesla = SourceNodes::lobe_field_t_for_kp(driven_kp.to_double());
+        spec.half_thickness_m = kReferenceTailHalfThicknessRe * kEarthRadiusM;
+        spec.bz_tesla = SourceNodes::tail_bz_t_for_kp(driven_kp.to_double());
+    }
     return spec;
 }
 
@@ -642,6 +659,7 @@ bool bake_current_sheet(const FieldNodes::SheetSpec& spec, const GridSpec& grid,
                         gfield::FieldSet& fields) {
     if (!bakeable(grid)) return false;
     if (!std::isfinite(spec.b0_tesla)) return false;
+    if (!std::isfinite(spec.bz_tesla)) return false;
     if (!std::isfinite(spec.half_thickness_m) || !(spec.half_thickness_m > 0.0)) return false;
     if (!std::isfinite(spec.hinge_degrees)) return false;
     // The range is **open**: `tan` has its pole at ninety degrees, so a hinge of exactly ninety is already a sheet
@@ -670,12 +688,26 @@ bool bake_current_sheet(const FieldNodes::SheetSpec& spec, const GridSpec& grid,
                 const double u = x + hinge_distance_m;
                 z_shift = 0.5 * tan_ps * (u - std::sqrt(u * u + hinge_half_width_m * hinge_half_width_m));
             }
+            // **The flaring is also a function of `x` alone, so it is hoisted with the hinge.** Two numbers move and
+            // they move differently: the sheet **thickens** downwind while its lobe field **weakens**, which is the
+            // tail's flux spreading over a wider sheet. `xt` is clipped at zero because this is a *tail* model --
+            // sunward of the Earth both factors are exactly one, since `std::pow(0.0, e)` is zero for any positive
+            // `e`, so the dayside is the unflared Harris profile to the last bit.
+            double b0_x = spec.b0_tesla;
+            double thickness_x = spec.half_thickness_m;
+            if (spec.flaring) {
+                const double xt = x < 0.0 ? -x : 0.0;
+                const double xt_relative = xt / (FieldNodes::kFlareDistanceRe * kEarthRadiusM);
+                thickness_x = spec.half_thickness_m * (1.0 + std::pow(xt_relative, FieldNodes::kFlareThicknessExponent));
+                b0_x = spec.b0_tesla / (1.0 + std::pow(xt_relative, FieldNodes::kFlareFieldExponent));
+            }
             for (std::uint32_t k = 0; k < grid.nz; ++k) {
                 const double z = grid.node_position(i, j, k).z - z_shift;
-                // **Exact zeros in the two other components**, not expressions that ought to vanish: a sheet is
-                // one-dimensional, and a `B_y` that came out as 1e-30 would be a number in the table that is not
-                // the model. The case asserts the zeros at every node, which is what keeps this honest.
-                table.set_node(i, j, k, Vec3{spec.b0_tesla * std::tanh(z / spec.half_thickness_m), 0.0, 0.0});
+                // **`B_y` is an exact zero**, not an expression that ought to vanish: a sheet is one-dimensional in
+                // `x` and `z`, and a `B_y` that came out as 1e-30 would be a number in the table that is not the
+                // model. The case asserts it at every node, which is what keeps this honest. `B_z` is **not** zero
+                // once the model carries a closed fraction -- see `kPortSheetBz` -- so it comes from the spec.
+                table.set_node(i, j, k, Vec3{b0_x * std::tanh(z / thickness_x), 0.0, spec.bz_tesla});
             }
         }
     }
@@ -1789,6 +1821,38 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     sheet_hinge.required = false;
     sheet_hinge.unit_symbol = "deg";
     sheet.inputs.push_back(sheet_hinge);
+    // The activity socket, the profile and the northward component: **appended after the grid and the hinge** rather
+    // than beside the two parameters they resemble. Port numbers are what a saved document stores, so inserting
+    // them anywhere but at the end would silently reinterpret every existing file -- and the two they resemble are
+    // the two whose meaning they take over when a wire is present.
+    graph::PortDesc sheet_kp;
+    sheet_kp.number = kPortSheetKp;
+    sheet_kp.name = "kp";
+    sheet_kp.label = "Kp (optional)";
+    sheet_kp.description = "Wire a `source.kp` here and the tail's own three numbers follow that index -- the "
+                           "reference's `tail.py`: a lobe field of `30 + 5 Kp` nanotesla, a northward component of "
+                           "`1.5 + 0.3 Kp`, and a half-thickness of 1.5 earth radii. Left empty, the parameters "
+                           "above are the tail.";
+    sheet_kp.type = qp::ports::kScalarF64;
+    sheet_kp.connectable = true;
+    sheet_kp.required = false;
+    sheet_kp.unit_symbol = "1";
+    sheet.inputs.push_back(sheet_kp);
+    graph::PortDesc sheet_model = parameter(kPortSheetModel, "model", "Profile", "", 1.0);
+    sheet_model.type = qp::ports::kEnum;
+    sheet_model.description = "The unflared Harris sheet, or the reference's flaring tail -- which thickens and "
+                              "weakens downwind, so its flux spreads. The reference's third and fourth choices are "
+                              "not here: `off` answers with a zero field, which is a legal physical state and must "
+                              "not be confused with an unconfigured node, and `kan` is the flaring expression under "
+                              "a second name.";
+    sheet_model.choice_names = {"harris", "flaring"};
+    sheet_model.choice_labels = {"Harris (unflared)", "Flaring tail"};
+    sheet.inputs.push_back(sheet_model);
+    graph::PortDesc sheet_bz = parameter(kPortSheetBz, "bz", "B z", "T", 1.0e-9);
+    sheet_bz.description = "The northward component the sheet carries everywhere, in tesla. A Harris sheet has "
+                           "none; a real tail's field lines are partly closed across it, which is what this is. "
+                           "Zero leaves the pure Harris sheet this node has always baked.";
+    sheet.inputs.push_back(sheet_bz);
     graph::PortDesc s_out;
     s_out.number = kPortField;
     s_out.name = "field";

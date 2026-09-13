@@ -302,9 +302,16 @@ int main(int argc, char** argv) {
         set(dipole, FieldNodes::kPortMomentAm2, qp::ports::Value{qp::plugins::magnetosphere::kDipoleMomentAm2});
         grid(dipole, FieldNodes::kPortOrigin0);
 
+        // The tail: the reference's own composition, which is `model = flaring` with an index on the socket. The two
+        // parameters below are what stands when **no** wire is present -- a lobe field of five nanotesla and a
+        // half-thickness of two earth radii -- and the index replaces all three of the tail's numbers at once
+        // (including the northward component the reference calls `Bz0`), because they are one model's answer for one
+        // day. At Kp 4 that is a fifty-nanotesla lobe field and a 1.5-earth-radius sheet: the realistic tail, and
+        // four times the amplitude the parameter alone would give.
         const std::size_t sheet = node(FieldNodes::kCurrentSheetType, "tail sheet");
         set(sheet, FieldNodes::kPortSheetB0, qp::ports::Value{5.0e-9});
         set(sheet, FieldNodes::kPortSheetThickness, qp::ports::Value{2.0 * re});
+        set(sheet, FieldNodes::kPortSheetModel, qp::ports::Value{std::int64_t{1}});   // the flaring profile
         grid(sheet, FieldNodes::kPortSheetOrigin0);
 
         const std::size_t sum = node(FieldNodes::kSumType, "dipole + sheet");
@@ -399,6 +406,9 @@ int main(int argc, char** argv) {
         // ... and the same index into the IMF's magnitude socket, so the storm that pulls the boundary in also
         // strengthens the field it is standing in.
         wire(driver, SourceNodes::kPortKpOut, sheath, FieldNodes::kPortImfKp);
+        // ... and into the tail's, which is the third consumer: one index now decides the boundary, the solar wind
+        // and the tail at once, which is what the reference's three `*_source` nodes exist to express.
+        wire(driver, SourceNodes::kPortKpOut, sheet, FieldNodes::kPortSheetKp);
         // The tilt socket, which is optional by construction: `field.dipole` bakes its table from
         // `tilt_degrees` when nothing is wired there and from the socket when something is.
         wire(date, SourceNodes::kPortDayOut, dipole, FieldNodes::kPortTiltDriver);

@@ -65,6 +65,62 @@ namespace pp = qp::graph::particles;
     return std::abs(a - b) / scale;
 }
 
+/// @brief The `z` index of a grid node at a given height, in earth radii.
+///
+/// A free function rather than a lambda in each case because three cases now place nodes by height, and a case that
+/// computed the index differently from its neighbours would be measuring a different node.
+[[nodiscard]] std::uint64_t row_of(const GridSpec& grid, double z_re) {
+    return static_cast<std::uint64_t>(std::lround((z_re * kEarthRadiusM - grid.origin_m.z) / grid.spacing_m.z));
+}
+
+/// @brief The `B0` and the half-thickness a baked sheet has at one column of `x`, read back out of the table.
+///
+/// `B_x = B0 tanh((z - z_shift)/L)` inverts to `atanh(B_x/B0) = (z - z_shift)/L`, which is **linear in `z`**. Two
+/// consequences: the second difference of that quantity at three equally spaced heights vanishes for the true scale,
+/// which solves for `B0` without the sheet having to saturate anywhere; and once `B0` is known, two heights give `L`
+/// exactly. No interpolation and no assumption about the spacing.
+///
+/// **A file-level helper rather than a lambda per case, and the reason is a measurement that went wrong.** The first
+/// version read `B0` where the sheet "had flattened" and was off by 3.6% -- exactly `1 - tanh(2)`, because at that
+/// column the flared sheet's scale length is twice the unflared one and eight earth radii is only two of them. Two
+/// cases now need this number, and a second copy of the inversion is a second chance to assume saturation instead.
+[[nodiscard]] std::pair<double, double> measured_profile(const gfield::FieldValue& sheet, const GridSpec& grid,
+                                                         double x_re) {
+    const auto column = static_cast<std::uint64_t>(
+        std::lround((x_re * kEarthRadiusM - grid.origin_m.x) / grid.spacing_m.x));
+    const auto sample = [&](double z_re) {
+        const std::uint64_t at =
+            (column * grid.ny + 0) * grid.nz + static_cast<std::uint64_t>(std::lround(
+                                                   (z_re * kEarthRadiusM - grid.origin_m.z) / grid.spacing_m.z));
+        return gfield::get_component(sheet, at, 0);
+    };
+    const double heights[3] = {0.0, 1.5, 3.0};        // equally spaced by 1.5 earth radii
+    const double sampled[3] = {sample(heights[0]), sample(heights[1]), sample(heights[2])};
+    const double largest = std::max({std::abs(sampled[0]), std::abs(sampled[1]), std::abs(sampled[2])});
+    const auto curvature = [&](double scale) {
+        return std::atanh(sampled[0] / scale) + std::atanh(sampled[2] / scale) -
+               2.0 * std::atanh(sampled[1] / scale);
+    };
+    // The scale must exceed every sample -- that is what `tanh` says -- and `curvature` runs from positive at that
+    // bound (`atanh` of a ratio going to one) down through zero, so the bisection has a bracket at both ends.
+    double lo = std::nextafter(largest, 2.0 * largest);
+    double hi = largest * 1.0e3;
+    REQUIRE(curvature(lo) > 0.0);
+    REQUIRE(curvature(hi) < 0.0);
+    for (int iteration = 0; iteration < 200; ++iteration) {
+        const double mid = 0.5 * (lo + hi);
+        if (curvature(mid) > 0.0) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    const double scale = 0.5 * (lo + hi);
+    const double step_m = (heights[1] - heights[0]) * kEarthRadiusM;
+    const double thickness = step_m / (std::atanh(sampled[1] / scale) - std::atanh(sampled[0] / scale));
+    return std::pair<double, double>{scale, thickness};
+}
+
 /// @brief The descriptor of `name` in a type table, or a failure when this build does not offer it.
 ///
 /// **By name, and the reason is a defect this file has now had twice.** These cases used `types[9]` and its
@@ -1473,6 +1529,280 @@ TEST_CASE("magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_impl
     REQUIRE(hinge->unit_symbol == std::string{"deg"});
     // Numbered after the nine grid ports, so no other type's numbering moved.
     REQUIRE(FieldNodes::kPortSheetHinge == FieldNodes::kPortSheetOrigin0 + 9);
+}
+
+TEST_CASE("magnetosphere.source.the_kp_index_sets_the_tails_lobe_field", "[magnetosphere]") {
+    // **The other half of the driver's job.** `source.kp`'s own case measures the two formulas that turn an index
+    // into a **magnetopause**; the reference's `tail.py` has two more, and they live beside them for the reason
+    // recorded there: `30 + 5 Kp` is a solar-wind relation that a tail model happens to use, so a tail that carried
+    // its own copy would answer "how strong are the lobes today" differently from the node next to it.
+    //
+    // Both relations are asserted against their own arithmetic at both ends of the scale, and then the whole path is
+    // measured: a driver wired into a sheet's socket has to produce a baked sheet whose lobe field is the relation's.
+    REQUIRE(relative_to(SourceNodes::lobe_field_t_for_kp(0.0), 30.0e-9) < 1.0e-15);
+    REQUIRE(relative_to(SourceNodes::lobe_field_t_for_kp(9.0), 75.0e-9) < 1.0e-15);
+    REQUIRE(relative_to(SourceNodes::tail_bz_t_for_kp(0.0), 1.5e-9) < 1.0e-15);
+    REQUIRE(relative_to(SourceNodes::tail_bz_t_for_kp(9.0), 4.2e-9) < 1.0e-15);
+    // Monotone, which is the direction the physics goes: a storm strengthens the lobes and closes more of the tail's
+    // flux. Asserted as a sweep rather than at the ends, because a law with the right endpoints can still dip.
+    for (double kp = 0.0; kp < 9.0; kp += 0.25) {
+        REQUIRE(SourceNodes::lobe_field_t_for_kp(kp) < SourceNodes::lobe_field_t_for_kp(kp + 0.25));
+        REQUIRE(SourceNodes::tail_bz_t_for_kp(kp) < SourceNodes::tail_bz_t_for_kp(kp + 0.25));
+    }
+    // ... and clamped into the scale, like every other Kp reader in this kit: an index outside it is not a storm
+    // nobody has seen but a number the scale cannot express.
+    REQUIRE(SourceNodes::lobe_field_t_for_kp(-3.0) == SourceNodes::lobe_field_t_for_kp(0.0));
+    REQUIRE(SourceNodes::lobe_field_t_for_kp(12.0) == SourceNodes::lobe_field_t_for_kp(9.0));
+    REQUIRE(SourceNodes::tail_bz_t_for_kp(-3.0) == SourceNodes::tail_bz_t_for_kp(0.0));
+    REQUIRE(SourceNodes::tail_bz_t_for_kp(12.0) == SourceNodes::tail_bz_t_for_kp(9.0));
+
+    // **The wire, end to end.** A driver at Kp = 4 into the sheet's socket, and the table it bakes: the lobe field
+    // recovered from the profile has to be `30 + 5 * 4 = 50` nanotesla, and the northward component `1.5 + 0.3 * 4`
+    // -- the two relations, arriving through a graph rather than through a direct call.
+    const double re = kEarthRadiusM;
+    const GridSpec grid{Vec3{-20.0 * re, 0.0, -6.0 * re}, Vec3{1.0 * re, 1.0 * re, 0.25 * re}, 41, 2, 49};
+    // **The node's nine ports are written from the `GridSpec` the measurement uses**, not by hand beside it. The
+    // first version of this case wrote them by hand and gave the sheet a `z` spacing of one earth radius while the
+    // measurement assumed a quarter -- so the recovery sampled rows that were all in the saturated lobe and the
+    // inversion had nothing to work with. One grid, one source of its numbers.
+    const auto place = [&grid](Scene& target, const graph::NodeId node, graph::PortNumber first) {
+        for (graph::PortNumber axis = 0; axis < 3; ++axis) {
+            target.set(node, first + axis,
+                       axis == 0 ? grid.origin_m.x : (axis == 1 ? grid.origin_m.y : grid.origin_m.z));
+            target.set(node, first + 3 + axis,
+                       axis == 0 ? grid.spacing_m.x : (axis == 1 ? grid.spacing_m.y : grid.spacing_m.z));
+            target.set(node, first + 6 + axis,
+                       static_cast<double>(axis == 0 ? grid.nx : (axis == 1 ? grid.ny : grid.nz)));
+        }
+    };
+    Scene scene;
+    const graph::NodeId driver = scene.add(SourceNodes::kKpType);
+    scene.set(driver, SourceNodes::kPortKp, 4.0);
+    const graph::NodeId tail = scene.add(FieldNodes::kCurrentSheetType);
+    place(scene, tail, FieldNodes::kPortSheetOrigin0);
+    scene.wire(driver, SourceNodes::kPortKpOut, tail, FieldNodes::kPortSheetKp);
+    REQUIRE(scene.bake().has_value());
+    const gfield::FieldValue driven = scene.fields.view(gfield::FieldKey{tail.index, FieldNodes::kPortField});
+    REQUIRE(gfield::is_readable(driven));
+
+    const auto [lobe, thickness] = measured_profile(driven, grid, -10.0);
+    REQUIRE(relative_to(lobe, SourceNodes::lobe_field_t_for_kp(4.0)) < 1.0e-9);
+    // The thickness came with the index too, and it is the reference's `L0 = 1.5` earth radii rather than the
+    // parameter's default of two -- which is what says the socket replaced the **whole** day and not one number of it.
+    REQUIRE(relative_to(thickness, FieldNodes::kReferenceTailHalfThicknessRe * re) < 1.0e-9);
+    REQUIRE_FALSE(relative_to(thickness, FieldNodes::kDefaultSheetThicknessM) < 1.0e-3);
+    // And the closed fraction, uniform at every node.
+    for (std::uint64_t point = 0; point < driven.point_count(); ++point) {
+        REQUIRE(gfield::get_component(driven, point, 2) == SourceNodes::tail_bz_t_for_kp(4.0));
+    }
+
+    // **The index is the only thing that matters, and the parameters are what stands when it is absent.** The same
+    // graph with the wire removed bakes the parameters, so an author who wants a tail that does not move with the
+    // weather has one -- and the two tables differ, which is the measurement that says the wire did something.
+    Scene unwired;
+    const graph::NodeId plain_tail = unwired.add(FieldNodes::kCurrentSheetType);
+    place(unwired, plain_tail, FieldNodes::kPortSheetOrigin0);
+    REQUIRE(unwired.bake().has_value());
+    const gfield::FieldValue parameters = unwired.fields.view(gfield::FieldKey{plain_tail.index, FieldNodes::kPortField});
+    REQUIRE(gfield::is_readable(parameters));
+    const auto [plain_lobe, plain_thickness] = measured_profile(parameters, grid, -10.0);
+    REQUIRE(relative_to(plain_lobe, FieldNodes::kDefaultSheetB0) < 1.0e-9);
+    REQUIRE(relative_to(plain_thickness, FieldNodes::kDefaultSheetThicknessM) < 1.0e-9);
+    REQUIRE(plain_lobe != lobe);
+}
+
+TEST_CASE("magnetosphere.field_nodes.the_tail_flares_and_follows_the_index", "[magnetosphere]") {
+    // **The other two thirds of the reference's `tail.py`.** The hinge came first (that case); what is left is the
+    // profile -- an unflared Harris sheet or a flaring one -- and the three numbers the reference derives from the
+    // activity index rather than taking as parameters. Both are ported as *optional*: with nothing wired and nothing
+    // chosen, this node bakes exactly what it baked before, which is asserted here bit for bit rather than assumed.
+    //
+    // Five measurements. The first is the one that says the port did not change anything for the graphs that already
+    // exist; the rest are the reference's own arithmetic, including the two ends of its flaring law.
+    const double re = kEarthRadiusM;
+    const GridSpec grid{Vec3{-32.0 * re, 0.0, -8.0 * re}, Vec3{1.0 * re, 1.0 * re, 0.25 * re}, 65, 2, 65};
+    const double b0 = 5.0e-9;
+    const double half_thickness = 2.0 * re;
+    const auto column = [&grid](double x_re) {
+        return static_cast<std::uint64_t>(std::lround((x_re * kEarthRadiusM - grid.origin_m.x) / grid.spacing_m.x));
+    };
+    /// The lobe field and the half-thickness the flaring law gives at `x`, from the **table**: `B_x` at a node well
+    /// away from the displaced plane saturates to `B0_x`, and the profile's own scale is recovered from two nodes
+    /// through `atanh` -- `B_x = B0_x tanh((z - z_shift)/L_x)` inverts to `L_x (atanh(B_x/B0_x)) = z - z_shift`, so
+    /// the difference between two heights is `L_x` times the difference of two `atanh`s, with no interpolation and
+    /// no assumption about the spacing.
+    const auto lobe_at = [&](const gfield::FieldValue& sheet, double x_re, double z_re) {
+        const std::uint64_t at = (column(x_re) * grid.ny + 0) * grid.nz + row_of(grid, z_re);
+        return gfield::get_component(sheet, at, 0);
+    };
+
+    // ---- 1. Nothing chosen, nothing wired: the sheet this node already was -----------------------------------------
+    FieldNodes::SheetSpec plain;
+    plain.b0_tesla = b0;
+    plain.half_thickness_m = half_thickness;
+    gfield::FieldSet fields;
+    const gfield::FieldKey plain_key{81, FieldNodes::kPortField};
+    REQUIRE(bake_current_sheet(plain, grid, plain_key, fields));
+    const gfield::FieldValue flat_sheet = fields.view(plain_key);
+    REQUIRE(gfield::is_readable(flat_sheet));
+    for (std::uint64_t point = 0; point < flat_sheet.point_count(); ++point) {
+        const std::uint64_t k = point % grid.nz;
+        const double z = grid.origin_m.z + static_cast<double>(k) * grid.spacing_m.z;
+        // Exactly the old expression, and `B_z` exactly zero: a pure Harris sheet, which is what a graph written
+        // before `model` and `bz` existed must keep getting.
+        REQUIRE(gfield::get_component(flat_sheet, point, 0) == b0 * std::tanh(z / half_thickness));
+        REQUIRE(gfield::get_component(flat_sheet, point, 1) == 0.0);
+        REQUIRE(gfield::get_component(flat_sheet, point, 2) == 0.0);
+    }
+
+    // ---- 2. The profile's two numbers, read back out of the table --------------------------------------------------
+    //
+    // `measured_profile` inverts the Harris profile rather than assuming it has saturated; the reasoning, and the
+    // 3.6% error that made the inversion necessary, are in its comment.
+    const auto scales_at = [&](const gfield::FieldValue& sheet, double x_re) {
+        return measured_profile(sheet, grid, x_re);
+    };
+
+    // ---- 3. The flaring law, measured at its anchors and between them ----------------------------------------------
+    //
+    // `L_x = L0 (1 + (xt/15)^0.6)` and `B0_x = B00 / (1 + (xt/15)^0.5)`, with `xt` the downtail distance clipped at
+    // zero. The clip is what makes the dayside *exactly* the unflared sheet, and the law has two anchors a course can
+    // check by hand: at `xt = 15 R_E` the thickness is exactly twice `L0` and the lobe field exactly half.
+    FieldNodes::SheetSpec flaring = plain;
+    flaring.flaring = true;
+    const gfield::FieldKey flaring_key{82, FieldNodes::kPortField};
+    REQUIRE(bake_current_sheet(flaring, grid, flaring_key, fields));
+    const gfield::FieldValue flared = fields.view(flaring_key);
+    REQUIRE(gfield::is_readable(flared));
+
+    // Sunward of the Earth, and at `x = 0`, the two profiles agree **exactly** -- not to a tolerance: `pow(0, e)` is
+    // zero, so both factors are one.
+    for (double x_re : {0.0, 4.0, 16.0, 31.0}) {
+        for (double z_re : {-4.0, -2.0, 0.0, 2.0, 4.0}) {
+            const std::uint64_t at = (column(x_re) * grid.ny + 0) * grid.nz + row_of(grid, z_re);
+            REQUIRE(gfield::get_component(flared, at, 0) == gfield::get_component(flat_sheet, at, 0));
+        }
+    }
+
+    // The unflared profile is the control: its two numbers are the parameters at **every** column, which is what
+    // says the flaring law was applied to one profile and not to both.
+    const auto [flat_scale, flat_thickness] = scales_at(flat_sheet, -15.0);
+    REQUIRE(relative_to(flat_scale, b0) < 1.0e-9);
+    REQUIRE(relative_to(flat_thickness, half_thickness) < 1.0e-9);
+
+    // At `x = 0` the flared profile is the unflared one...
+    const auto [anchor_scale, anchor_thickness] = scales_at(flared, 0.0);
+    REQUIRE(relative_to(anchor_scale, b0) < 1.0e-9);
+    REQUIRE(relative_to(anchor_thickness, half_thickness) < 1.0e-9);
+    // ... and at `xt = 15 R_E`, where the law's relative distance is exactly one, the thickness is exactly twice the
+    // unflared one and the lobe field exactly half. Asserted against the **law**, not against typed numbers.
+    const double xt_relative = 15.0 * re / (FieldNodes::kFlareDistanceRe * re);
+    REQUIRE(xt_relative == 1.0);
+    const auto [near_scale, near_thickness] = scales_at(flared, -15.0);
+    REQUIRE(relative_to(near_scale, b0 / (1.0 + std::pow(xt_relative, FieldNodes::kFlareFieldExponent))) < 1.0e-9);
+    REQUIRE(relative_to(near_thickness,
+                        half_thickness * (1.0 + std::pow(xt_relative, FieldNodes::kFlareThicknessExponent))) <
+            1.0e-9);
+    REQUIRE(relative_to(near_scale, b0 / 2.0) < 1.0e-9);
+    REQUIRE(relative_to(near_thickness, 2.0 * half_thickness) < 1.0e-9);
+    // Further downwind, where the exponents rather than the anchors decide: at 30 earth radii the relative distance
+    // is two and the two factors are `1 + 2^0.6` and `1 + sqrt(2)`.
+    const auto [far_scale, far_thickness] = scales_at(flared, -30.0);
+    REQUIRE(relative_to(far_scale, b0 / (1.0 + std::sqrt(2.0))) < 1.0e-9);
+    REQUIRE(relative_to(far_thickness, half_thickness * (1.0 + std::pow(2.0, 0.6))) < 1.0e-9);
+
+    // Monotone, both ways, over the whole tail the lattice covers: the lobe field never grows downwind and the sheet
+    // never thins. A flaring law with an exponent of the wrong sign would still hit both anchors above if its
+    // constants were chosen for them, and it could not be monotone in this direction as well.
+    double previous_scale = scales_at(flared, 0.0).first;
+    double previous_thickness = scales_at(flared, 0.0).second;
+    for (double x_re : {-5.0, -10.0, -15.0, -20.0, -25.0, -30.0}) {
+        const auto [scale, thickness] = scales_at(flared, x_re);
+        REQUIRE(scale < previous_scale);
+        REQUIRE(thickness > previous_thickness);
+        previous_scale = scale;
+        previous_thickness = thickness;
+    }
+
+    // ---- 4. The index drives three numbers at once -----------------------------------------------------------------
+    //
+    // The reference's `tail.py`: `B00 = 30 + 5 Kp` nanotesla, `Bz0 = 1.5 + 0.3 Kp` nanotesla, `L0 = 1.5 R_E`. It is
+    // one socket because it is one day: a wired index that set the lobe field but left a typed thickness would
+    // describe a tail nobody chose.
+    graph::PortValues wired;
+    wired.emplace_back(FieldNodes::kPortSheetKp, qp::ports::Value{4.0});
+    const FieldNodes::SheetSpec from_index = FieldNodes::read_sheet_from(graph::InputView{wired});
+    REQUIRE(from_index.b0_tesla == SourceNodes::lobe_field_t_for_kp(4.0));
+    REQUIRE(from_index.bz_tesla == SourceNodes::tail_bz_t_for_kp(4.0));
+    REQUIRE(from_index.half_thickness_m == FieldNodes::kReferenceTailHalfThicknessRe * re);
+    // The two relations, against their own formulas: 30 + 5 Kp and 1.5 + 0.3 Kp nanotesla.
+    REQUIRE(relative_to(SourceNodes::lobe_field_t_for_kp(0.0), 30.0e-9) < 1.0e-15);
+    REQUIRE(relative_to(SourceNodes::lobe_field_t_for_kp(9.0), 75.0e-9) < 1.0e-15);
+    REQUIRE(relative_to(SourceNodes::tail_bz_t_for_kp(0.0), 1.5e-9) < 1.0e-15);
+    REQUIRE(relative_to(SourceNodes::tail_bz_t_for_kp(9.0), 4.2e-9) < 1.0e-15);
+    // Clamped like every other Kp reader in this kit, because an index outside the scale is not a storm nobody has
+    // seen but a number the scale cannot express.
+    REQUIRE(SourceNodes::lobe_field_t_for_kp(-5.0) == SourceNodes::lobe_field_t_for_kp(0.0));
+    REQUIRE(SourceNodes::lobe_field_t_for_kp(20.0) == SourceNodes::lobe_field_t_for_kp(9.0));
+    // With nothing wired the parameters stand, and a non-finite index is **ignored** rather than clamped: there is no
+    // edge to clamp a NaN to, and choosing a fallback would be choosing a day on the author's behalf.
+    REQUIRE(FieldNodes::read_sheet(graph::Node{}).b0_tesla == FieldNodes::kDefaultSheetB0);
+    REQUIRE(FieldNodes::read_sheet(graph::Node{}).bz_tesla == 0.0);
+    REQUIRE_FALSE(FieldNodes::read_sheet(graph::Node{}).flaring);
+    graph::PortValues nan_kp;
+    nan_kp.emplace_back(FieldNodes::kPortSheetKp, qp::ports::Value{std::nan("")});
+    nan_kp.emplace_back(FieldNodes::kPortSheetB0, qp::ports::Value{b0});
+    REQUIRE(FieldNodes::read_sheet_from(graph::InputView{nan_kp}).b0_tesla == b0);
+
+    // ---- 5. The northward component, which is what makes it more than a Harris sheet ---------------------------------
+    //
+    // A Harris sheet has no `B_z`; the reference's tail carries `Bz0` at every node, because part of a real tail's
+    // flux is closed across it. It is applied **uniformly**, including where `B_x` vanishes -- the plane is where the
+    // field is *northward* rather than zero, and a model that only added `B_z` away from the plane would have a
+    // current sheet that no longer reverses cleanly.
+    FieldNodes::SheetSpec closed = plain;
+    closed.bz_tesla = 2.1e-9;
+    const gfield::FieldKey closed_key{83, FieldNodes::kPortField};
+    REQUIRE(bake_current_sheet(closed, grid, closed_key, fields));
+    const gfield::FieldValue with_bz = fields.view(closed_key);
+    REQUIRE(gfield::is_readable(with_bz));
+    for (std::uint64_t point = 0; point < with_bz.point_count(); ++point) {
+        REQUIRE(gfield::get_component(with_bz, point, 2) == 2.1e-9);
+        REQUIRE(gfield::get_component(with_bz, point, 1) == 0.0);
+        // The `x` component is unchanged by the closed fraction: the two are independent parts of the model, which is
+        // what lets a reader reason about them separately.
+        REQUIRE(gfield::get_component(with_bz, point, 0) == gfield::get_component(flat_sheet, point, 0));
+    }
+    // ... and a non-finite component is refused rather than baked, like every other non-finite parameter here.
+    FieldNodes::SheetSpec broken = closed;
+    broken.bz_tesla = std::nan("");
+    REQUIRE_FALSE(bake_current_sheet(broken, grid, gfield::FieldKey{84, FieldNodes::kPortField}, fields));
+
+    // ---- 6. The declaration ---------------------------------------------------------------------------------------
+    const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
+    const graph::NodeDesc& sheet_type = type_named(types, FieldNodes::kCurrentSheetType);
+    const graph::PortDesc* kp_port = sheet_type.find_port(FieldNodes::kPortSheetKp, false);
+    REQUIRE(kp_port != nullptr);
+    REQUIRE(kp_port->connectable);
+    REQUIRE_FALSE(kp_port->required);
+    REQUIRE(kp_port->unit_symbol == std::string{"1"});
+    const graph::PortDesc* model_port = sheet_type.find_port(FieldNodes::kPortSheetModel, false);
+    REQUIRE(model_port != nullptr);
+    REQUIRE(model_port->type == qp::ports::kEnum);
+    REQUIRE_FALSE(model_port->connectable);
+    // Two choices, in the order that is part of the stored document: `harris` is index zero, which is the profile
+    // this node baked before the port existed.
+    REQUIRE(model_port->choice_names.size() == 2);
+    REQUIRE(model_port->choice_names.front() == std::string{"harris"});
+    REQUIRE(model_port->choice_names.back() == std::string{"flaring"});
+    const graph::PortDesc* bz_port = sheet_type.find_port(FieldNodes::kPortSheetBz, false);
+    REQUIRE(bz_port != nullptr);
+    REQUIRE_FALSE(bz_port->connectable);
+    REQUIRE(bz_port->unit_symbol == std::string{"T"});
+    // Numbered after the hinge socket, so no existing document's ports moved.
+    REQUIRE(FieldNodes::kPortSheetKp == FieldNodes::kPortSheetHinge + 1);
+    REQUIRE(FieldNodes::kPortSheetModel == FieldNodes::kPortSheetHinge + 2);
+    REQUIRE(FieldNodes::kPortSheetBz == FieldNodes::kPortSheetHinge + 3);
 }
 
 TEST_CASE("magnetosphere.field_nodes.the_tail_sheet_hinges_with_the_dipole", "[magnetosphere]") {

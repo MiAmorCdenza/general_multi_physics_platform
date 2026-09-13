@@ -133,6 +133,59 @@ public:
     [[nodiscard]] static double flaring_for_kp(double kp) noexcept;
 
     /**
+     * @brief The tail's lobe field the index implies: `(30 + 5 Kp)` nanotesla, in tesla.
+     *
+     * The reference's third and fourth Kp formulas, from `tail.py`, and they are here for the reason the two above
+     * are: `30 + 5 Kp` is a **solar-wind** relation that a tail model happens to use, not a property of a current
+     * sheet. A sheet that carried its own copy would answer "how strong is the lobe at this activity" differently
+     * from the node next to it, and the difference would show up as a picture that is subtly out of proportion
+     * rather than as a refusal.
+     *
+     * The numbers bracket the observed tail: at `Kp = 0` the lobes carry thirty nanotesla and at `Kp = 9` seventy
+     * -five, which is the range a magnetometer in the mid-tail actually reports. Note how much larger they are than
+     * this kit's own default for the same parameter (five nanotesla, chosen before there was a driver for it): the
+     * reference's index-driven value is the realistic one, and the parameter is what an experiment uses when it
+     * wants to hold the tail still.
+     *
+     * @param kp The index, with the same clamping rule as the standoff.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        A field in `[30, 75]` nanotesla for `kp` in range
+     * @invariant   Monotonically increasing in `kp`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.source.the_kp_index_sets_the_tails_lobe_field
+     */
+    [[nodiscard]] static double lobe_field_t_for_kp(double kp) noexcept;
+
+    /**
+     * @brief The tail's northward component the index implies: `(1.5 + 0.3 Kp)` nanotesla, in tesla.
+     *
+     * The component that makes the reference's tail **not** a pure Harris sheet: a Harris sheet has no `B_z` at all,
+     * and a real tail's field lines are partly closed across it. At `Kp = 0` it is 1.5 nanotesla and at `Kp = 9` it
+     * is 4.2, so the closed fraction grows with activity -- which is the direction the physics goes, and the reason
+     * this is a Kp formula rather than a constant.
+     *
+     * @param kp The index, with the same clamping rule as the standoff.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        A field in `[1.5, 4.2]` nanotesla for `kp` in range
+     * @invariant   Monotonically increasing in `kp`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.source.the_kp_index_sets_the_tails_lobe_field
+     */
+    [[nodiscard]] static double tail_bz_t_for_kp(double kp) noexcept;
+
+    /**
      * @brief The index a node carries, clamped into the scale's range.
      *
      * Clamped rather than refused, and the reason is the same one the parameter readers give everywhere: a
@@ -194,6 +247,15 @@ public:
     static constexpr double kDayTiltOffsetDegrees = 11.0;
     /// @brief The length of the year the formula uses, in days: the tropical year, as the reference has it.
     static constexpr double kDaysPerYear = 365.25;
+
+    /// @brief The tail's lobe field at `Kp = 0`, in nanotesla: the reference's `30`.
+    static constexpr double kReferenceTailLobeBaseNt = 30.0;
+    /// @brief How much the lobe field grows per unit of the index: the reference's `5`.
+    static constexpr double kReferenceTailLobePerKpNt = 5.0;
+    /// @brief The tail's northward component at `Kp = 0`, in nanotesla: the reference's `1.5`.
+    static constexpr double kReferenceTailBzBaseNt = 1.5;
+    /// @brief How much that component grows per unit of the index: the reference's `0.3`.
+    static constexpr double kReferenceTailBzPerKpNt = 0.3;
 
     /**
      * @brief The dipole tilt a date implies, in **degrees**: `offset + obliquity cos(2 pi (day - 172) / 365.25)`.

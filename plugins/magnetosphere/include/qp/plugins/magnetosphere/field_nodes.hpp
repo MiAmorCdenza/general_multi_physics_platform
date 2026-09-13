@@ -660,6 +660,46 @@ public:
     /// multiplying by `tan(0)`.
     static constexpr qp::graph::PortNumber kPortSheetHinge = 12;
 
+    /// @brief The activity socket: wire a `source.kp` here and the tail's own three numbers follow that index.
+    ///
+    /// ## One socket that sets three numbers, and why it is still one socket
+    ///
+    /// The reference's `tail.py` derives everything about the sheet from the index: `B00 = 30 + 5 Kp` nanotesla for
+    /// the lobe field, `Bz0 = 1.5 + 0.3 Kp` for the northward component, and `L0 = 1.5 R_E` for the half-thickness.
+    /// This port makes that available **without taking the parameters away**: with nothing wired, `b0` and
+    /// `half_thickness` (and `bz`) are the model, which is what every graph written before this port means and what
+    /// an experiment that wants to hold the tail still uses; with a wire, the index decides and the parameters are
+    /// the fallback. That is the shape `field.magnetopause`'s Kp socket established and the reason it exists there:
+    /// a driver that set one of a model's numbers would leave the others describing a different day.
+    ///
+    /// The relations themselves are the **driver's** (`SourceNodes::lobe_field_t_for_kp` and
+    /// `tail_bz_t_for_kp`), for the reason recorded there: `30 + 5 Kp` is a solar-wind relation that a tail model
+    /// happens to use, not a property of a current sheet.
+    static constexpr qp::graph::PortNumber kPortSheetKp = 13;
+
+    /// @brief Which Harris profile the sheet carries, as an enum: the reference's `model`, minus what it refuses.
+    ///
+    /// The reference offers four choices -- `off`, `harris`, `flaring`, `kan` -- and this port offers two, for
+    /// reasons that are each a decision rather than a simplification:
+    ///
+    ///   - **`off` is not ported.** It answers with `(0, 0, 0)`, and a zero field is a legal physical state: a node
+    ///     whose "switched off" and "the tail is zero" look the same is reporting an unconfigured value as a
+    ///     measurement. A graph that wants no tail deletes the node, or masks it.
+    ///   - **`kan` is not ported as a third name.** The reference's own comment says it and `flaring` are *the same
+    ///     expression*, so offering both would be two names for one model -- a document that said `kan` would load
+    ///     as `flaring` and nobody would know which one they had chosen.
+    ///
+    /// The default is `harris`, which is the model this node already was: a graph written before this port existed
+    /// keeps its field **bit for bit**, and the case asserts that rather than assuming it.
+    static constexpr qp::graph::PortNumber kPortSheetModel = 14;
+
+    /// @brief The northward component the sheet carries, in tesla: the reference's `Bz0`.
+    ///
+    /// A Harris sheet has no `B_z` at all, and a real tail's field lines are partly **closed** across it, so the
+    /// reference adds a uniform component. Zero is this port's default and is what the node baked before the port
+    /// existed; the Kp socket supplies `1.5 + 0.3 Kp` nanotesla when one is wired.
+    static constexpr qp::graph::PortNumber kPortSheetBz = 15;
+
     /// @brief The hinge distance, in earth radii: how far downtail the sheet stops following the dipole.
     static constexpr double kHingeDistanceRe = 10.0;
     /// @brief The hinge's rounding length, in earth radii.
@@ -674,6 +714,18 @@ public:
     /// @brief The default lobe field, in tesla: five nanotesla, the quiet-time tail's order.
     static constexpr double kDefaultSheetB0 = 5.0e-9;
     /// @brief The default half-thickness, in metres: two earth radii.
+    /// @brief The unflared half-thickness the reference's index-driven tail uses, in earth radii.
+    ///
+    /// The reference writes `L0 = 1.5` and this kit's own default is two, so the two are close and were chosen
+    /// independently -- which is worth stating rather than quietly reconciling: the parameter is what an author
+    /// types, and the index-driven value is the model's.
+    static constexpr double kReferenceTailHalfThicknessRe = 1.5;
+    /// @brief The distance over which the reference's tail flares, in earth radii: the `15` in `xt / 15`.
+    static constexpr double kFlareDistanceRe = 15.0;
+    /// @brief How the half-thickness grows downwind: the reference's exponent `0.6`.
+    static constexpr double kFlareThicknessExponent = 0.6;
+    /// @brief How the lobe field decays downwind: the reference's exponent `0.5`.
+    static constexpr double kFlareFieldExponent = 0.5;
     static constexpr double kDefaultSheetThicknessM = 2.0 * kEarthRadiusM;
 
     /// @brief What a current-sheet node's parameters say.
@@ -691,6 +743,14 @@ public:
         double b0_tesla = kDefaultSheetB0;
         /// The half-thickness, in metres.
         double half_thickness_m = kDefaultSheetThicknessM;
+        /// The northward component, in tesla, applied uniformly. Zero is a **pure Harris sheet** and is what the
+        /// sheet baked before `kPortSheetBz` existed -- asserted bit for bit rather than assumed.
+        double bz_tesla = 0.0;
+        /// Whether the sheet flares downwind: the reference's `flaring` model.
+        ///
+        /// A `bool` in the spec rather than the enum index it is read from, for the reason `ImfSpec::polarity`
+        /// gives: the spec is the model's vocabulary and the panel's stops at the reader.
+        bool flaring = false;
         /// The hinge tilt, in degrees, from `kPortSheetHinge`. Zero when nothing is wired, which is the
         /// unhinged sheet and is what a graph written before that port existed carries.
         ///
@@ -1753,17 +1813,25 @@ public:
                                    qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
 
 /**
- * @brief Bakes a Harris current sheet `B = (B0 tanh((z - z_shift(x))/L), 0, 0)` onto `grid`.
+ * @brief Bakes a Harris current sheet `B = (B_x tanh((z - z_shift(x))/L_x), 0, Bz0)` onto `grid`.
  *
  * The model, its parameters and the current it implies are argued on `kCurrentSheetType`; the hinge and its three
- * properties are argued on `kPortSheetHinge`. What belongs here is what the arithmetic decides:
+ * properties are argued on `kPortSheetHinge`; the two profiles on `kPortSheetModel`, and the activity-driven numbers
+ * on `kPortSheetKp`. What belongs here is what the arithmetic decides:
  *
  *   - `tanh` is evaluated per node from the node's own `z` **displaced by the hinge**, and the displacement is a
  *     function of that node's `x` alone -- the sheet stays one-dimensional in the hinged coordinate, which is why
  *     it still carries a current in `y` and nothing else.
- *   - The other two components are written as **exact zeros** rather than as expressions that happen to be small.
- *     A sheet is one-dimensional; a `B_y` computed from a formula that ought to vanish would leave a number in the
- *     table that is not the model, and the case that checks them at every node is what keeps that honest.
+ *   - `B_y` is written as an **exact zero** rather than as an expression that happens to be small: a sheet is
+ *     one-dimensional in `x` and `z`, and a `B_y` computed from a formula that ought to vanish would leave a number
+ *     in the table that is not the model. The case checks it at every node. `B_z` is **not** zero once the model
+ *     carries a closed fraction -- see `kPortSheetBz` -- so it is written from the spec instead.
+ *   - the flaring profile moves **two** numbers with distance, and they move differently: the half-thickness grows
+ *     as `L0 (1 + (xt/15)^0.6)` while the lobe field decays as `B00 / (1 + (xt/15)^0.5)`, which is the tail's flux
+ *     spreading over a wider sheet. `xt` is the downtail distance clipped at zero, and the clip is the model saying
+ *     that this is a *tail*: sunward of the Earth both factors are exactly one -- `std::pow(0.0, e)` is zero for
+ *     any positive `e` -- so the dayside is the unflared Harris profile to the last bit, and the case asserts that
+ *     at `x = 0` rather than treating it as an approximation.
  *   - A hinge of exactly zero **skips the transform** rather than evaluating `0.5 tan(0) (u - sqrt(u^2 + a^2))`.
  *     Two reasons, and the second is the one that made it a decision: the product is `0 * inf` -- a NaN -- for
  *     coordinates large enough that `u^2` overflows, and "no hinge" has to be bit-for-bit the same table as the
@@ -1775,7 +1843,7 @@ public:
  * wrong way to write it: `+ 16.0` on a metre-scale `u` is twelve orders of magnitude too small and leaves a sheet
  * that still looks smooth, because the constant only rounds the corner and never touches the far-tail slope.
  *
- * @param spec  The lobe field, the half-thickness and the hinge, in SI and degrees. A hinge outside the **open**
+ * @param spec  The lobe field, the half-thickness, the northward component, the hinge in degrees and the profile. A hinge outside the **open**
  *              interval `(-90, 90)` degrees is refused: `tan` has its pole at ninety, so the endpoints themselves
  *              are already a sheet on edge, and a model that accepted them would bake a table of saturated lobe
  *              field out of a number that is really an infinity.
@@ -1787,16 +1855,18 @@ public:
  * @thread      main
  * @pre         none
  * @post        On true, `fields.view(key)` is a readable vector volume in tesla whose `x` component is
- *              `B0 tanh((z - z_shift(x))/L)` at every node and whose other two are zero
+ *              `B_x tanh((z - z_shift(x))/L_x)` at every node, whose `y` component is zero and whose `z` component
+ *              is `Bz0`
  * @invariant   On false the store is unchanged
- * @errors      Returns false -- never throws -- for a non-finite lobe field, a non-positive or non-finite
- *              half-thickness, a non-finite hinge or one outside `(-90, 90)` degrees, or a grid that cannot be
- *              baked
+ * @errors      Returns false -- never throws -- for a non-finite lobe field, a non-finite northward component, a
+ *              non-positive or non-finite half-thickness, a non-finite hinge or one outside `(-90, 90)` degrees, or
+ *              a grid that cannot be baked
  * @complexity  O(points)
  * @nondet      none
  * @frozen      no
  * @tests       magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_implies,
- *              magnetosphere.field_nodes.the_tail_sheet_hinges_with_the_dipole
+ *              magnetosphere.field_nodes.the_tail_sheet_hinges_with_the_dipole,
+ *              magnetosphere.field_nodes.the_tail_flares_and_follows_the_index
  */
 [[nodiscard]] bool bake_current_sheet(const FieldNodes::SheetSpec& spec, const GridSpec& grid,
                                       qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);

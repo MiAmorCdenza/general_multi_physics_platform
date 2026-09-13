@@ -62,6 +62,20 @@ double SourceNodes::flaring_for_kp(double kp) noexcept {
     return 0.55 + clamped * 0.02;
 }
 
+double SourceNodes::lobe_field_t_for_kp(double kp) noexcept {
+    const double clamped = std::clamp(kp, kMinKp, kMaxKp);
+    // Nanotesla on the way in, tesla on the way out: the reference writes `30 + 5 Kp` and means nanotesla, and the
+    // port the value eventually lands on says `T`, so the conversion happens once, here, where the relation is
+    // written down. A consumer that converted again would be wrong by nine orders of magnitude and would still
+    // produce a smooth tail.
+    return (kReferenceTailLobeBaseNt + clamped * kReferenceTailLobePerKpNt) * 1.0e-9;
+}
+
+double SourceNodes::tail_bz_t_for_kp(double kp) noexcept {
+    const double clamped = std::clamp(kp, kMinKp, kMaxKp);
+    return (kReferenceTailBzBaseNt + clamped * kReferenceTailBzPerKpNt) * 1.0e-9;
+}
+
 double SourceNodes::read_kp(const graph::Node& node) noexcept {
     return std::clamp(raw_kp(node), kMinKp, kMaxKp);
 }
