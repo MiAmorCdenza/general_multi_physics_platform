@@ -150,8 +150,7 @@ bool bake_uniform(const Vec3& value, const GridSpec& grid, gfield::FieldKey key,
 }
 
 bool bake_sum(const gfield::FieldValue& a, const gfield::FieldValue& b, gfield::FieldKey key,
-              gfield::FieldSet& fields) {
-    if (!gfield::is_readable(a) || !gfield::is_readable(b)) return false;
+              gfield::FieldSet& fields) {    if (!gfield::is_readable(a) || !gfield::is_readable(b)) return false;
     if (a.kind() != gfield::Kind::Volume || b.kind() != gfield::Kind::Volume) return false;
     if (!a.is_vector() || !b.is_vector()) return false;
     if (a.desc.element != qp::abi::ElementType::f64 || b.desc.element != qp::abi::ElementType::f64) return false;
@@ -169,6 +168,93 @@ bool bake_sum(const gfield::FieldValue& a, const gfield::FieldValue& b, gfield::
     for (std::size_t i = 0; i < values; ++i) sums[i] = left[i] + right[i];
 
     return fields.publish(key, a.desc, std::move(sums));
+}
+
+const char* FieldNodes::to_string(MaskRegion region) noexcept {
+    switch (region) {
+        case MaskRegion::sphere: return "sphere";
+        case MaskRegion::shell: return "shell";
+        case MaskRegion::dayside: return "dayside";
+        case MaskRegion::nightside: return "nightside";
+    }
+    return "sphere";
+}
+
+FieldNodes::MaskSpec FieldNodes::read_mask_from(const graph::InputView& inputs) noexcept {
+    MaskSpec mask;
+    const double region = real_or(inputs, kPortMaskRegion, 0.0);
+    // The choice is clamped rather than refused, for the reason the parameter readers give everywhere in this kit:
+    // a half-filled node is a graph being edited, and refusing to bake it would make the picture vanish while the
+    // user is still choosing.
+    const auto index = static_cast<std::int32_t>(region);
+    mask.region = index >= 0 && index < static_cast<std::int32_t>(kMaskRegionCount)
+                      ? static_cast<MaskRegion>(index)
+                      : MaskRegion::sphere;
+    mask.r0_m = real_or(inputs, kPortMaskR0, kDefaultMaskR0Re * kEarthRadiusM);
+    mask.r1_m = real_or(inputs, kPortMaskR1, kDefaultMaskR1Re * kEarthRadiusM);
+    // Ordered here rather than rejected, which is the reference implementation's own choice and the right one: a
+    // user who swaps the two radii has said something meaningful -- the same shell -- and an empty mask would look
+    // like a broken node.
+    if (mask.r1_m < mask.r0_m) std::swap(mask.r0_m, mask.r1_m);
+    return mask;
+}
+
+FieldNodes::MaskSpec FieldNodes::read_mask(const graph::Node& node) noexcept {
+    // One reader for two sources: the node's parameters are put into the same `InputView` shape the evaluator is
+    // handed, so there is exactly one place where "port 2 is r0" is interpreted. The view borrows `values`, which
+    // lives until this call returns -- long enough, because the result is a value.
+    graph::PortValues values;
+    values.reserve(node.params.size());
+    for (const graph::ParamValue& p : node.params) values.emplace_back(p.number, p.value);
+    return read_mask_from(graph::InputView{values});
+}
+
+bool bake_mask(const FieldNodes::MaskSpec& mask, const GridSpec& grid, gfield::FieldKey key,
+               gfield::FieldSet& fields) {
+    if (!bakeable(grid)) return false;
+    if (!std::isfinite(mask.r0_m) || !std::isfinite(mask.r1_m)) return false;
+    // **Refused rather than reordered, and the difference from the reader is the point.** `read_mask` orders the
+    // two radii, because a user who swaps them in the property panel has described the same shell and the
+    // invariant on `MaskSpec` says so. A spec that arrives here reversed was *built* reversed -- by a caller that
+    // did not use the reader -- and baking it would produce an empty weight table, which is indistinguishable
+    // from a region that happens to contain no nodes. That is the failure shape this repository refuses
+    // everywhere else: a plausible-looking result of the wrong kind rather than a refusal.
+    if (mask.r1_m < mask.r0_m) return false;
+
+    // **Dimensionless**, and that is a real dimension rather than a missing one: a weight is a pure number. The
+    // descriptor is built by the same `make_lattice` every other bake uses, so a consumer that reads the
+    // component count sees one and not three.
+    const qp::abi::FieldDim none{};
+    const qp::abi::LatticeDesc desc =
+        qp::abi::make_lattice(qp::abi::LatticeKind::volume, qp::abi::ComponentKind::scalar,
+                              qp::abi::ElementType::f64, none, grid.nx, grid.ny, grid.nz);
+    if (desc.component != qp::abi::ComponentKind::scalar) return false;
+
+    std::vector<double> weights(static_cast<std::size_t>(grid.point_count()), 0.0);
+    std::size_t at = 0;
+    for (std::uint32_t i = 0; i < grid.nx; ++i) {
+        for (std::uint32_t j = 0; j < grid.ny; ++j) {
+            for (std::uint32_t k = 0; k < grid.nz; ++k) {
+                const Vec3 point = grid.node_position(i, j, k);
+                const double radius = norm(point);
+                bool inside = false;
+                switch (mask.region) {
+                    case FieldNodes::MaskRegion::sphere: inside = radius < mask.r0_m; break;
+                    case FieldNodes::MaskRegion::shell:
+                        inside = radius >= mask.r0_m && radius < mask.r1_m;
+                        break;
+                    // The terminator plane through the centre, and the simplification is stated rather than
+                    // hidden: the reference implementation puts it ten earth radii downwind, because that is where
+                    // a *magnetopause* stands. That standoff is a property of the boundary model, not of a mask,
+                    // and when the kit grows one this becomes its parameter.
+                    case FieldNodes::MaskRegion::dayside: inside = point.x > 0.0; break;
+                    case FieldNodes::MaskRegion::nightside: inside = point.x <= 0.0; break;
+                }
+                weights[at++] = inside ? 1.0 : 0.0;
+            }
+        }
+    }
+    return fields.publish(key, desc, std::move(weights));
 }
 
 std::vector<graph::NodeDesc> FieldNodes::node_types() {
@@ -346,7 +432,69 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {
     e_out.unit_symbol = "V/m";
     electric.outputs.push_back(e_out);
 
-    return {std::move(dipole), std::move(uniform), std::move(sum), std::move(electric)};
+    // ---------------- the region mask ----------------
+    //
+    // **A different kind of product**, and the descriptor says so: this is the kit's first node whose output is a
+    // scalar field. Two sockets in this tree want one -- the pusher's drag socket and the `mul` this enables -- and
+    // until this type existed nothing could produce one, so a graph could declare a drag socket it had no way to
+    // fill. The weight is dimensionless, and a consumer that assumed three components per node would read its own
+    // samples out of alignment.
+    graph::NodeDesc mask;
+    mask.type_name = kMaskType;
+    mask.label = "Region mask";
+    mask.description = "A weight field that is 1 inside a named region and 0 outside it: a sphere, a shell, or the "
+                       "sunward or anti-sunward half-space. Wire it into a multiplier to modulate a field, or "
+                       "straight into a pusher's drag socket for a drag that acts only where the atmosphere is.";
+    mask.category = "field";
+    mask.version = 1;
+    mask.allow_in_field_domain = true;
+    mask.allow_in_particle_domain = false;
+    mask.has_compute = true;
+    graph::PortDesc region;
+    region.number = kPortMaskRegion;
+    region.name = "region";
+    region.label = "Region";
+    region.description = "Which region the weight covers: 0 sphere, 1 shell, 2 dayside, 3 nightside.";
+    region.type = qp::ports::kInt64;
+    region.connectable = false;
+    region.required = true;
+    region.step = 1.0;
+    mask.inputs.push_back(region);
+    graph::PortDesc inner = parameter(kPortMaskR0, "r0", "Inner radius", "m", kEarthRadiusM);
+    inner.description = "The region's inner radius. Used by `sphere` (everything inside) and `shell`.";
+    mask.inputs.push_back(inner);
+    graph::PortDesc outer = parameter(kPortMaskR1, "r1", "Outer radius", "m", kEarthRadiusM);
+    outer.description = "The region's outer radius, used by `shell`. The two are ordered on reading, so swapping "
+                        "them describes the same shell rather than an empty one.";
+    mask.inputs.push_back(outer);
+    for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+        const char* names[9] = {"origin_x", "origin_y", "origin_z", "spacing_x", "spacing_y",
+                                "spacing_z", "count_x",  "count_y",   "count_z"};
+        const char* labels[9] = {"Grid origin x", "Grid origin y", "Grid origin z",   "Grid spacing x",
+                                 "Grid spacing y", "Grid spacing z", "Nodes along x", "Nodes along y",
+                                 "Nodes along z"};
+        const char* units[9] = {"m", "m", "m", "m", "m", "m", "", "", ""};
+        const double steps[9] = {kEarthRadiusM, kEarthRadiusM, kEarthRadiusM, 0.1 * kEarthRadiusM,
+                                 0.1 * kEarthRadiusM, 0.1 * kEarthRadiusM, 1.0, 1.0, 1.0};
+        // Its **own** grid ports, and after the three parameters rather than after the vector nodes' three
+        // components: the port numbers are per type, and this type's second socket is a radius rather than a field
+        // component. Reusing the uniform node's numbering here is what produced a registration collision once
+        // already (`§9.14`), and the rule that came out of it is that every type owns its own numbers.
+        mask.inputs.push_back(
+            parameter(kPortMaskOrigin0 + offset, names[offset], labels[offset], units[offset], steps[offset]));
+    }
+    graph::PortDesc w_out;
+    w_out.number = kPortWeight;
+    w_out.name = "weight";
+    w_out.label = "Weight";
+    w_out.description = "The baked weight: 0 or 1 at every node, dimensionless.";
+    w_out.type = qp::ports::kScalarField;
+    w_out.connectable = true;
+    w_out.required = false;
+    w_out.unit_symbol = "1";
+    mask.outputs.push_back(w_out);
+
+    return {std::move(dipole), std::move(uniform), std::move(sum), std::move(electric), std::move(mask)};
 }
 
 gfield::FieldValue DipoleEvaluator::input_field(const graph::NodeId id, const graph::PortNumber port) const noexcept {
@@ -368,6 +516,23 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
     graph::NodeId id, const graph::NodeDesc& desc,
     const std::vector<std::pair<graph::PortNumber, qp::ports::Value>>& inputs) {
     using Outcome = std::vector<std::pair<graph::PortNumber, qp::ports::Value>>;
+    if (desc.type_name == FieldNodes::kMaskType) {
+        // The mask reads its grid from a **different** port offset than the vector nodes -- after three parameters
+        // rather than after three components -- which is why the reader takes the offset rather than assuming it.
+        const graph::InputView mask_view{inputs};
+        const FieldNodes::MaskSpec mask = FieldNodes::read_mask_from(mask_view);
+        const GridSpec mask_grid = FieldNodes::read_from(mask_view, FieldNodes::kPortMaskOrigin0);
+        const gfield::FieldKey mask_key{id.index, FieldNodes::kPortWeight};
+        if (!bake_mask(mask, mask_grid, mask_key, *fields_)) {
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        Outcome out;
+        // The handle names a **scalar** lattice, and the port it comes out of is the weight port: the pair is what
+        // a consumer looks the samples up by, so a mask that published under the vector port number would hand a
+        // reader three-component samples it does not have.
+        out.emplace_back(FieldNodes::kPortWeight, qp::ports::Value{fields_->view(mask_key).desc});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
     if (desc.type_name == FieldNodes::kUniformElectricType) {
         const graph::InputView electric_view{inputs};
         const Vec3 value{real_or(electric_view, FieldNodes::kPortE0, 0.0),

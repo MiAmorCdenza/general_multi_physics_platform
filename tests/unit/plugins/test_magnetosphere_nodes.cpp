@@ -78,8 +78,10 @@ struct Scene final {
     graph::EvalResult result{};
 
     Scene() {
-        // Three field models now: the dipole, the uniform field and the sum.
-        REQUIRE(FieldNodes::mount(host) == 4);
+        // Five field models now: the dipole, the uniform field, the sum, the uniform electric field and the
+        // region mask. Each is a **type of its own** with its own port numbers, which is the composition
+        // principle -- a shielding field is `mul(convection, shield)`, not a switch inside a node.
+        REQUIRE(FieldNodes::mount(host) == 5);
         REQUIRE(PusherNodes::mount(host) == 1);
     }
 
@@ -170,14 +172,29 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // declaration never made. The check is that every port the reader asks for exists, with the type the reader
     // needs, and that the output is the field port a pusher can be wired to.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    // Two field models: the dipole and the uniform field. Each is a **type of its own** with its own port
-    // numbers, which is the composition principle -- a shielding field is `mul(convection, shield)`, not a
-    // switch inside a node -- and what the uniform field was added to make demonstrable.
-    REQUIRE(types.size() == 4);
+    // Five field models: the dipole, the uniform magnetic field, the sum, the uniform electric field and the
+    // region mask. Each is a **type of its own** with its own port numbers, which is the composition principle --
+    // a shielding field is `mul(convection, shield)`, not a switch inside a node.
+    REQUIRE(types.size() == 5);
     REQUIRE(types[0].type_name == FieldNodes::kDipoleType);
     REQUIRE(types[1].type_name == FieldNodes::kUniformType);
     REQUIRE(types[2].type_name == FieldNodes::kSumType);
     REQUIRE(types[3].type_name == FieldNodes::kUniformElectricType);
+    // The mask is last, and its output is the one thing that distinguishes it from every other type here: a
+    // **scalar** field. The declaration and the bake have to agree about that, because a consumer reads its
+    // samples by the component count the registry publishes.
+    REQUIRE(types[4].type_name == FieldNodes::kMaskType);
+    REQUIRE(types[4].has_compute);
+    REQUIRE(types[4].allow_in_field_domain);
+    REQUIRE_FALSE(types[4].allow_in_particle_domain);
+    const graph::PortDesc* weight = types[4].find_port(FieldNodes::kPortWeight, /*is_output=*/true);
+    REQUIRE(weight != nullptr);
+    REQUIRE(weight->connectable);
+    REQUIRE(weight->type == qp::ports::kScalarField);
+    const qp::ports::PortTypeDesc* scalar = qp::ports::builtin_registry().find(qp::ports::kScalarField);
+    REQUIRE(scalar != nullptr);
+    REQUIRE(scalar->is_field());
+    REQUIRE(scalar->field_components == 1);
     const graph::NodeDesc& dipole = types.front();
     REQUIRE(dipole.type_name == FieldNodes::kDipoleType);
     REQUIRE(dipole.valid());
@@ -225,10 +242,127 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // Mounting is what makes the type reachable from a running program rather than only from a test fixture. The
     // second mount registers nothing, because a name that is taken is left alone rather than duplicated.
     qp::host::PluginHost host{qp::plugin::Capability::node_types};
-    // Three field models now: the dipole, the uniform field and the sum.
-        REQUIRE(FieldNodes::mount(host) == 4);
+    // Five field models now, and the count is asserted rather than assumed: it is the one place a new type
+    // announces itself in the test suite, so a type that silently failed to register is a failure here.
+    REQUIRE(FieldNodes::mount(host) == 5);
     REQUIRE(host.node_types().find(FieldNodes::kDipoleType) != nullptr);
     REQUIRE(FieldNodes::mount(host) == 0);
+}
+
+TEST_CASE("magnetosphere.field_nodes.a_mask_weights_the_region_it_names", "[magnetosphere]") {
+    // **The kit's first scalar product**, and the case is built around the two things that can be wrong about one:
+    // the **region test** (which nodes are inside) and the **shape of the table** (one number per node, not three).
+    // The second is the one that would go unnoticed for a while -- a consumer reading three-component samples out
+    // of a one-component table reads its own values out of alignment, and the numbers it gets are other nodes'
+    // values rather than nothing.
+    //
+    // Every node is checked rather than sampled: a region test that is right at the origin and wrong at one corner
+    // is a weight with a hole in it, and a picture would not show it.
+    const GridSpec grid{Vec3{-2.0 * kEarthRadiusM, -2.0 * kEarthRadiusM, -2.0 * kEarthRadiusM},
+                        Vec3{0.5 * kEarthRadiusM, 0.5 * kEarthRadiusM, 0.5 * kEarthRadiusM},
+                        9, 9, 9};
+    gfield::FieldSet fields;
+    const gfield::FieldKey key{3, FieldNodes::kPortWeight};
+
+    FieldNodes::MaskSpec mask;
+    mask.r0_m = 1.5 * kEarthRadiusM;
+    mask.r1_m = 2.5 * kEarthRadiusM;
+
+    // The shape: a **scalar** f64 volume, one sample per node, dimensionless.
+    mask.region = FieldNodes::MaskRegion::sphere;
+    REQUIRE(bake_mask(mask, grid, key, fields));
+    const gfield::FieldValue weights = fields.view(key);
+    REQUIRE(gfield::is_readable(weights));
+    REQUIRE(weights.kind() == gfield::Kind::Volume);
+    REQUIRE_FALSE(weights.is_vector());
+    REQUIRE(weights.desc.component == qp::abi::ComponentKind::scalar);
+    REQUIRE(weights.desc.element == qp::abi::ElementType::f64);
+    REQUIRE(weights.point_count() == grid.point_count());
+
+    // The region test, node by node, against the same predicate the model is written in.
+    const auto agrees = [&](FieldNodes::MaskRegion region, double r0_re, double r1_re,
+                            const std::function<bool(const Vec3&)>& inside) {
+        FieldNodes::MaskSpec spec;
+        spec.region = region;
+        spec.r0_m = r0_re * kEarthRadiusM;
+        spec.r1_m = r1_re * kEarthRadiusM;
+        REQUIRE(bake_mask(spec, grid, key, fields));
+        const gfield::FieldValue table = fields.view(key);
+        REQUIRE(gfield::is_readable(table));
+        for (std::uint32_t i = 0; i < grid.nx; ++i) {
+            for (std::uint32_t j = 0; j < grid.ny; ++j) {
+                for (std::uint32_t k = 0; k < grid.nz; ++k) {
+                    const Vec3 point = grid.node_position(i, j, k);
+                    const std::uint64_t at = (static_cast<std::uint64_t>(i) * grid.ny + j) * grid.nz + k;
+                    const double expected = inside(point) ? 1.0 : 0.0;
+                    // **Exactly** 0 or 1: the weight is a region test, so an intermediate value would be a claim
+                    // about a boundary this node does not model.
+                    REQUIRE(gfield::get_component(table, at, 0) == expected);
+                }
+            }
+        }
+    };
+
+    agrees(FieldNodes::MaskRegion::sphere, 1.5, 2.5, [](const Vec3& p) { return norm(p) < 1.5 * kEarthRadiusM; });
+    agrees(FieldNodes::MaskRegion::shell, 1.5, 2.5, [](const Vec3& p) {
+        const double r = norm(p);
+        return r >= 1.5 * kEarthRadiusM && r < 2.5 * kEarthRadiusM;
+    });
+    // The terminator plane through the centre, for the reason the implementation states: the reference puts it ten
+    // earth radii downwind because that is where a magnetopause stands, and a standoff belongs to the boundary
+    // model rather than to a mask.
+    agrees(FieldNodes::MaskRegion::dayside, 1.0, 3.0, [](const Vec3& p) { return p.x > 0.0; });
+    agrees(FieldNodes::MaskRegion::nightside, 1.0, 3.0, [](const Vec3& p) { return p.x <= 0.0; });
+
+    // One rule in two places, and the difference between them is the assertion. The **reader** orders the two radii
+    // -- a user who swaps them in the panel has described the same shell, and `MaskSpec`'s own invariant says an
+    // ordered pair. The **bake** refuses a pair that arrives reversed, because such a spec was built by a caller
+    // that did not use the reader, and baking it would produce an empty table indistinguishable from a region that
+    // happens to hold no nodes.
+    qp::graph::Node swapped_node;
+    swapped_node.type_name = FieldNodes::kMaskType;
+    swapped_node.set_param(FieldNodes::kPortMaskRegion, qp::ports::Value{std::int64_t{1}});
+    swapped_node.set_param(FieldNodes::kPortMaskR0, qp::ports::Value{2.5 * kEarthRadiusM});
+    swapped_node.set_param(FieldNodes::kPortMaskR1, qp::ports::Value{1.5 * kEarthRadiusM});
+    const FieldNodes::MaskSpec ordered = FieldNodes::read_mask(swapped_node);
+    REQUIRE(ordered.r0_m == 1.5 * kEarthRadiusM);
+    REQUIRE(ordered.r1_m == 2.5 * kEarthRadiusM);
+    REQUIRE(bake_mask(ordered, grid, key, fields));
+    const gfield::FieldValue ordered_table = fields.view(key);
+    std::uint64_t inside_count = 0;
+    for (std::uint64_t at = 0; at < ordered_table.point_count(); ++at) {
+        if (gfield::get_component(ordered_table, at, 0) == 1.0) ++inside_count;
+    }
+    REQUIRE(inside_count > 0);
+
+    FieldNodes::MaskSpec reversed;
+    reversed.region = FieldNodes::MaskRegion::shell;
+    reversed.r0_m = 2.5 * kEarthRadiusM;
+    reversed.r1_m = 1.5 * kEarthRadiusM;
+    REQUIRE_FALSE(bake_mask(reversed, grid, key, fields));
+
+    // A grid that cannot be baked is refused rather than approximated: one node an axis has no interior, and a
+    // zero spacing has no distances.
+    const GridSpec too_small{Vec3{}, Vec3{1.0, 1.0, 1.0}, 1, 1, 1};
+    REQUIRE_FALSE(bake_mask(mask, too_small, key, fields));
+    const GridSpec no_spacing{Vec3{}, Vec3{0.0, 1.0, 1.0}, 4, 4, 4};
+    REQUIRE_FALSE(bake_mask(mask, no_spacing, key, fields));
+
+    // The reader is the one the evaluator uses, so "which port is r0" has one answer in the file rather than two.
+    // A node carrying only a region index therefore gets the **defaults** for the radii, which is the state a
+    // freshly placed node is in.
+    qp::graph::Node node;
+    node.type_name = FieldNodes::kMaskType;
+    node.set_param(FieldNodes::kPortMaskRegion, qp::ports::Value{std::int64_t{2}});
+    const FieldNodes::MaskSpec read = FieldNodes::read_mask(node);
+    REQUIRE(read.region == FieldNodes::MaskRegion::dayside);
+    REQUIRE(read.r0_m == FieldNodes::kDefaultMaskR0Re * kEarthRadiusM);
+    REQUIRE(read.r1_m == FieldNodes::kDefaultMaskR1Re * kEarthRadiusM);
+    // And an index nobody defined takes the first region rather than reading past the end of a switch: the region
+    // is a choice, and a document from a build with more regions must not become undefined behaviour here.
+    node.set_param(FieldNodes::kPortMaskRegion, qp::ports::Value{std::int64_t{99}});
+    REQUIRE(FieldNodes::read_mask(node).region == FieldNodes::MaskRegion::sphere);
+    REQUIRE(std::string{FieldNodes::to_string(FieldNodes::MaskRegion::nightside)} == "nightside");
 }
 
 TEST_CASE("magnetosphere.field_nodes.the_dipole_is_baked_onto_the_grid_it_declares", "[magnetosphere]") {

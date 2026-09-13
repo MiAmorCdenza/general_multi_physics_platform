@@ -65,6 +65,10 @@
 
 #include <qp/plugins/magnetosphere/baked_field.hpp>
 #include <qp/plugins/magnetosphere/geometry.hpp>
+// For `kEarthRadiusM`, which the mask's default radii are written in. `emitter.hpp` includes it for the same
+// reason and the two headers are normally used together: a default that says "one earth radius" and then spells
+// the number out again would be a second place for the conversion to go stale.
+#include <qp/plugins/magnetosphere/units.hpp>
 
 namespace qp::plugins::magnetosphere {
 
@@ -252,6 +256,121 @@ public:
     /// terminates the process. **A refusal a user can read beats a crash they cannot.**
     static constexpr std::uint64_t kMaxPoints = 4U * 1024U * 1024U;
 
+    /// @brief The scalar-region mask: a **weight** field, one number per node.
+    ///
+    /// The kit's first product that is not a vector field, and it exists because two sockets in this tree want a
+    /// scalar and nothing could make one: the pusher's `drag` socket (`kPortDrag`, in per second) and the
+    /// reference implementation's `mul`/`blend` pair, which modulate a vector field by a weight. A weight is a
+    /// pure number -- dimensionless, which is a real `FieldDim` and not a missing one -- and that is why it is a
+    /// field rather than a parameter: a *region* is a shape in space, and a shape is what a lattice is for.
+    static constexpr const char* kMaskType = "field.mask";
+
+    /// @brief The region the mask weights: a choice, so the index is what a document stores.
+    enum class MaskRegion : std::int32_t {
+        /// Everything inside `r0`: an atmosphere, a plasmasphere, the planet itself.
+        sphere = 0,
+        /// Everything between `r0` and `r1`: a belt, a shell, a boundary layer.
+        shell = 1,
+        /// Everything on the sunward side of the terminator plane.
+        dayside = 2,
+        /// Everything on the far side of it.
+        nightside = 3,
+    };
+
+    /// @brief How many regions the choice offers.
+    static constexpr std::uint32_t kMaskRegionCount = 4;
+    /// @brief The region choice.
+    static constexpr qp::graph::PortNumber kPortMaskRegion = 1;
+    /// @brief The mask's inner radius, in metres. Used by `sphere` and `shell`.
+    static constexpr qp::graph::PortNumber kPortMaskR0 = 2;
+    /// @brief The mask's outer radius, in metres. Used by `shell`.
+    static constexpr qp::graph::PortNumber kPortMaskR1 = 3;
+    /// @brief Where the **mask** node's grid starts: after the three parameters.
+    static constexpr qp::graph::PortNumber kPortMaskOrigin0 = 4;
+    /// @brief The mask's weight table, a scalar lattice.
+    static constexpr qp::graph::PortNumber kPortWeight = 1;
+
+    /// @brief The mask's default inner radius, in metres: one earth radius, the planet's surface.
+    static constexpr double kDefaultMaskR0Re = 1.0;
+    /// @brief The mask's default outer radius, in metres: three earth radii, a belt's outer edge.
+    static constexpr double kDefaultMaskR1Re = 3.0;
+
+    /// @brief What a mask node's parameters say.
+    ///
+    /// @ownership   owns
+    /// @thread      main
+    /// @pre         none
+    /// @post        none
+    /// @invariant   `r0_m <= r1_m`
+    /// @errors      noexcept
+    /// @frozen      no
+    /// @tests       magnetosphere.field_nodes.a_mask_weights_the_region_it_names
+    struct MaskSpec final {
+        /// Which region the weight covers.
+        MaskRegion region = MaskRegion::sphere;
+        /// The inner radius, in metres.
+        double r0_m = kDefaultMaskR0Re * kEarthRadiusM;
+        /// The outer radius, in metres.
+        double r1_m = kDefaultMaskR1Re * kEarthRadiusM;
+    };
+
+    /// @brief Names one region, for a report or a log line.
+    ///
+    /// @param region The region to name.
+    ///
+    /// @ownership   pure
+    /// @thread      any
+    /// @pre         none
+    /// @post        One of the four names, never null
+    /// @invariant   Total
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.field_nodes.a_mask_weights_the_region_it_names
+    [[nodiscard]] static const char* to_string(MaskRegion region) noexcept;
+
+    /// @brief A mask node's parameters, read from the node itself.
+    ///
+    /// Reads **before** `bake_mask` and not inside it, for the reason `read_from` gives about the grid: the node's
+    /// parameters are interpreted in one place, and a second reader is a second answer to "which port is r0".
+    ///
+    /// @param node The node. Borrowed.
+    ///
+    /// @ownership   pure
+    /// @thread      main
+    /// @pre         none
+    /// @post        An ordered radius pair, and the region the node names
+    /// @invariant   Out-of-range values take the defaults rather than failing: a half-filled node is the
+    ///              ordinary state of a graph being edited, and refusing to bake it would mean the picture
+    ///              disappears while the user is still typing
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.field_nodes.a_mask_weights_the_region_it_names
+    [[nodiscard]] static MaskSpec read_mask(const graph::Node& node) noexcept;
+
+    /// @brief The same reader for an evaluator's own inputs, so "which port is `r0`" has one answer.
+    ///
+    /// Two sources and one implementation, exactly as `read_from` is: the node's parameters are put into the same
+    /// `InputView` shape the evaluator is handed. A second reader for the same three ports would be a second place
+    /// the meaning of port 2 is written down, and the two would agree until one of them was edited.
+    ///
+    /// @param inputs The evaluator's inputs. Borrowed for the call.
+    ///
+    /// @ownership   pure
+    /// @thread      main
+    /// @pre         none
+    /// @post        An ordered radius pair and the region the inputs name
+    /// @invariant   Out-of-range region indices take `sphere`, as `read_mask` does
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.field_nodes.a_mask_weights_the_region_it_names
+    [[nodiscard]] static MaskSpec read_mask_from(const graph::InputView& inputs) noexcept;
+
     /// @brief The grid a dipole node starts with: eight earth radii either way, one node per earth radius.
     ///
     /// A default a student can run without editing anything, and coarse enough that a bake is instant. The
@@ -436,6 +555,40 @@ public:
  */
 [[nodiscard]] bool bake_sum(const qp::graph::field::FieldValue& a, const qp::graph::field::FieldValue& b,
                             qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
+
+/**
+ * @brief Bakes a region mask's **weight** table onto `grid`.
+ *
+ * Every node gets exactly `0.0` or `1.0` -- never a blend and never a fraction -- and that is a decision rather
+ * than a simplification: the weight is a **region test**, so a table of intermediate values would be a claim about
+ * a boundary this node does not model. The smooth boundary the reference implementation blends across is a
+ * magnetopause model, which is a different node and would arrive as one.
+ *
+ * The published table is a **scalar** f64 volume of `grid.point_count()` values, where every field this kit made
+ * until now was three per node. That is the part worth stating: a weight is a pure number, the descriptor says so,
+ * and a consumer that assumed three components would read its own samples out of alignment.
+ *
+ * @param mask  The region and its radii, in metres.
+ * @param grid  Where to bake. At least two nodes an axis and a positive spacing; anything else is refused.
+ * @param key   Who is publishing, for the store's key.
+ * @param fields The store. Mutated on success.
+ *
+ * @ownership   observes `fields`
+ * @thread      main
+ * @pre         none
+ * @post        On true, `fields.view(key)` is a readable scalar volume of `grid.point_count()` values, each
+ *              exactly 0 or 1
+ * @invariant   On false the store is unchanged
+ * @errors      Returns false -- never throws -- for a grid that cannot be baked, a non-finite radius, or a radius
+ *              pair whose inner bound is above its outer one: see the implementation for why a reversed pair is
+ *              refused here while the reader orders it
+ * @complexity  O(points)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.a_mask_weights_the_region_it_names
+ */
+[[nodiscard]] bool bake_mask(const FieldNodes::MaskSpec& mask, const GridSpec& grid,
+                             qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
 
 /**
  * @brief The node evaluator that bakes this kit's field types into a store.
