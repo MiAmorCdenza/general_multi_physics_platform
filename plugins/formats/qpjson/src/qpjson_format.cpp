@@ -137,6 +137,22 @@ void append_string(std::string& out, std::string_view s) {
 [[nodiscard]] DocumentRefusal find_unwritable(const authoring::DocumentSource& source) {
     if (!qp::diag::is_valid_utf8(source.title)) return DocumentRefusal::text_not_utf8;
 
+    // The session's measurements, before the graph: a dataset that cannot be written must be reported **before**
+    // any byte exists, and it can fail for the format's two old reasons. A reading whose value or uncertainty is
+    // not a number cannot go into JSON at all -- the CSV export writes `inf` and `nan` on purpose, because a
+    // diverged run is what a user needs to see, and this format cannot: it says so by name rather than writing a
+    // number that would read back as a different one.
+    if (source.readings != nullptr) {
+        const qp::runtime::Dataset& readings = *source.readings;
+        if (!qp::diag::is_valid_utf8(readings.name())) return DocumentRefusal::text_not_utf8;
+        for (const qp::runtime::Measurement& m : readings.readings()) {
+            if (!std::isfinite(m.reading.value) || !std::isfinite(m.reading.u)) {
+                return DocumentRefusal::non_finite_number;
+            }
+            if (m.t.has_value() && !std::isfinite(*m.t)) return DocumentRefusal::non_finite_number;
+        }
+    }
+
     for (const qp::graph::NodeSlot& slot : source.graph.slots()) {
         if (!slot.occupied) continue;
         const qp::graph::Node& node = slot.node;
@@ -311,6 +327,75 @@ void write_layouts(std::string& out, const authoring::ViewLayouts& layouts) {
     out += first ? "]\n" : "\n  ]\n";
 }
 
+/// @brief The name an uncertainty kind is written under.
+///
+/// Spelled out for the reason `kind_name` spells out a value kind: the file outlives the build, and `"kind": 2`
+/// would make a reader need the enum in hand to know whether a reading's error was quantified.
+[[nodiscard]] const char* uncertainty_kind_name(qp::runtime::UncertaintyKind kind) noexcept {
+    switch (kind) {
+        case qp::runtime::UncertaintyKind::unknown: return "unknown";
+        case qp::runtime::UncertaintyKind::exact: return "exact";
+        case qp::runtime::UncertaintyKind::standard: return "standard";
+    }
+    return "unknown";
+}
+
+/// @brief Writes the seven frozen exponents of a dimension, in the shape a `dim` parameter already uses.
+void append_dim(std::string& out, qp::units::Dim d) {
+    const qp::units::DimExp exps[7] = {d.L, d.M, d.T, d.I, d.Th, d.N, d.J};
+    out += '[';
+    for (int i = 0; i < 7; ++i) {
+        if (i != 0) out += ", ";
+        append_int(out, static_cast<std::int64_t>(exps[i]));
+    }
+    out += ']';
+}
+
+/// @brief Writes the session's measurements: the dataset's name and dimension, then one member per reading.
+///
+/// **The one thing a saved session must not lose.** The graph is the experiment's setup and this is its result, and
+/// a student who took readings, saved, and reopened used to find the setup intact and the result gone. Each reading
+/// carries what makes it a measurement rather than a number: its value, its uncertainty **and its kind** (absent is
+/// not zero), where it came from, whether the analyst still counts it, and its time when it has one.
+///
+/// The member order is the order `Dataset` is built in -- name, dimension, readings -- and the parser requires it,
+/// because a dataset's unit is fixed when it is constructed and a file that listed readings first would be asking
+/// the reader to guess what they are measurements of.
+void write_readings(std::string& out, const qp::runtime::Dataset& readings) {
+    out += ", \n  \"readings\": {\"name\": ";
+    append_string(out, readings.name());
+    out += ", \"dim\": ";
+    append_dim(out, readings.dim());
+    out += ", \"items\": [";
+    const std::vector<qp::runtime::Measurement>& items = readings.readings();
+    for (std::size_t i = 0; i < items.size(); ++i) {
+        const qp::runtime::Measurement& m = items[i];
+        out += i == 0 ? "\n    " : ",\n    ";
+        out += "{\"value\": ";
+        (void)append_double(out, m.reading.value);
+        out += ", \"uncertainty\": ";
+        (void)append_double(out, m.reading.u);
+        out += ", \"kind\": \"";
+        out += uncertainty_kind_name(m.reading.kind);
+        out += '\"';
+        // Always written, even when invalid: "this reading came from nowhere" is a fact about it -- a hand-entered
+        // number is a legitimate reading in a lab session -- and leaving the member out would make the file's shape
+        // depend on where the number came from.
+        out += ", \"source\": [";
+        append_int(out, static_cast<std::int64_t>(m.source.index));
+        out += ", ";
+        append_int(out, static_cast<std::int64_t>(m.source.generation));
+        out += ']';
+        out += m.valid ? ", \"valid\": true" : ", \"valid\": false";
+        if (m.t.has_value()) {
+            out += ", \"time\": ";
+            (void)append_double(out, *m.t);
+        }
+        out += '}';
+    }
+    out += items.empty() ? "]}" : "\n  ]}";
+}
+
 /// @brief Writes a document that `find_unwritable` has already accepted.
 void write_document(std::string& out, const authoring::DocumentSource& source) {
     out += "{\n  \"";
@@ -322,6 +407,9 @@ void write_document(std::string& out, const authoring::DocumentSource& source) {
     out += ",\n  \"graph\": ";
     write_graph(out, source.graph);
     write_layouts(out, source.layouts);
+    // The session's record, when the caller has one to save: a graph-only write (a template, a script, a test) is a
+    // legitimate call and produces a document with no `readings` member rather than an empty one.
+    if (source.readings != nullptr) write_readings(out, *source.readings);
     out += "}\n";
 }
 
@@ -991,6 +1079,130 @@ struct NodeFields final {
     return r.expect(']');
 }
 
+/// @brief Reads the name an uncertainty kind was written under, or nothing when this version does not know it.
+[[nodiscard]] std::optional<qp::runtime::UncertaintyKind> uncertainty_kind_from(std::string_view name) {
+    if (name == "unknown") return qp::runtime::UncertaintyKind::unknown;
+    if (name == "exact") return qp::runtime::UncertaintyKind::exact;
+    if (name == "standard") return qp::runtime::UncertaintyKind::standard;
+    return std::nullopt;
+}
+
+/// @brief Reads the session's measurements.
+///
+/// **The members are required in the order the type is built**: a name, then a dimension, then the readings. That is
+/// not a convenience -- `Dataset`'s dimension is fixed when it is constructed, because every reading normalises to
+/// it on the way in, so a file that listed its readings before saying what they are measurements *of* would be
+/// asking this parser to guess a unit. The writer emits this order and a file that does not is refused rather than
+/// reinterpreted.
+///
+/// Every member is required except `time`, and an unknown member is refused by the caller's rule: the version marker
+/// is the compatibility mechanism, so a member this build does not define means the file and the build disagree
+/// about what a document is. A reading's source is always present **including when it is `[0, 0]`**, which is how
+/// "this number came from nowhere" is written -- a hand-entered reading is a legitimate reading.
+[[nodiscard]] bool parse_readings(Reader& r, qp::runtime::Dataset& out) noexcept {
+    if (!r.expect('{')) return false;
+
+    std::string first_key;
+    if (!r.key(first_key)) return false;
+    if (first_key != "name") return r.fail_here();
+    std::string name;
+    if (!r.string(name)) return false;
+
+    if (!r.expect(',')) return false;
+    std::string second_key;
+    if (!r.key(second_key)) return false;
+    if (second_key != "dim") return r.fail_here();
+    if (!r.expect('[')) return false;
+    std::int64_t exps[7] = {0, 0, 0, 0, 0, 0, 0};
+    for (int i = 0; i < 7; ++i) {
+        if (i != 0 && !r.expect(',')) return false;
+        if (!r.integer(exps[i])) return false;
+    }
+    if (!r.expect(']')) return false;
+    const qp::units::Dim dim{static_cast<qp::units::DimExp>(exps[0]), static_cast<qp::units::DimExp>(exps[1]),
+                             static_cast<qp::units::DimExp>(exps[2]), static_cast<qp::units::DimExp>(exps[3]),
+                             static_cast<qp::units::DimExp>(exps[4]), static_cast<qp::units::DimExp>(exps[5]),
+                             static_cast<qp::units::DimExp>(exps[6])};
+
+    if (!r.expect(',')) return false;
+    std::string third_key;
+    if (!r.key(third_key)) return false;
+    if (third_key != "items") return r.fail_here();
+    if (!r.expect('[')) return false;
+
+    qp::runtime::Dataset loaded{name, dim};
+    if (!r.peek_is(']')) {
+        for (;;) {
+            if (!r.expect('{')) return false;
+            qp::runtime::Measurement m;
+            bool has_value = false;
+            bool has_uncertainty = false;
+            bool has_kind = false;
+            bool has_source = false;
+            while (!r.peek_is('}')) {
+                std::string member;
+                if (!r.key(member)) return false;
+                if (member == "value") {
+                    if (!r.double_value(m.reading.value)) return false;
+                    has_value = true;
+                } else if (member == "uncertainty") {
+                    if (!r.double_value(m.reading.u)) return false;
+                    has_uncertainty = true;
+                } else if (member == "kind") {
+                    std::string kind;
+                    if (!r.string(kind)) return false;
+                    const std::optional<qp::runtime::UncertaintyKind> parsed = uncertainty_kind_from(kind);
+                    // A kind this build does not know is a file from a version that has one; the version marker is
+                    // what should have caught it, and refusing here is the second line of that defence.
+                    if (!parsed.has_value()) return r.fail_here();
+                    m.reading.kind = *parsed;
+                    has_kind = true;
+                } else if (member == "source") {
+                    if (!r.expect('[')) return false;
+                    std::int64_t index = 0;
+                    std::int64_t generation = 0;
+                    if (!r.integer(index) || !r.expect(',') || !r.integer(generation)) return false;
+                    if (!r.expect(']')) return false;
+                    if (index < 0 || generation < 0) return r.fail_here();
+                    m.source.index = static_cast<std::uint32_t>(index);
+                    m.source.generation = static_cast<std::uint32_t>(generation);
+                    has_source = true;
+                } else if (member == "valid") {
+                    if (!r.boolean(m.valid)) return false;
+                } else if (member == "time") {
+                    double when = 0.0;
+                    if (!r.double_value(when)) return false;
+                    m.t = when;
+                } else {
+                    return r.fail_here();
+                }
+                // The house style: a comma separates members, so it belongs **after** each one. A reader that
+                // demanded one before the first member would refuse every object the writer emits -- which is what
+                // this parser did until the round-trip case said so.
+                if (!r.peek_is('}') && !r.expect(',')) return false;
+            }
+            if (!r.expect('}')) return false;
+            // All four required members, and the kind is **not** defaulted: a reading whose kind member is missing
+            // would load as `unknown`, which is a claim that nobody quantified the error rather than the absence of
+            // a claim.
+            if (!has_value || !has_uncertainty || !has_kind || !has_source) return r.fail_here();
+            // The dataset owns the unit: a reading's own dimension is overwritten on append, so a file carrying one
+            // per item could disagree with itself and the disagreement would be silent.
+            m.reading.dim = dim;
+            loaded.add(std::move(m));
+            if (r.peek_is(',')) {
+                if (!r.expect(',')) return false;
+                continue;
+            }
+            break;
+        }
+    }
+    if (!r.expect(']')) return false;
+    if (!r.expect('}')) return false;
+    out = std::move(loaded);
+    return true;
+}
+
 /// @brief Parses a whole document. Fills `out` only on success.
 [[nodiscard]] DocumentRefusal parse_document(std::string_view bytes, authoring::DocumentSnapshot& out) {
     Reader r{bytes};
@@ -1024,6 +1236,8 @@ struct NodeFields final {
             has_graph = true;
         } else if (name == "layouts") {
             if (!parse_layouts(r, loaded.layouts)) return r.error();
+        } else if (name == "readings") {
+            if (!parse_readings(r, loaded.readings)) return r.error();
         } else {
             // Unknown members are refused, not skipped: the version marker is the compatibility
             // mechanism, so a member this version does not define means the file and this build

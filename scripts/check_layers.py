@@ -153,7 +153,17 @@ ALLOWED: dict[str, set[str]] = {
     # a container of instances. Adding structure to document instead would have
     # widened that module for a job its own file comment says it does not do --
     # "a document describes a graph; it does not hold a second one".
-    "persist": {"units", "diag", "ir", "structure", "document"},
+    # `store` is here because **a saved session has to keep the measurements**, and that is the whole point of the
+    # platform rather than an extra. The table above was written when a document was a graph and a view's layout
+    # slots; a document that dropped a student's readings on Save and Open was losing the one thing the loop exists
+    # to produce, and the earlier set of dependencies could not even name a `Dataset`. The alternative -- hiding the
+    # readings in an opaque string slot, the way a view's layout is stored -- was refused because it contradicts the
+    # format's own stated purpose ("written to be read by a person"): a person reading their file should see their
+    # measurements, not an escaped copy of them.
+    #
+    # `run` will join it when the format writes the ledger -- see `DocumentSource`: the runs are the next step of
+    # this same piece of work, and the dependency arrives with the code that needs it rather than ahead of it.
+    "persist": {"units", "diag", "ir", "structure", "document", "store"},
     # host is the composition root, and the **only** module allowed a fan-in this wide. Every other module is
     # written so that it does not know what its neighbours are -- `plugin` judges a manifest without knowing
     # what a plugin contributes, `ir` owns descriptors without knowing who fills the catalog, `io` owns the

@@ -62,6 +62,7 @@
 #pragma once
 
 #include <qp/authoring/document/document.hpp>
+#include <qp/runtime/store/store.hpp>
 
 #include <qp/graph/structure/graph.hpp>
 
@@ -211,8 +212,31 @@ struct DocumentSource final {
     /// The graph to write. Not copied: see the file comment on why the save path borrows.
     const qp::graph::Graph& graph;
     /// The per-view layout slots to write.
-    const ViewLayouts& layouts;    /// The document's title. May be empty: a document the user has not named yet.
+    const ViewLayouts& layouts;
+    /// The document's title. May be empty: a document the user has not named yet.
     std::string_view title{};
+
+    /// The measurements this session recorded, or null when the caller is saving a graph alone.
+    ///
+    /// **A saved session that dropped its readings would be losing the one thing the platform exists to
+    /// produce.** The graph is the experiment's *setup*; the readings are its result, and until this pointer
+    /// existed a student could take ten readings, press Save, reopen the file and find the graph intact and the
+    /// measurements gone. A pointer rather than a reference unlike the two above, because saving a document with no
+    /// measurements in it is a legitimate call -- a script that writes a graph, a template, a test -- and the
+    /// invariant "both parts are always present" is about the parts a document *is*, not about the record it
+    /// happens to carry.
+    ///
+    /// **Appended after `title` rather than placed with the graph it belongs beside**, and that is the rule this
+    /// codebase has now learned three times: a positional aggregate **is** a shape, and a member added in the middle
+    /// silently re-labels every positional construction of the struct. The save path builds one of these, so the
+    /// field order is part of this type's interface -- see `ExportCapabilities` for the first two occasions.
+    const qp::runtime::Dataset* readings = nullptr;
+    // **The runs are not here yet, and the omission is deliberate rather than forgotten.** Their ids are what a
+    // reading's provenance points back into, so a document that keeps the numbers and drops the runs keeps numbers
+    // nobody can reproduce -- which is the next step of this same piece of work, not a different one. What it needs
+    // first is already in place: `RunLedger::restore` adopts a record **with its own id**, because ids issued
+    // freshly on load would resolve provenance to the wrong run. The reopen condition is therefore "the format
+    // writes a `runs` section", and `docs/plan-tree.md` records it as such.
 };
 
 /**
@@ -226,7 +250,7 @@ struct DocumentSource final {
  * @pre         none
  * @post        none
  * @invariant   A snapshot produced by a load is internally consistent: every edge names a node the
- *              snapshot holds
+ *              snapshot holds, and every reading that names a source names a node it holds or nothing
  * @errors      noexcept
  * @frozen      no
  * @tests       persist.snapshot.is_move_only_and_survives_a_move
@@ -245,6 +269,11 @@ struct DocumentSnapshot final {
     ViewLayouts layouts{};
     /// The loaded title, or empty when the file held none.
     std::string title{};
+
+    /// The measurements the document carried, empty when it carried none.
+    ///
+    /// Owned like the graph: a snapshot outlives the reader that produced it.
+    qp::runtime::Dataset readings{};
 };
 
 /**

@@ -714,7 +714,7 @@ qp_add_test(qp_test_authoring_document
 # `unit/plugins/` is not.
 qp_add_test(qp_test_authoring_persist
     SOURCES unit/authoring/test_persist.cpp
-    LIBS qp::authoring_persist qp::graph_structure)
+    LIBS qp::authoring_persist qp::graph_structure qp::runtime_store qp::runtime_run)
 qp_add_test(qp_test_authoring_layout
     SOURCES unit/authoring/test_layout.cpp
     LIBS qp::authoring_layout)

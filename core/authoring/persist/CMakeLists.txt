@@ -26,5 +26,8 @@ target_include_directories(qp_authoring_persist INTERFACE
     $<INSTALL_INTERFACE:include>)
 
 target_compile_features(qp_authoring_persist INTERFACE cxx_std_20)
+# `qp::runtime_store` is here because a saved document now carries the session's measurements. See the layer table's
+# entry for this module: the widening is deliberate, and its reason is that losing a student's readings on Save was
+# losing the thing the platform exists to produce.
 target_link_libraries(qp_authoring_persist INTERFACE
-    qp::graph_ir qp::graph_structure qp::authoring_document qp_warnings qp_sanitize)
+    qp::graph_ir qp::graph_structure qp::authoring_document qp::runtime_store qp_warnings qp_sanitize)

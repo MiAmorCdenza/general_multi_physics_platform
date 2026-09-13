@@ -13,6 +13,9 @@
  */
 #include <catch2/catch_test_macros.hpp>
 
+#include <type_traits>
+#include <utility>
+
 #include <qp/runtime/run.hpp>
 
 #include <cstdint>
@@ -52,6 +55,68 @@ bool names_contain(const std::vector<std::string>& names, std::string_view want)
 // ===========================================================================
 // Completeness
 // ===========================================================================
+
+
+TEST_CASE("run.id.a_restored_record_keeps_its_id", "[run]") {
+    // **The operation a document load needs, and the invariant it must not relax.** A reading's provenance points
+    // back into the ledger by run id, so a ledger rebuilt from a file has to adopt the records **with the ids they
+    // were written under** -- issuing fresh ones would resolve the provenance of every restored reading to a
+    // different run, which is worse than losing it, because it looks right.
+    //
+    // What the ledger promises ("ids are strictly increasing and never reused") is therefore enforced on the way in:
+    // a record out of order or with a duplicate id is refused rather than appended.
+    RunLedger ledger;
+    RunSpec spec;
+    spec.seed = 42;
+    const RunId first = ledger.begin(spec);
+    REQUIRE(first.valid());
+
+    // The next id the ledger would issue, taken before the restore so the case can assert the counter moved too.
+    const RunId next = ledger.begin(spec);
+    REQUIRE(next.value > first.value);
+
+    // A fresh ledger adopts both records in order, with their own ids.
+    RunLedger restored;
+    RunRecord a;
+    a.id = first;
+    a.spec = spec;
+    REQUIRE(restored.restore(a).has_value());
+    REQUIRE(restored.last_id() == first);
+    REQUIRE(restored.find(first) != nullptr);
+    RunRecord b;
+    b.id = next;
+    b.spec = spec;
+    REQUIRE(restored.restore(b).has_value());
+    REQUIRE(restored.size() == 2);
+    REQUIRE(restored.find(next) != nullptr);
+
+    // **The counter is past the adopted id**, so a run that starts after the load still gets an id nobody has used.
+    const RunId after = restored.begin(spec);
+    REQUIRE(after.value > next.value);
+    REQUIRE(restored.find(after) != nullptr);
+
+    // A duplicate, an out-of-order record, and an invalid id: each refused, and none of them changed the ledger.
+    const std::size_t before = restored.size();
+    RunRecord duplicate;
+    duplicate.id = first;
+    REQUIRE_FALSE(restored.restore(duplicate).has_value());
+    RunRecord backwards;
+    backwards.id = RunId{1};
+    REQUIRE_FALSE(restored.restore(backwards).has_value());
+    RunRecord invalid;
+    invalid.id = RunId{};
+    REQUIRE_FALSE(restored.restore(invalid).has_value());
+    REQUIRE(restored.size() == before);
+    REQUIRE(restored.last_id() == after);
+
+    // A ledger is movable (a snapshot has to hand one over) and not copyable (two ledgers issuing the same ids to
+    // two different runs is the collision this class exists to prevent).
+    RunLedger moved{std::move(restored)};
+    REQUIRE(moved.size() == before);
+    REQUIRE(moved.last_id() == after);
+    REQUIRE_FALSE(std::is_copy_constructible_v<RunLedger>);
+    REQUIRE(std::is_move_constructible_v<RunLedger>);
+}
 
 TEST_CASE("run.spec.completeness", "[run]") {
     const RunSpec full = complete_spec();

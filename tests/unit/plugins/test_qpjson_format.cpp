@@ -250,7 +250,10 @@ TEST_CASE("persist.qpjson.round_trip_preserves_everything_that_matters", "[persi
     // The file is what it claims to be: text, valid UTF-8, and carrying the marker and a node type a
     // person can read. A format whose `is_text` is true and whose bytes are not valid UTF-8 would break
     // every tool that opens it.
-    REQUIRE(bytes.find("\"qp_document\": 1") != std::string::npos);
+    // The version this build **writes**, and it is the format's own constant rather than a literal: a document
+    // written as version 1 would be a file that does not carry the session's measurements, and a case that asserted
+    // the literal would have kept passing while the writer stopped writing them.
+    REQUIRE(bytes.find("\"qp_document\": " + std::to_string(json::QpJsonFormat::kVersion)) != std::string::npos);
     REQUIRE(bytes.find("demo.spring_damper") != std::string::npos);
     REQUIRE(bytes.find("a text parameter") != std::string::npos);
     REQUIRE(qp::diag::is_valid_utf8(bytes));
@@ -421,8 +424,11 @@ TEST_CASE("persist.qpjson.refuses_a_foreign_file_and_a_broken_one", "[persist][q
     SECTION("a version this build does not read") {
         // Distinct from malformed on purpose: the file is fine and this build is older than it, and the
         // fix is to open it with a newer build rather than to look for a syntax error.
-        REQUIRE(format.from_bytes("{\"qp_document\": 2, \"graph\": {\"nodes\": [], \"edges\": []}}",
-                                  snapshot) == DocumentRefusal::unsupported_version);
+        // One past what this build reads, computed rather than written down: the day the version moves, this
+        // assertion moves with it instead of quietly testing the version that is now current.
+        const std::string newer = "{\"qp_document\": " + std::to_string(json::QpJsonFormat::kVersion + 1) +
+                                  ", \"graph\": {\"nodes\": [], \"edges\": []}}";
+        REQUIRE(format.from_bytes(newer, snapshot) == DocumentRefusal::unsupported_version);
         REQUIRE(format.from_bytes("{\"qp_document\": 99}", snapshot) ==
                 DocumentRefusal::unsupported_version);
         // Version 0 and negative versions are not "older", they are not versions.

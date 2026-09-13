@@ -58,6 +58,12 @@
  */
 #pragma once
 
+// The one qp header this module names, and it arrived with `RunLedger::restore`: adopting a record from a document
+// is a call that can be refused, and a refusal has to be a value rather than an exception. `run` may depend on
+// `diag` (see the layer table) -- what it may not do is depend on a *view* of the runs, which is why the ledger
+// reports through `Result` and the window turns that into a sentence.
+#include <qp/diag/result.hpp>
+
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -299,8 +305,15 @@ struct RunRecord final {
 class RunLedger final {
 public:
     RunLedger() = default;
+    // A **copy** is what must not exist: two ledgers holding the same records would issue the same ids to two
+    // different runs, which is the collision this class exists to prevent. A **move** is a hand-over and is
+    // allowed, because a value that a parser built and a session adopts has to be able to travel -- and a
+    // `DocumentSnapshot` that could not move the ledger it just read would have to hold it behind a pointer for no
+    // reason. The moved-from ledger is empty, which is the ordinary post-move state.
     RunLedger(const RunLedger&) = delete;
     RunLedger& operator=(const RunLedger&) = delete;
+    RunLedger(RunLedger&&) noexcept = default;
+    RunLedger& operator=(RunLedger&&) noexcept = default;
 
     /**
      * @brief Starts a run: issues an id and stores the spec.
@@ -317,6 +330,32 @@ public:
      * @tests       run.id.monotonic
      */
     RunId begin(RunSpec spec) noexcept;
+
+    /**
+     * @brief Adopts a record **with its own id**, for a ledger being rebuilt from a document.
+     *
+     * The ids a document holds are the ones a reading's trace and a report's provenance point back into, so
+     * restoring records with fresh ids would be worse than dropping them: the numbers would resolve to the *wrong*
+     * run. This is the only way a caller supplies an id, and the ledger's own promise is enforced rather than
+     * relaxed -- "ids are strictly increasing and never reused" -- so a record whose id is not greater than
+     * `last_id()` is **refused**, which is what stops a hand-edited or corrupted file from forging a ledger whose
+     * order cannot be trusted.
+     *
+     * @param record The record, with the id it was written under.
+     *
+     * @ownership   owns (copies the record)
+     * @thread      main
+     * @pre         none
+     * @post        On success `find(record.id)` is that record and `last_id()` is `record.id`
+     * @invariant   The records stay ordered by id and no id is reused
+     * @errors      noexcept; reports `invalid_argument` through the result for an invalid id or one not greater
+     *              than `last_id()`, with no state change
+     * @complexity  O(spec)
+     * @nondet      none
+     * @frozen      no
+     * @tests       run.id.a_restored_record_keeps_its_id
+     */
+    [[nodiscard]] qp::diag::Result<void> restore(RunRecord record) noexcept;
 
     /// @brief The record for `id`, or null when the ledger never issued it.
     [[nodiscard]] const RunRecord* find(RunId id) const noexcept;

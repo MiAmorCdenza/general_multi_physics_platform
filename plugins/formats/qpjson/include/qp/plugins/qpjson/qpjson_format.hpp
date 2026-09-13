@@ -80,7 +80,13 @@ namespace qp::plugins::qpjson {
 class QpJsonFormat final : public qp::authoring::IDocumentFormat {
 public:
     /// @brief The version this build writes and the highest it reads.
-    static constexpr int kVersion = 1;
+    // **2 since a document carries the session's measurements.** The marker's value is the version, and the reader
+    // accepts anything up to and including this one -- so a file written by the previous build still loads (it simply
+    // has no readings member) and a file written by *this* build is refused by that one with `unsupported_version`
+    // rather than having its measurements silently dropped. That is the compatibility mechanism this format
+    // documents: a member a version does not define is a disagreement about what a document is, and refusing is the
+    // answer.
+    static constexpr int kVersion = 2;
 
     /// @brief The member that marks a file as a document. Its value is the version.
     static constexpr const char* kMarkerKey = "qp_document";

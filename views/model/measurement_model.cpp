@@ -24,6 +24,13 @@ MeasurementModel::MeasurementModel(store::RunLedger& ledger, std::string quantit
                                      qp::units::Dim dim, store::RunId run)
     : ledger_(ledger), dataset_(std::move(quantity), dim), trace_(run) {}
 
+void MeasurementModel::adopt(qp::runtime::Dataset readings) noexcept {
+    dataset_ = std::move(readings);
+    // A fresh recording, for the reason the contract gives: a document carries the readings, not the samples that
+    // were drawn from them. The run id is kept so the trace still says which run it belongs to.
+    trace_ = qp::runtime::Trace{trace_.run()};
+}
+
 void MeasurementModel::add_reading(double value, store::UncertaintyKind kind, double u,
                                    qp::runtime::Measurement::Source source) {
     // The uncertainty is stored only for the state that has one. Writing `u` through for an

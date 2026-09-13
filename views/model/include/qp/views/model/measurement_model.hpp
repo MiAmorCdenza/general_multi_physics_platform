@@ -102,7 +102,8 @@ struct ReportLine final {
  * @thread      ui
  * @pre         none
  * @post        none
- * @invariant   The dataset's dimension is fixed at construction and never changes
+ * @invariant   The dataset's dimension is fixed at construction and never changes -- **except by `adopt`**, which
+ *              replaces the whole session with a document's, the one operation that is not an edit
  * @errors      See each declaration
  * @frozen      no
  * @tests       measurement.model.add_and_retake
@@ -161,6 +162,35 @@ public:
      * @tests       measurement.model.add_and_retake
      */
     [[nodiscard]] const qp::runtime::Dataset& dataset() const noexcept { return dataset_; }
+
+    /**
+     * @brief Replaces the whole session with what a document carried.
+     *
+     * **The one operation that may change the dataset's dimension**, and the reason the invariant above is phrased as
+     * "fixed at construction and never changes" rather than "never changes": every *edit* this model offers keeps
+     * the dimension, because a session is a series of measurements of one quantity and a mixed series is not a
+     * series. Opening a document is not an edit -- it replaces the session -- and the file's dataset comes with its
+     * own name and dimension, which is exactly what a lab session has to be able to carry across a save and a load.
+     *
+     * The trace is reset rather than carried: a document holds the readings (and, when the ledger joins them, the
+     * runs that produced the samples), not the samples themselves, so a loaded session begins with an empty
+     * recording. A caller that wants the old trace must load before running, which is the order a user works in.
+     *
+     * @param readings The dataset to adopt. Its readings' dimensions are normalised to its own, as on every other
+     *                 path into this model.
+     *
+     * @ownership   owns (takes the dataset by value and moves it)
+     * @thread      ui
+     * @pre         none
+     * @post        `dataset()` equals the argument up to that normalisation, and `trace()` is empty
+     * @invariant   After the call the dimension is again fixed: no edit changes it
+     * @errors      noexcept
+     * @complexity  O(readings)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.a_document_replaces_the_session
+     */
+    void adopt(qp::runtime::Dataset readings) noexcept;
 
     /**
      * @brief The time series recorded alongside the readings.

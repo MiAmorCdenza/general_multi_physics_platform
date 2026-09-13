@@ -92,8 +92,9 @@ void mount_document_format(authoring::IDocumentFormat* format) {
 }
 
 DocumentController::DocumentController(qp::authoring::Session& session,
-                                       std::vector<authoring::IDocumentFormat*> formats)
-    : session_(&session), formats_(std::move(formats)) {
+                                       std::vector<authoring::IDocumentFormat*> formats,
+                                       MeasurementModel* measurements)
+    : session_(&session), measurements_(measurements), formats_(std::move(formats)) {
     listener_ = session_->add_listener(*this);
     // A document that was never written is not "dirty": there is nothing a save would recover.
     document_.mark_saved();
@@ -145,7 +146,10 @@ DocumentReport DocumentController::save(authoring::IDocumentFormat& format, cons
     // The graph is **borrowed** here, not copied: see `DocumentSource`'s contract. Nothing on the save
     // path may hold a second copy of the graph, because a second copy is a second answer to "what is in
     // this document" and the two drift the moment either is edited.
-    const authoring::DocumentSource source{session_->graph(), document_.layouts(), document_.title()};
+    // **The record travels with the graph.** The readings pointer is null for a controller without a measurement
+    // session, which is the documented "this controller saves graphs alone" case rather than an empty dataset.
+    const authoring::DocumentSource source{session_->graph(), document_.layouts(), document_.title(),
+                                           measurements_ != nullptr ? &measurements_->dataset() : nullptr};
 
     std::string bytes;
     const authoring::DocumentRefusal refused = format.to_bytes(source, bytes);
@@ -205,6 +209,12 @@ DocumentReport DocumentController::open(authoring::IDocumentFormat& format, cons
     document_.set_source_path(path);
     document_.layouts() = std::move(loaded.layouts);
     document_.mark_saved();
+
+    // **The measurements come back, and this is the half that makes the save half worth having.** A file that
+    // carried a student's readings while the window showed an empty panel would be worse than one that never wrote
+    // them: the data would exist and look lost. `adopt` replaces the whole session rather than appending, because a
+    // load is not an edit -- see its contract for why that is the one operation allowed to change the dimension.
+    if (measurements_ != nullptr) measurements_->adopt(std::move(loaded.readings));
 
     report.ok = true;
     report.nodes = nodes;

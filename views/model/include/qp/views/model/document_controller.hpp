@@ -39,6 +39,7 @@
  */
 #pragma once
 
+#include <qp/views/model/measurement_model.hpp>
 #include <qp/authoring/commands/session.hpp>
 #include <qp/authoring/document/document.hpp>
 #include <qp/authoring/persist/persist.hpp>
@@ -141,8 +142,19 @@ public:
      * @frozen      no
      * @tests       document.dirty_tracks_the_session
      */
+    /// @param session      The graph this controller saves and loads. Borrowed; it outlives this object.
+    /// @param formats      The document formats, in the order a "save as" list shows them.
+    /// @param measurements The measurement session this document carries, or null for a controller that saves
+    ///                     graphs alone.
+    ///
+    /// **The measurements are a parameter because losing them was a defect.** Save wrote the graph and the layout
+    /// slots, and a student who took readings, saved, closed the window and reopened the file found their experiment
+    /// intact and their data gone -- the one thing a session record exists to prevent. A pointer rather than a
+    /// reference because a graph-only controller is a legitimate caller (a script, a test), and the null case is
+    /// what "this controller does not carry a record" means.
     DocumentController(qp::authoring::Session& session,
-                       std::vector<qp::authoring::IDocumentFormat*> formats);
+                       std::vector<qp::authoring::IDocumentFormat*> formats,
+                       MeasurementModel* measurements = nullptr);
 
     DocumentController(const DocumentController&) = delete;
     DocumentController& operator=(const DocumentController&) = delete;
@@ -224,7 +236,8 @@ public:
      * @complexity  O(nodes + edges + layouts)
      * @nondet      only through the filesystem
      * @frozen      no
-     * @tests       document.save_writes_a_file_that_reopens,
+     * @tests       document.save_writes_a_file_that_reopens,,
+ *              document.the_measurements_survive_a_save_and_an_open
      *              document.a_refused_save_changes_nothing
      */
     [[nodiscard]] DocumentReport save(qp::authoring::IDocumentFormat& format, const std::string& path);
@@ -246,7 +259,8 @@ public:
      * @complexity  O(bytes)
      * @nondet      only through the filesystem
      * @frozen      no
-     * @tests       document.save_writes_a_file_that_reopens,
+     * @tests       document.save_writes_a_file_that_reopens,,
+ *              document.the_measurements_survive_a_save_and_an_open
      *              document.a_failed_open_changes_nothing,
      *              document.opening_replaces_the_graph_and_clears_undo
      */
@@ -270,6 +284,9 @@ public:
 
 private:
     qp::authoring::Session* session_;
+    /// The measurement session this document carries, or null. Read on save, replaced on load through
+    /// `MeasurementModel::adopt` -- the one operation that may change the dataset's dimension.
+    MeasurementModel* measurements_ = nullptr;
     std::vector<qp::authoring::IDocumentFormat*> formats_;
     qp::authoring::Document document_{};
     qp::authoring::ListenerId listener_{};

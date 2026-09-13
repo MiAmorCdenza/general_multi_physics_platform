@@ -93,6 +93,42 @@ private:
 
 }  // namespace
 
+TEST_CASE("measurement.model.a_document_replaces_the_session", "[measurement][model]") {
+    // **The one operation that may change the dataset's dimension**, and the reason the model's invariant reads
+    // "fixed at construction and never changes -- except by `adopt`". Every *edit* keeps the dimension, because a
+    // session is a series of measurements of one quantity; opening a document is not an edit, and the file brings its
+    // own name and dimension with it.
+    //
+    // The trace is reset rather than carried: a document holds the readings, not the samples drawn from them.
+    Session session;
+    MeasurementModel& model = session.model();
+    REQUIRE(model.dataset().dim() == qp::units::dims::length);
+    REQUIRE(model.add_channel("displacement", qp::units::dims::length).has_value());
+    REQUIRE(model.add_sample(0.0, std::vector<double>{1.0}).has_value());
+    model.add_reading(1.0, rt::UncertaintyKind::standard, 0.05);
+    REQUIRE(model.dataset().readings().size() == 1);
+    REQUIRE(model.trace().size() == 1);
+
+    qp::runtime::Dataset loaded{"voltage", qp::units::dims::voltage};
+    loaded.add(rt::UncertainValue::measured(3.3, 0.01, qp::units::dims::voltage));
+    loaded.add(rt::UncertainValue::unquantified(3.4, qp::units::dims::voltage));
+    const qp::runtime::RunId run = model.trace().run();
+    model.adopt(std::move(loaded));
+
+    // The dataset is the document's, dimension included, and the readings are the document's -- not appended to the
+    // session's own, which would have merged two experiments into one series.
+    REQUIRE(model.dataset().name() == "voltage");
+    REQUIRE(model.dataset().dim() == qp::units::dims::voltage);
+    REQUIRE(model.dataset().readings().size() == 2);
+    REQUIRE(model.dataset().readings().front().reading.value == 3.3);
+    REQUIRE(model.dataset().readings().front().reading.kind == rt::UncertaintyKind::standard);
+    REQUIRE(model.dataset().readings().back().reading.kind == rt::UncertaintyKind::unknown);
+    // ... and the recording starts again, with the run identity it had: the document carried no samples.
+    REQUIRE(model.trace().size() == 0);
+    REQUIRE(model.trace().channel_count() == 0);
+    REQUIRE(model.trace().run() == run);
+}
+
 TEST_CASE("measurement.model.add_and_retake", "[measurement][model]") {
     Session session;
     MeasurementModel& m = session.model();

@@ -23,6 +23,7 @@
  */
 #include <catch2/catch_test_macros.hpp>
 
+#include <qp/runtime/store/store.hpp>
 #include <qp/views/model/document_controller.hpp>
 
 #include <qp/plugins/qpjson/qpjson_format.hpp>
@@ -128,6 +129,75 @@ struct Fixture final {
 };
 
 }  // namespace
+
+TEST_CASE("document.the_measurements_survive_a_save_and_an_open", "[document]") {
+    // **The defect this case exists for**: Save wrote the graph and the layout slots, and a student who took
+    // readings, saved, closed the window and reopened the file found the experiment intact and their data gone. The
+    // loop this platform is arranged around is measure, record, quantify, report -- and "record" has to survive being
+    // put on disk, or every other link in the chain is a demonstration rather than a lab session.
+    //
+    // The test is deliberately the **user's** sequence and not the format's: a session with readings, a save through
+    // the controller, a *fresh* controller over a fresh session, and an open. A round trip through
+    // `to_bytes`/`from_bytes` alone would have proved the format symmetric while the window still dropped the data.
+    Fixture fixture;         // the graph this file's cases save: two nodes, one wire
+    const TempDir dir;
+    const std::string path = dir.path("session.qpd");
+
+    qp::runtime::RunLedger ledger;
+    qp::views::model::MeasurementModel source{ledger, "length", qp::units::dims::length};
+    source.add_reading(0.0101, qp::runtime::UncertaintyKind::standard, 1.4e-6);
+    source.add_reading(0.0102, qp::runtime::UncertaintyKind::unknown, 0.0);
+    source.add_reading(0.0098, qp::runtime::UncertaintyKind::exact, 0.0);
+    // A rejected reading, because the store keeps the judgement and a file that dropped it would lose the same
+    // distinction the store paid to keep.
+    REQUIRE(source.reject(2).has_value());
+
+    DocumentController saver{fixture.session, {&json_format()}, &source};
+    const DocumentReport saved = saver.save(json_format(), path);
+    REQUIRE(saved.ok);
+    REQUIRE(saved.message.find(path) != std::string::npos);
+
+    // The bytes say what a person would want to see: their measurements, in the file.
+    std::string bytes;
+    REQUIRE(rt::read_whole_file(path, bytes) == rt::FileOutcome::ok);
+    REQUIRE(bytes.find("\"readings\"") != std::string::npos);
+    REQUIRE(bytes.find("\"kind\": \"standard\"") != std::string::npos);
+    REQUIRE(bytes.find("\"uncertainty\": 1.4e-06") != std::string::npos);
+
+    // A **fresh** session and controller, as a reopened window would have.
+    qp::views::model::MeasurementModel loaded{ledger, "length", qp::units::dims::length};
+    REQUIRE(loaded.dataset().readings().empty());
+    DocumentController opener{fixture.session, {&json_format()}, &loaded};
+    const DocumentReport opened = opener.open(json_format(), path);
+    INFO("open said: " << opened.message);
+    REQUIRE(opened.ok);
+
+    // Every reading, with the three things that make it a measurement rather than a number: its value, its
+    // uncertainty **and its kind**, and the judgement about whether it still counts.
+    const std::vector<qp::runtime::Measurement>& readings = loaded.dataset().readings();
+    REQUIRE(readings.size() == 3);
+    REQUIRE(readings[0].reading.value == 0.0101);
+    REQUIRE(readings[0].reading.u == 1.4e-6);
+    REQUIRE(readings[0].reading.kind == qp::runtime::UncertaintyKind::standard);
+    // **Absent is not zero**: the second reading's error was never quantified, and it must come back unquantified
+    // rather than as a zero that claims it was measured and found exact.
+    REQUIRE(readings[1].reading.kind == qp::runtime::UncertaintyKind::unknown);
+    REQUIRE(readings[2].reading.kind == qp::runtime::UncertaintyKind::exact);
+    REQUIRE(readings[2].valid == false);
+    REQUIRE(readings[0].valid == true);
+    // The dataset's own identity travelled too: a load replaces the session, dimension included.
+    REQUIRE(loaded.dataset().name() == "length");
+    REQUIRE(loaded.dataset().dim() == qp::units::dims::length);
+
+    // A controller with no measurement session still saves a graph, which is the documented graph-only case rather
+    // than a document with an empty dataset in it.
+    DocumentController graph_only{fixture.session, {&json_format()}};
+    const std::string bare_path = dir.path("bare.qpd");
+    REQUIRE(graph_only.save(json_format(), bare_path).ok);
+    std::string bare_bytes;
+    REQUIRE(rt::read_whole_file(bare_path, bare_bytes) == rt::FileOutcome::ok);
+    REQUIRE(bare_bytes.find("\"readings\"") == std::string::npos);
+}
 
 TEST_CASE("document.formats_are_mounted_once_and_in_order", "[document]") {
     // The inversion that keeps the view layer free of the plugin layer: the application mounts, the window

@@ -83,6 +83,22 @@ RunId RunLedger::begin(RunSpec spec) noexcept {
     return records_.back().id;
 }
 
+qp::diag::Result<void> RunLedger::restore(RunRecord record) noexcept {
+    // **The order is the invariant, so it is the check.** A record that arrived out of order would make
+    // `last_id()` a lie and `find` a scan over a list that no longer means "in the order they ran"; a duplicated id
+    // would make two runs indistinguishable, which is the collision the ledger exists to prevent.
+    const RunId last = last_id();
+    if (!record.id.valid()) return qp::diag::ErrorCode::invalid_argument;
+    if (last.valid() && !(record.id.value > last.value)) {
+        return qp::diag::ErrorCode::invalid_argument;
+    }
+    // The counter is advanced past the adopted id, so the next `begin` issues one that is still greater than every
+    // id in the ledger.
+    next_id_ = record.id.value + 1;
+    records_.push_back(std::move(record));
+    return {};
+}
+
 const RunRecord* RunLedger::find(RunId id) const noexcept {
     if (!id.valid()) return nullptr;
     for (const RunRecord& r : records_) {

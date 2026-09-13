@@ -405,7 +405,7 @@ private:
     // here -- and registers itself as a session listener, because the dirty flag has to follow every edit
     // rather than the ones this window happens to start.
     qp::views::model::DocumentController document_controller_{
-        session_, qp::views::model::document_formats()};
+        session_, qp::views::model::document_formats(), &measurements_};
     qp::authoring::PortUiRegistry port_ui_{};
     qp::runtime::RunLedger ledger_{};
     // One measurement session per window, measuring a length by default. The quantity is a
