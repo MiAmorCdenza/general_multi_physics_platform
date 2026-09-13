@@ -78,10 +78,10 @@ struct Scene final {
     graph::EvalResult result{};
 
     Scene() {
-        // Five field models now: the dipole, the uniform field, the sum, the uniform electric field and the
-        // region mask. Each is a **type of its own** with its own port numbers, which is the composition
-        // principle -- a shielding field is `mul(convection, shield)`, not a switch inside a node.
-        REQUIRE(FieldNodes::mount(host) == 5);
+        // Six field models now: the dipole, the uniform field, the sum, the uniform electric field, the region
+        // mask and the multiplier. Each is a **type of its own** with its own port numbers, which is the
+        // composition principle -- a shielding field is `mul(convection, shield)`, not a switch inside a node.
+        REQUIRE(FieldNodes::mount(host) == 6);
         REQUIRE(PusherNodes::mount(host) == 1);
     }
 
@@ -172,10 +172,10 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // declaration never made. The check is that every port the reader asks for exists, with the type the reader
     // needs, and that the output is the field port a pusher can be wired to.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    // Five field models: the dipole, the uniform magnetic field, the sum, the uniform electric field and the
-    // region mask. Each is a **type of its own** with its own port numbers, which is the composition principle --
-    // a shielding field is `mul(convection, shield)`, not a switch inside a node.
-    REQUIRE(types.size() == 5);
+    // Six field models: the dipole, the uniform magnetic field, the sum, the uniform electric field, the region
+    // mask and the multiplier. Each is a **type of its own** with its own port numbers, which is the composition
+    // principle -- a shielding field is `mul(convection, shield)`, not a switch inside a node.
+    REQUIRE(types.size() == 6);
     REQUIRE(types[0].type_name == FieldNodes::kDipoleType);
     REQUIRE(types[1].type_name == FieldNodes::kUniformType);
     REQUIRE(types[2].type_name == FieldNodes::kSumType);
@@ -242,9 +242,9 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // Mounting is what makes the type reachable from a running program rather than only from a test fixture. The
     // second mount registers nothing, because a name that is taken is left alone rather than duplicated.
     qp::host::PluginHost host{qp::plugin::Capability::node_types};
-    // Five field models now, and the count is asserted rather than assumed: it is the one place a new type
+    // Six field models now, and the count is asserted rather than assumed: it is the one place a new type
     // announces itself in the test suite, so a type that silently failed to register is a failure here.
-    REQUIRE(FieldNodes::mount(host) == 5);
+    REQUIRE(FieldNodes::mount(host) == 6);
     REQUIRE(host.node_types().find(FieldNodes::kDipoleType) != nullptr);
     REQUIRE(FieldNodes::mount(host) == 0);
 }
@@ -363,6 +363,105 @@ TEST_CASE("magnetosphere.field_nodes.a_mask_weights_the_region_it_names", "[magn
     node.set_param(FieldNodes::kPortMaskRegion, qp::ports::Value{std::int64_t{99}});
     REQUIRE(FieldNodes::read_mask(node).region == FieldNodes::MaskRegion::sphere);
     REQUIRE(std::string{FieldNodes::to_string(FieldNodes::MaskRegion::nightside)} == "nightside");
+}
+
+TEST_CASE("magnetosphere.field_nodes.a_field_scales_by_its_weight", "[magnetosphere]") {
+    // **The composition the header names**: "a shielding field is `mul(convection, shield)`, not a switch inside a
+    // node". This case builds exactly that out of the two nodes whose pair it is -- a region mask and the
+    // multiplier -- and checks the result node by node.
+    //
+    // The failure this shape guards against is not an arithmetic slip but an **index-space** one: a scalar table
+    // has one value where a vector table has three, so a loop that walked one index across both would take every
+    // third weight. The product would be smooth, plausible and about a third as strong in places, which is the
+    // kind of wrong that survives a picture.
+    const GridSpec grid{Vec3{-3.0 * kEarthRadiusM, -3.0 * kEarthRadiusM, -3.0 * kEarthRadiusM},
+                        Vec3{0.5 * kEarthRadiusM, 0.5 * kEarthRadiusM, 0.5 * kEarthRadiusM},
+                        13, 13, 13};
+    gfield::FieldSet fields;
+    const gfield::FieldKey field_key{4, FieldNodes::kPortField};
+    const gfield::FieldKey weight_key{5, FieldNodes::kPortWeight};
+    const gfield::FieldKey product_key{6, FieldNodes::kPortMulOut};
+
+    REQUIRE(bake_uniform(Vec3{0.0, 0.0, 2.0e-5}, grid, field_key, fields, tesla_dimension()));
+    FieldNodes::MaskSpec mask;
+    mask.region = FieldNodes::MaskRegion::sphere;
+    mask.r0_m = 1.5 * kEarthRadiusM;
+    mask.r1_m = 1.5 * kEarthRadiusM;
+    REQUIRE(bake_mask(mask, grid, weight_key, fields));
+
+    const gfield::FieldValue field = fields.view(field_key);
+    const gfield::FieldValue weight = fields.view(weight_key);
+    REQUIRE(bake_scaled(field, weight, product_key, fields));
+    const gfield::FieldValue product = fields.view(product_key);
+    REQUIRE(gfield::is_readable(product));
+    REQUIRE(product.is_vector());
+    // The dimension travels unchanged: scaling by a pure number does not change what the field is, and a product
+    // labelled with a different `FieldDim` would be a second answer to "what is this table".
+    REQUIRE(product.desc.dimension.M == field.desc.dimension.M);
+    REQUIRE(product.desc.dimension.T == field.desc.dimension.T);
+    REQUIRE(product.desc.dimension.I == field.desc.dimension.I);
+    REQUIRE(product.point_count() == field.point_count());
+
+    // Every node, both halves: inside the sphere the product is the field, outside it the product is zero, and the
+    // **input is untouched** -- a node that wrote into its input's buffer would make the graph's second reader see
+    // the first reader's arithmetic.
+    std::uint64_t inside = 0;
+    std::uint64_t outside = 0;
+    for (std::uint64_t point = 0; point < product.point_count(); ++point) {
+        const double w = gfield::get_component(weight, point, 0);
+        const bool is_inside = w == 1.0;
+        for (std::uint64_t component = 0; component < 3; ++component) {
+            const double expected = is_inside ? gfield::get_component(field, point, component) : 0.0;
+            REQUIRE(gfield::get_component(product, point, component) == expected);
+        }
+        is_inside ? ++inside : ++outside;
+    }
+    REQUIRE(inside > 0);
+    REQUIRE(outside > 0);
+    for (std::uint64_t point = 0; point < field.point_count(); ++point) {
+        REQUIRE(gfield::get_component(field, point, 2) == 2.0e-5);
+    }
+
+    // A weight that is not a scalar volume is refused: a vector in the weight socket would otherwise be read as
+    // one number per point -- its first component -- and the product would be a field scaled by another field's x.
+    REQUIRE_FALSE(bake_scaled(field, field, product_key, fields));
+    // And two lattices that disagree about their counts are refused rather than fitted, which is the same rule
+    // `field.sum` follows and for the same reason: fitting one to the other invents a field neither model made.
+    const GridSpec other{Vec3{-3.0 * kEarthRadiusM, -3.0 * kEarthRadiusM, -3.0 * kEarthRadiusM},
+                         Vec3{1.0 * kEarthRadiusM, 1.0 * kEarthRadiusM, 1.0 * kEarthRadiusM},
+                         7, 7, 7};
+    const gfield::FieldKey coarse_key{7, FieldNodes::kPortWeight};
+    REQUIRE(bake_mask(mask, other, coarse_key, fields));
+    REQUIRE_FALSE(bake_scaled(field, fields.view(coarse_key), product_key, fields));
+
+    // The port types are the first refusal, one layer below the code: a scalar where the field belongs and a vector
+    // where the weight belongs are both refused by `check_connection`, so the multiplier's own check is the second
+    // line of defence rather than the only one.
+    const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
+    REQUIRE(types.size() == 6);
+    REQUIRE(types[5].type_name == FieldNodes::kMulType);
+    REQUIRE(types[5].has_compute);
+    const graph::PortDesc* mul_field = types[5].find_port(FieldNodes::kPortMulField, false);
+    const graph::PortDesc* mul_weight = types[5].find_port(FieldNodes::kPortMulWeight, false);
+    REQUIRE(mul_field != nullptr);
+    REQUIRE(mul_weight != nullptr);
+    REQUIRE(mul_field->type == qp::ports::kVectorField);
+    REQUIRE(mul_weight->type == qp::ports::kScalarField);
+    const qp::ports::PortTypeDesc* vector_type = qp::ports::builtin_registry().find(qp::ports::kVectorField);
+    const qp::ports::PortTypeDesc* scalar_type = qp::ports::builtin_registry().find(qp::ports::kScalarField);
+    REQUIRE(vector_type != nullptr);
+    REQUIRE(scalar_type != nullptr);
+    REQUIRE_FALSE(qp::ports::check_connection(*scalar_type, qp::ports::PortDirection::output, *vector_type,
+                                              qp::ports::PortDirection::input)
+                      .acceptable());
+    REQUIRE_FALSE(qp::ports::check_connection(*vector_type, qp::ports::PortDirection::output, *scalar_type,
+                                              qp::ports::PortDirection::input)
+                      .acceptable());
+    // And the legal direction is accepted, so the two refusals above are about the mismatch rather than about this
+    // call being unable to say yes to anything.
+    REQUIRE(qp::ports::check_connection(*vector_type, qp::ports::PortDirection::output, *vector_type,
+                                        qp::ports::PortDirection::input)
+                .acceptable());
 }
 
 TEST_CASE("magnetosphere.field_nodes.the_dipole_is_baked_onto_the_grid_it_declares", "[magnetosphere]") {

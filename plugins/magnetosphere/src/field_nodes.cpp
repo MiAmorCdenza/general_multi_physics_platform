@@ -257,8 +257,36 @@ bool bake_mask(const FieldNodes::MaskSpec& mask, const GridSpec& grid, gfield::F
     return fields.publish(key, desc, std::move(weights));
 }
 
-std::vector<graph::NodeDesc> FieldNodes::node_types() {
-    graph::NodeDesc dipole;
+bool bake_scaled(const gfield::FieldValue& a, const gfield::FieldValue& w, gfield::FieldKey key,
+                 gfield::FieldSet& fields) {
+    if (!gfield::is_readable(a) || !gfield::is_readable(w)) return false;
+    if (a.kind() != gfield::Kind::Volume || w.kind() != gfield::Kind::Volume) return false;
+    if (!a.is_vector() || w.is_vector()) return false;
+    if (a.desc.element != qp::abi::ElementType::f64 || w.desc.element != qp::abi::ElementType::f64) return false;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (a.desc.count[axis] != w.desc.count[axis]) return false;
+    }
+    const auto* vectors = static_cast<const double*>(a.data);
+    const auto* weights = static_cast<const double*>(w.data);
+    if (vectors == nullptr || weights == nullptr) return false;
+
+    // **Two index spaces, and that is the whole of this loop.** The weight is indexed by *point* and the output by
+    // *component*, so the point is what the weight's index is derived from. Walking one index across both -- which
+    // reads naturally and is wrong -- would take every third weight and multiply the rest by whatever the third
+    // one happened to be, producing a field that is smooth, plausible and about a third as strong as it should be.
+    const std::size_t points = static_cast<std::size_t>(a.point_count());
+    std::vector<double> product(points * 3);
+    for (std::size_t point = 0; point < points; ++point) {
+        const double weight = weights[point];
+        product[point * 3 + 0] = vectors[point * 3 + 0] * weight;
+        product[point * 3 + 1] = vectors[point * 3 + 1] * weight;
+        product[point * 3 + 2] = vectors[point * 3 + 2] * weight;
+    }
+    // `a`'s own descriptor, dimension included: scaling by a pure number does not change what the field is.
+    return fields.publish(key, a.desc, std::move(product));
+}
+
+std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipole;
     dipole.type_name = kDipoleType;
     dipole.label = "Dipole field";
     dipole.description = "The Earth's field as a tilted dipole: B = (mu0/4pi) (3 (m.rhat) rhat - m) / r^3, "
@@ -494,7 +522,53 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {
     w_out.unit_symbol = "1";
     mask.outputs.push_back(w_out);
 
-    return {std::move(dipole), std::move(uniform), std::move(sum), std::move(electric), std::move(mask)};
+    // ---------------- the multiplier ----------------
+    graph::NodeDesc mul;
+    mul.type_name = kMulType;
+    mul.label = "Scale by weight";
+    mul.description = "The vector field on the first socket, multiplied node by node by the scalar weight on the "
+                      "second. Wire a region mask into the weight and a field into the first socket and the field "
+                      "exists only inside that region -- which is how a shielding field is built here: by "
+                      "wiring, not by a switch inside a node. No grid of its own: the product lives on the "
+                      "lattice its inputs share.";
+    mul.category = "field";
+    mul.version = 1;
+    mul.allow_in_field_domain = true;
+    mul.allow_in_particle_domain = false;
+    mul.has_compute = true;
+    graph::PortDesc mul_field;
+    mul_field.number = kPortMulField;
+    mul_field.name = "field";
+    mul_field.label = "Field";
+    mul_field.description = "The vector field to scale. Wired from any field node's output.";
+    mul_field.type = qp::ports::kVectorField;
+    mul_field.connectable = true;
+    mul_field.required = true;
+    mul.inputs.push_back(mul_field);
+    graph::PortDesc mul_weight;
+    mul_weight.number = kPortMulWeight;
+    mul_weight.name = "weight";
+    mul_weight.label = "Weight";
+    mul_weight.description = "The scalar weight, 0 or 1 per node from a region mask or anything else that "
+                             "publishes a scalar field. The port type is what refuses a vector here rather than "
+                             "the code inside: a dipole wired into this socket is a connection error, one layer "
+                             "below anything that could silently read its first component.";
+    mul_weight.type = qp::ports::kScalarField;
+    mul_weight.connectable = true;
+    mul_weight.required = true;
+    mul.inputs.push_back(mul_weight);
+    graph::PortDesc mul_out;
+    mul_out.number = kPortMulOut;
+    mul_out.name = "field";
+    mul_out.label = "Field";
+    mul_out.description = "The product, described exactly as the input field is.";
+    mul_out.type = qp::ports::kVectorField;
+    mul_out.connectable = true;
+    mul_out.required = false;
+    mul.outputs.push_back(mul_out);
+
+    return {std::move(dipole),   std::move(uniform), std::move(sum),
+            std::move(electric), std::move(mask),    std::move(mul)};
 }
 
 gfield::FieldValue DipoleEvaluator::input_field(const graph::NodeId id, const graph::PortNumber port) const noexcept {
@@ -516,6 +590,22 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
     graph::NodeId id, const graph::NodeDesc& desc,
     const std::vector<std::pair<graph::PortNumber, qp::ports::Value>>& inputs) {
     using Outcome = std::vector<std::pair<graph::PortNumber, qp::ports::Value>>;
+    if (desc.type_name == FieldNodes::kMulType) {
+        // No grid to read: the product lives on the lattice its inputs share, and a multiplier that asked for one
+        // would be offering a way to describe a lattice the data does not have.
+        const gfield::FieldKey mul_key{id.index, FieldNodes::kPortMulOut};
+        const gfield::FieldValue field = input_field(id, FieldNodes::kPortMulField);
+        const gfield::FieldValue weight = input_field(id, FieldNodes::kPortMulWeight);
+        if (!bake_scaled(field, weight, mul_key, *fields_)) {
+            // Either socket missing, a vector where the weight belongs, or two lattices that disagree: all three
+            // are refused rather than approximated, and the refusal is an error code because the vocabulary for
+            // "which socket" is the validator's, one layer up.
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        Outcome out;
+        out.emplace_back(FieldNodes::kPortMulOut, qp::ports::Value{fields_->view(mul_key).desc});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
     if (desc.type_name == FieldNodes::kMaskType) {
         // The mask reads its grid from a **different** port offset than the vector nodes -- after three parameters
         // rather than after three components -- which is why the reader takes the offset rather than assuming it.

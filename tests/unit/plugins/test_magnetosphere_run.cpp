@@ -77,8 +77,9 @@ struct Scene final {
     graph::Declarations declared{};
 
     Scene() {
-        // Five field models now: the dipole, the uniform field, the sum, the electric field and the region mask.
-        REQUIRE(FieldNodes::mount(host) == 5);
+        // Six field models now: the dipole, the uniform field, the sum, the electric field, the region mask and
+        // the multiplier.
+        REQUIRE(FieldNodes::mount(host) == 6);
         REQUIRE(PusherNodes::mount(host) == 1);
         REQUIRE(EmitterNodes::mount(host) == 1);
         // The render item too, or `build_plan` cannot look its descriptor up and silently records no

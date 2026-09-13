@@ -295,6 +295,22 @@ public:
     /// @brief The mask's default outer radius, in metres: three earth radii, a belt's outer edge.
     static constexpr double kDefaultMaskR1Re = 3.0;
 
+    /// @brief The multiplier: a vector field times a **scalar weight**, node by node.
+    ///
+    /// The other half of the pair the mask belongs to, and the shape `plan.hpp` already names: "a shielding field
+    /// is `mul(convection, shield)`, not a switch inside a node". It has **no grid of its own**, and that is the
+    /// decision rather than an omission -- the product of two tables is defined on the lattice they share, so a
+    /// multiplier that asked for a grid would be offering the user a way to describe a lattice its inputs do not
+    /// have. A graph that wants the product somewhere else resamples first, which is a different node.
+    static constexpr const char* kMulType = "field.mul";
+
+    /// @brief The vector field to scale. What lands here is the product's direction.
+    static constexpr qp::graph::PortNumber kPortMulField = 1;
+    /// @brief The scalar weight. A `kScalarField`, which is what a mask publishes.
+    static constexpr qp::graph::PortNumber kPortMulWeight = 2;
+    /// @brief The product, a vector lattice on the input's own grid.
+    static constexpr qp::graph::PortNumber kPortMulOut = 1;
+
     /// @brief What a mask node's parameters say.
     ///
     /// @ownership   owns
@@ -589,6 +605,40 @@ public:
  */
 [[nodiscard]] bool bake_mask(const FieldNodes::MaskSpec& mask, const GridSpec& grid,
                              qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
+
+/**
+ * @brief Multiplies a published vector field by a published scalar weight, node by node.
+ *
+ * The product is `a_i * w_i` at every node, component by component, and **the weight is read once per node rather
+ * than once per component**: a scalar table has one value where a vector table has three, so a loop that walked
+ * the vectors and indexed the weight by the same offset would read every third weight and three times nothing
+ * else. That is the mistake this function's shape exists to make impossible -- the two tables are indexed by
+ * **point**, and only the output walks components.
+ *
+ * The output carries `a`'s descriptor unchanged, including its dimension: scaling a field by a pure number does
+ * not change what the field is, and a product labelled with a different `FieldDim` would be a second answer to
+ * "what is this table".
+ *
+ * @param a    The vector field to scale. A readable f64 volume of vectors.
+ * @param w    The weight, on the **same lattice**: counts must agree on all three axes, and a product of two
+ *             tables that disagree about their geometry is refused rather than fitted.
+ * @param key  Who is publishing, for the store's key.
+ * @param fields The store. Mutated on success.
+ *
+ * @ownership   observes `fields`
+ * @thread      main
+ * @pre         none
+ * @post        On true, `fields.view(key)` is `a * w` at every node, described exactly as `a` is
+ * @invariant   On false the store is unchanged
+ * @errors      Returns false -- never throws -- for an unreadable input, for a `w` that is not a scalar volume,
+ *              for a vector in the weight socket, or for lattices whose counts disagree
+ * @complexity  O(points)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.a_field_scales_by_its_weight
+ */
+[[nodiscard]] bool bake_scaled(const qp::graph::field::FieldValue& a, const qp::graph::field::FieldValue& w,
+                               qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
 
 /**
  * @brief The node evaluator that bakes this kit's field types into a store.
