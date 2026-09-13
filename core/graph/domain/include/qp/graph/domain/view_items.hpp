@@ -44,6 +44,7 @@
 #pragma once
 
 #include <qp/graph/domain/declaration.hpp>
+#include <qp/graph/field/field_set.hpp>
 #include <qp/graph/ir.hpp>
 #include <qp/graph/structure.hpp>
 
@@ -85,6 +86,25 @@ struct ViewRequest final {
     const std::vector<double>* positions = nullptr;
     /// Host steps the run took, for whatever label an item or a host wants to show.
     std::size_t steps = 0;
+    /// The **field tables the run baked**, for an item that draws a field rather than a population.
+    ///
+    /// Absent (null) for every run that baked nothing, which is the operator loop and therefore most runs. An
+    /// item that needs a field treats null as "nothing to draw" -- the same answer as a store that does not
+    /// contain the key it was told about, because in both cases the honest report is that the field is not
+    /// there rather than that the picture is empty.
+    ///
+    /// **Why the request carries a store and not a `FieldValue`.** A declaration names a *node and a port*, and
+    /// turning that into samples is one lookup the item performs after following the wire; a request that
+    /// pre-resolved the value would have to decide which field is interesting, which is the item's job and
+    /// depends on the item. It is also the honest ownership answer: the store belongs to the run and outlives
+    /// every declaration read from it.
+    ///
+    /// **Why it is the last member.** `ViewRequest` is built by aggregate initialization at four call sites, and
+    /// a member inserted in the middle silently rebinds the fourth initializer -- `ViewRequest{g, d, p, 0}` would
+    /// set `fields` to null and leave `steps` zero, which is the *intended* meaning at one of them and an
+    /// accident at the others. Appending keeps every existing four-element form exactly as it was, so a reader
+    /// of this file never has to check the call sites to know what a `0` in that position means.
+    const qp::graph::field::FieldSet* fields = nullptr;
 
     /// @brief Whether there is anything to draw from.
     ///
@@ -127,8 +147,15 @@ struct ViewScene final {
 
     /// One point per particle, in the order the run holds them.
     std::vector<Point> points{};
-    /// An optional polyline drawn behind the points, in order. Empty when the item has no trail.
-    std::vector<Point> trail{};
+    /// Zero or more polylines drawn behind the points, each in order.
+    ///
+    /// **Plural, and that is the second view item's doing.** The field was a single `trail` while the only item
+    /// was the particle view, where one trail is the whole story. A field-line picture is the opposite shape:
+    /// a dipole's cross-section is a *family* of closed curves, and an item that could draw one curve could not
+    /// draw the thing the item exists for. So the field is a list, the particle item puts its one history in a
+    /// list of one, and the host draws them all the same way -- which is what makes "how many curves" a content
+    /// decision instead of a change to this header.
+    std::vector<std::vector<Point>> polylines{};
     /// The region to fit: the item's own idea of what matters, not the extent of `points`.
     double x_min = 0.0;
     double x_max = 0.0;
@@ -143,13 +170,13 @@ struct ViewScene final {
     /// @thread      main
     /// @pre         none
     /// @post        True exactly when both lists are empty
-    /// @invariant   A scene with a trail and no points is not empty
+    /// @invariant   A scene with a polyline and no points is not empty
     /// @errors      noexcept
     /// @complexity  O(1)
     /// @nondet      none
     /// @frozen      no
     /// @tests       graph.domain.a_scene_is_a_value_not_a_widget
-    [[nodiscard]] bool empty() const noexcept { return points.empty() && trail.empty(); }
+    [[nodiscard]] bool empty() const noexcept { return points.empty() && polylines.empty(); }
 };
 
 /**
@@ -222,7 +249,8 @@ public:
     /// @post        A scene in the item's own units, possibly empty
     /// @invariant   Does not modify the graph, the declarations or the run
     /// @errors      Cannot fail: an item that cannot draw answers with an empty scene
-    /// @complexity  O(particles)
+    /// @complexity  O(whatever this item has to read): the particle item is O(particles), a field-line item is
+    ///              O(lines x steps x interpolation), and the interface makes no claim beyond "not per frame"
     /// @nondet      none
     /// @frozen      no
     /// @tests       graph.domain.a_scene_is_a_value_not_a_widget

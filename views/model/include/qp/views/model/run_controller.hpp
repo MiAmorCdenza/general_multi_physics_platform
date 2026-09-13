@@ -45,6 +45,7 @@
 
 #include <qp/graph/execution/execution.hpp>
 #include <qp/graph/domain/declaration.hpp>
+#include <qp/graph/field/field_set.hpp>
 
 #include <qp/authoring/commands/session.hpp>
 #include <qp/runtime/run/run.hpp>
@@ -132,6 +133,12 @@ struct RunResult final {
     /// is the numbers a status line quotes and this is the one thing a canvas draws; and it is a
     /// snapshot rather than a trail, which is the decision `IGraphRun::positions` argues.
     std::vector<double> particle_positions{};
+    /// The **field tables the run baked**, owned here so that a view item can draw them.
+    ///
+    /// Empty for the operator loop's runs, which bake nothing. It is a copy rather than a pointer into the run
+    /// for the reason the line above is: the run is destroyed when `run()` returns, and a view item reads this
+    /// after that. The cost is written down where it is paid, in `run_controller.cpp`.
+    qp::graph::field::FieldSet fields{};
     qp::runtime::Trace trace{qp::runtime::RunId{}};
 };
 

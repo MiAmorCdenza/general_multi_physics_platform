@@ -144,6 +144,15 @@ RunResult RunController::run() const {
             out.report.operator_name = std::string{provider->name()};
             out.report.message = summary.note;
             out.particle_positions = built.run->positions();
+            // **Copied, not borrowed, and by the rule already applied one line above.** The run that owns the
+            // samples is destroyed when this function returns, so a view item holding a pointer into it would be
+            // reading freed memory on the next repaint. Positions are copied for exactly that reason; the field
+            // is the same snapshot for the field half of a drawing, and the price is one memcpy of what the bake
+            // already allocated -- measured at 6.6 MB for this kit's default 65^3 dipole grid, against the 6.6 MB
+            // the bake itself had just allocated. Keeping the run alive in the controller instead would trade
+            // that one copy per Run press for the same bytes resident for the life of the window, and it would
+            // make `run()` return a value that borrows from the controller.
+            out.fields = built.run->fields();
             return out;
         }
         out.report.message = ready.detail;

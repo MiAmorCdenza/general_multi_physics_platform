@@ -1112,7 +1112,82 @@ public:
     bool refuse = false;
 };
 
+/// @brief A run that baked something, so the *other* answer is checked too: "here are my tables".
+class BakingRun final : public execution::IGraphRun {
+public:
+    BakingRun() {
+        qp::abi::FieldDim tesla;
+        tesla.M = 1;
+        tesla.T = -2;
+        tesla.I = -1;
+        const qp::abi::LatticeDesc desc =
+            qp::abi::make_lattice(qp::abi::LatticeKind::volume, qp::abi::ComponentKind::vector,
+                                  qp::abi::ElementType::f64, tesla, 2, 2, 2);
+        published = fields_.publish(qp::graph::field::FieldKey{5, 1}, desc, std::vector<double>(24, 0.25));
+    }
+
+    [[nodiscard]] qp::diag::Result<void> advance(std::size_t, double dt) override {
+        if (!(dt > 0.0)) return qp::diag::ErrorCode::invalid_argument;
+        return {};
+    }
+    [[nodiscard]] execution::GraphRunReport report() const override { return {}; }
+    [[nodiscard]] std::vector<double> positions() const override { return {}; }
+    [[nodiscard]] const qp::graph::field::FieldSet& fields() const noexcept override { return fields_; }
+
+    /// Whether the bake went in, so a case can fail on *that* rather than on a later assertion.
+    bool published = false;
+
+private:
+    qp::graph::field::FieldSet fields_{};
+};
+
 }  // namespace
+
+TEST_CASE("execution.run_provider.a_run_with_no_field_answers_with_an_empty_set", "[execution]") {
+    // `IGraphRun::fields()` exists because a render domain now **declares** "draw the field on this wire", and
+    // the thing that reads a declaration is a view item, which has nowhere else to get samples from: the run owns
+    // the store. The old shape's cost was written in the header together with the condition that would pay it,
+    // so this case pins the two answers that condition created.
+    //
+    // The default is the interesting half. Most runs in this repository bake nothing -- the operator loop binds
+    // one operator to one node and never enters the field domain -- and those runs must keep compiling, which is
+    // why the member is virtual with a definition rather than pure. `StubRun` above inherits that default, so
+    // what it answers here is what every such run answers.
+    StubRun plain;
+    const qp::graph::field::FieldSet& none = plain.fields();
+    REQUIRE(none.size() == 0);
+    REQUIRE(none.keys().empty());
+    REQUIRE(none.bytes() == 0);
+
+    // A run with no field and a run with the *wrong* field give the same answer, and that sameness is the point:
+    // an item asks the store rather than checking for null, gets an unreadable value either way, and has one
+    // branch for "the field is not there" instead of two that would have to agree.
+    REQUIRE_FALSE(qp::graph::field::is_readable(none.view(qp::graph::field::FieldKey{5, 1})));
+    REQUIRE_FALSE(qp::graph::field::is_readable(none.view(qp::graph::field::kNoField)));
+
+    // **The default shares one object**, and this assertion is what makes that a decision rather than a
+    // coincidence: a run that baked nothing answers with the same reference as any other such run, so the default
+    // costs no allocation per run. Pinned here so that giving each run its own empty vector -- a defensible
+    // change, since an empty `FieldSet` is a value -- has to be made deliberately and this line updated.
+    StubRun another;
+    REQUIRE(&plain.fields() == &another.fields());
+
+    // And the other answer: a run that baked reports its own tables, not the shared empty one. The reference is
+    // the run's member, so it is valid exactly as long as the run is -- which is why the view layer **copies** it
+    // into its result rather than keeping the pointer.
+    BakingRun baking;
+    REQUIRE(baking.published);
+    const qp::graph::field::FieldSet& baked = baking.fields();
+    REQUIRE(&baked != &plain.fields());
+    REQUIRE(baked.size() == 1);
+    REQUIRE(baked.bytes() == 24 * sizeof(double));
+    const qp::graph::field::FieldValue view = baked.view(qp::graph::field::FieldKey{5, 1});
+    REQUIRE(qp::graph::field::is_readable(view));
+    REQUIRE(view.point_count() == 8);
+    REQUIRE(qp::graph::field::get_component(view, 3, 1) == 0.25);
+    // The same store answers a key it does not hold with the unreadable value, which is the single branch above.
+    REQUIRE_FALSE(qp::graph::field::is_readable(baked.view(qp::graph::field::FieldKey{9, 9})));
+}
 
 TEST_CASE("execution.run_provider.a_provider_names_its_own_refusal", "[execution]") {
     // The interface's own contract, checked with a stub rather than with a kit: the point is the **shape** --

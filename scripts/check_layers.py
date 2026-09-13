@@ -64,7 +64,16 @@ ALLOWED: dict[str, set[str]] = {
     # The direction is domain -> validate (**one-way**): validate does not depend on domain, because
     # domain semantics must have exactly one definition site -- an early version defined the same
     # Domain enum in two modules, so any translation unit including both redefined it.
-    "domain": {"units", "diag", "abi", "ir", "structure", "validate"},
+    "domain": {"units", "diag", "abi", "ir", "structure", "validate", "field"},
+    # domain -> field is new, and it is the render domain's **other end**. A render node is a declaration
+    # ("draw the field on this wire"), and the thing that reads a declaration -- a view item -- has to reach the
+    # samples the declaration names. `ViewRequest` therefore carries the run's published field set, exactly as it
+    # already carries the run's position snapshot. The edge points **down**: `field` depends on abi alone, holds
+    # no algorithm, and knows nothing about nodes and edges, so nothing here can cycle.
+    #
+    # The condition that authorised it was written in `run_provider.hpp` before this feature existed ("the
+    # reopening condition is a render domain that declares 'draw the field of node X'"), which is why the reason
+    # is a sentence about a design rather than a sentence about a deadline.
     # kernels needs field because a batch is handed to an operator in the field
     # vocabulary: `field::FieldValue` is "a described span of samples", and using
     # it is what lets one operator run on a CPU array in a test and on a packed
@@ -88,8 +97,15 @@ ALLOWED: dict[str, set[str]] = {
     # adapter presenting one as the other belongs to the plugin, next to the code it adapts.
     # execution calls a plugin's operator once per step, so it needs the same fault barrier eval uses:
     # charter C4 does not stop at the evaluator's edge. plugin is L0, so this is downward, not an inversion.
+    #
+    # execution -> field is new, and it is the same reopening condition as domain -> field seen from the other
+    # side: a *run* owns the field store, so a view item that draws a field can only get it from the run. That
+    # cost was stated in this header's own comment ("a view that wants to draw the field itself cannot ask this
+    # interface for it") together with the condition that would pay it. `IGraphRun::fields()` is that payment,
+    # and it reports tables only -- no lattice, no seed, no parameter -- so the run still makes no drawing
+    # decision. field is downstream of abi alone, so this edge points down like the one above it.
     "execution": {"units", "diag", "ir", "structure",
-                  "run", "store", "trace", "plugin", "validate"},
+                  "run", "store", "trace", "plugin", "validate", "field"},
     "kernels": {"units", "diag", "abi", "field", "domain"},
     # particles is the bridge between a plan and a batch: it owns where particle state lives and the loop that
     # drives kernels over it. It needs `field` for the same reason `kernels` does -- a batch is handed to an

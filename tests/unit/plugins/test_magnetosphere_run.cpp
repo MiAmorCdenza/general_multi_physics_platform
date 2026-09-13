@@ -783,9 +783,11 @@ TEST_CASE("magnetosphere.render.a_snapshot_becomes_a_scene", "[magnetosphere]") 
     REQUIRE(drawn.y_min == -drawn.y_max);
     REQUIRE(drawn.x_max > 6.0);
     REQUIRE(drawn.x_max < 8.0);
-    // No trail: a trail is a series of snapshots and a request carries one. The host accumulates them; an item
-    // that remembered them would be stateful, which the interface forbids.
-    REQUIRE(drawn.trail.empty());
+    // No polylines: a history is a series of snapshots and a request carries one. The host accumulates them; an
+    // item that remembered them would be stateful, which the interface forbids. The particle item's shape is
+    // "points and no curves", which is what makes the field-line item's shape a different answer rather than a
+    // different field of the same struct.
+    REQUIRE(drawn.polylines.empty());
 
     // A window that has not run yet: a valid request with an empty snapshot is an empty scene, not a failure.
     const std::vector<double> none;

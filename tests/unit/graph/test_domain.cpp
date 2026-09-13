@@ -647,6 +647,35 @@ TEST_CASE("graph.domain.a_scene_is_a_value_not_a_widget", "[domain]") {
     REQUIRE(drawn.x_max == 8.0);
     REQUIRE_FALSE(drawn.empty());
 
+    // **The second view item's shape, asserted before that item exists.** The field used to be a single `trail`;
+    // a field-line picture is a *family* of curves, and an item that could draw one curve could not draw the
+    // thing the item exists for. So the scene holds a list, `empty()` asks about both lists, and the particle
+    // item's answer -- points and no curves -- is one case rather than the definition.
+    ViewScene family;
+    family.polylines.push_back({ViewScene::Point{0.0, 1.0}, ViewScene::Point{1.0, 0.0}});
+    family.polylines.push_back({ViewScene::Point{0.0, -1.0}, ViewScene::Point{-1.0, 0.0}});
+    REQUIRE(family.points.empty());
+    REQUIRE_FALSE(family.empty());
+    family.polylines.clear();
+    REQUIRE(family.empty());
+
+    // The run's field tables travel in the request, so an item that draws a field can read one. The store below
+    // is **empty**, and that is the assertion: having a store is not the same question as having a particular
+    // field in it. An item asks the store, gets an unreadable `FieldValue` for a key that is not there, and has
+    // one answer for "no bake" and "not this key" -- which is why the member is a store and not a resolved value.
+    const qp::graph::field::FieldSet baked;
+    const ViewRequest with_fields{&empty_graph, nullptr, &positions, 4096, &baked};
+    REQUIRE(with_fields.valid());
+    REQUIRE(with_fields.fields == &baked);
+    REQUIRE(with_fields.fields->size() == 0);
+
+    // `fields` is the **last** member so that the four-element form keeps meaning exactly what it meant: a member
+    // inserted before `steps` would have rebound the `0` and the `4096` at the call sites above, silently and in
+    // the direction of "no fields and no steps" -- which is a legal request and therefore not a compile error.
+    REQUIRE(ViewRequest{&empty_graph, nullptr, &positions, 7}.steps == 7);
+    REQUIRE(ViewRequest{&empty_graph, nullptr, &positions, 7}.fields == nullptr);
+    REQUIRE(ViewRequest{&empty_graph, nullptr, &positions, 7}.positions == &positions);
+
     // A request with no run at all is refused by `valid()`, which is what a host checks before asking.
     const ViewRequest absent{&empty_graph, nullptr, nullptr, 0};
     REQUIRE_FALSE(absent.valid());

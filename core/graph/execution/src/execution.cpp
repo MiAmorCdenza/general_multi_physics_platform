@@ -7,6 +7,11 @@
  */
 #include <qp/graph/execution/execution.hpp>
 
+// For `IGraphRun`'s default `fields()`. `execution.hpp` deliberately does not include `run_provider.hpp` -- the
+// two are different subjects (driving one operator / driving a whole graph) and a translation unit that wants
+// both says so.
+#include <qp/graph/execution/run_provider.hpp>
+
 #include <qp/plugin/guard.hpp>
 #include <qp/units/dimensions.hpp>
 
@@ -258,6 +263,16 @@ RunReadiness check_run(const qp::graph::Graph& graph, const ResolveContext& ctx,
     }
     return out;
 }
+
+const qp::graph::field::FieldSet& IGraphRun::fields() const noexcept {
+    // One shared empty set rather than a member, because the answer is a property of *this interface's default*
+    // and not of any run: a run that baked nothing has no fields, and giving every such run its own empty vector
+    // would make the default cost an allocation. `const` and never written through, so sharing it is safe --
+    // `FieldSet` has no mutable state a const caller can reach.
+    static const qp::graph::field::FieldSet kNoFields{};
+    return kNoFields;
+}
+
 RunOutcome GraphRun::run(std::size_t steps, double dt) {
     RunOutcome out;
     out.operator_name = operator_name_;

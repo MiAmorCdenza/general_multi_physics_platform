@@ -21,14 +21,24 @@
  * -- the implementation lives in the plugin that knows how, and the **application** is the one place that knows
  * which plugins exist and therefore the one place that fills the list. Nothing in `views/` names a kit.
  *
- * ## Why the interface mentions no field type
+ * ## Why the interface mentions no field type -- and the condition that has now fired
  *
  * A provider owns everything its run needs, including the baked field store: the view layer asks for a run and
  * gets back a report and a snapshot of positions, and it never sees a `FieldValue`, a lattice or a bake. That is
  * what keeps this header in a module that knows nothing about fields -- and it is a decision with a cost worth
  * stating: a view that wants to **draw the field itself** (field lines, a colour map) cannot ask this interface
- * for it. The reopening condition is a render domain that declares "draw the field of node X", at which point the
- * store becomes part of the contract rather than a private detail of one kit.
+ * for it.
+ *
+ * That cost was written down as a reopening condition -- "a render domain that declares *draw the field of node
+ * X*" -- and the kit now has exactly that node (`render.field_lines`, whose `data` socket names the field to
+ * trace). So `fields()` is below, and this module depends on `field`.
+ *
+ * **Why the new edge points down.** `field` depends on `units`, `diag` and `abi` only: it holds no algorithm and
+ * knows nothing about nodes and edges, so `execution -> field` cannot cycle and the layer table gains one line
+ * rather than the design gaining a wrinkle. What is deliberately **not** here is as much a part of the decision
+ * as what is: no lattice description, no seed point, no step size, no geometry. A run reports the tables it
+ * baked. Deciding which of them is interesting, where to start tracing and what shape comes out is the view
+ * item's business, and an interface that carried any of those would be the run making a drawing decision.
  *
  * ## Why a refusal is a sentence and not an error code
  *
@@ -50,6 +60,7 @@
 #pragma once
 
 #include <qp/diag/result.hpp>
+#include <qp/graph/field/field_set.hpp>
 #include <qp/graph/ir.hpp>
 #include <qp/graph/structure.hpp>
 
@@ -187,6 +198,35 @@ public:
      * @tests       execution.run_provider.a_provider_names_its_own_refusal
      */
     [[nodiscard]] virtual std::vector<double> positions() const = 0;
+
+    /**
+     * @brief The field tables this run baked, so that a view item can draw them.
+     *
+     * **Empty for a run that baked nothing**, which is the ordinary answer rather than an edge case: the operator
+     * loop binds one operator to one node and never enters the field domain, so the default implementation below
+     * is what every existing run in this repository uses. That is why it is virtual with a definition rather than
+     * pure -- a pure one would stop every implementation, including the ones in tests, from compiling for a
+     * capability most of them do not have and cannot use.
+     *
+     * The returned reference **borrows from the run**, so it is valid exactly as long as the run is. A caller that
+     * outlives the run copies it; `RunResult` in the view layer does, by the rule it already applies to
+     * positions. Returning an empty `FieldSet` rather than a pointer keeps "there is nothing to draw" and "there
+     * is something to draw and it is empty" the same question, which is the answer `field::is_readable` is built
+     * on and the reason a null check is not needed at every call site.
+     *
+     * @ownership   borrows from this object
+     * @thread      main
+     * @pre         none
+     * @post        A set whose keys this run published, empty for a run that published none
+     * @invariant   The reference stays valid until the run is destroyed, and no call ever invalidates a previous
+     *              answer: a run bakes before it steps, so its published set does not change while it is advanced
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.run_provider.a_run_with_no_field_answers_with_an_empty_set
+     */
+    [[nodiscard]] virtual const qp::graph::field::FieldSet& fields() const noexcept;
 };
 
 /**

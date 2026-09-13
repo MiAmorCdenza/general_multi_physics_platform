@@ -268,6 +268,25 @@ public:
     /// @tests       magnetosphere.run.a_provider_builds_a_run_from_a_graph
     [[nodiscard]] std::vector<double> positions() const override;
 
+    /// @brief The field tables this run reads, so a view item can trace them.
+    ///
+    /// Returns the store the run was built over -- borrowed or owned, whichever it is -- and falls back to
+    /// `IGraphRun`'s shared empty set when there is none. Calling the base rather than holding a second empty set
+    /// here is deliberate: two empty stores are two answers to "how many fields are there", and the only reason
+    /// to have one would be to avoid a virtual call in a function that runs once per drawing.
+    ///
+    /// @ownership   borrows from this object
+    /// @thread      main
+    /// @pre         none
+    /// @post        The built store, or an empty set before a successful `build`
+    /// @invariant   The reference stays valid until this object is destroyed or rebuilt
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.run.a_provider_builds_a_run_from_a_graph
+    [[nodiscard]] const qp::graph::field::FieldSet& fields() const noexcept override;
+
     /**
      * @brief Builds a run over a graph, **baking the field domain into a store this object owns**.
      *

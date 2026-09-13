@@ -147,6 +147,11 @@ std::vector<double> MagnetosphereRun::positions() const {
     return out;
 }
 
+const qp::graph::field::FieldSet& MagnetosphereRun::fields() const noexcept {
+    // The base's shared empty set when there is no store, rather than a member: see the declaration's comment.
+    return fields_ != nullptr ? *fields_ : IGraphRun::fields();
+}
+
 RunRefusal MagnetosphereRun::build_with_own_fields(const graph::Graph& g, const graph::Declarations& declared,
                                                    const graph::INodeCatalog& catalog) {
     reset();

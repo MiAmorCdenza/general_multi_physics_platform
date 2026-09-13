@@ -15,10 +15,12 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPen>
+#include <QPolygonF>
 
 #include <algorithm>
 #include <cmath>
 #include <utility>
+#include <vector>
 
 namespace qp::views {
 namespace {
@@ -49,7 +51,7 @@ void ParticleView::paintEvent(QPaintEvent* event) {
     QPainter painter{this};
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    if (scene_.points.empty() || !scene_.has_bounds) {
+    if ((scene_.points.empty() && scene_.polylines.empty()) || !scene_.has_bounds) {
         painter.drawText(rect(), Qt::AlignCenter, empty_text());
         return;
     }
@@ -69,6 +71,26 @@ void ParticleView::paintEvent(QPaintEvent* event) {
     const double scene_centre_x = 0.5 * (scene_.x_min + scene_.x_max);
     const double scene_centre_y = 0.5 * (scene_.y_min + scene_.y_max);
 
+    // Scene units to widget pixels, once. The y flip is here rather than inverted at every call site, because
+    // every consumer of a point -- curves, the planet, the particles -- needs the same mapping and a second copy
+    // of it is how one of them ends up mirrored.
+    const auto to_pixels = [&](const qp::graph::ViewScene::Point& point) {
+        return QPointF{centre_x + (point.x - scene_centre_x) * scale,
+                       centre_y - (point.y - scene_centre_y) * scale};
+    };
+
+    // The curves first, so the planet and the particles sit on top of them. A field-line picture is mostly
+    // curves, and one drawn over the planet would say the field passes through it.
+    painter.setBrush(Qt::NoBrush);
+    for (const std::vector<qp::graph::ViewScene::Point>& line : scene_.polylines) {
+        if (line.size() < 2) continue;
+        QPolygonF path;
+        path.reserve(static_cast<int>(line.size()));
+        for (const qp::graph::ViewScene::Point& point : line) path.push_back(to_pixels(point));
+        painter.setPen(QPen(QColor(120, 170, 230), 1.2));
+        painter.drawPolyline(path);
+    }
+
     // The Earth, at the scene's origin: without it a ring of dots is a ring of dots, and with it the picture is
     // a magnetosphere. Drawn first so the particles sit on top.
     const QPointF origin{centre_x + (0.0 - scene_centre_x) * scale, centre_y - (0.0 - scene_centre_y) * scale};
@@ -80,9 +102,7 @@ void ParticleView::paintEvent(QPaintEvent* event) {
     painter.setBrush(QColor(240, 200, 90));
     painter.setPen(QPen(QColor(120, 90, 20), 1.0));
     for (const qp::graph::ViewScene::Point& point : scene_.points) {
-        const QPointF where{centre_x + (point.x - scene_centre_x) * scale,
-                            centre_y - (point.y - scene_centre_y) * scale};
-        painter.drawEllipse(where, kPointRadius, kPointRadius);
+        painter.drawEllipse(to_pixels(point), kPointRadius, kPointRadius);
     }
     painter.setPen(QPen(QColor(90, 90, 90), 1.0));
     painter.setBrush(Qt::NoBrush);

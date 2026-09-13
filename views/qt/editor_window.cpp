@@ -874,8 +874,11 @@ void EditorWindow::run_once() {
             if (node == nullptr) continue;
             for (qp::graph::IViewItem* item : qp::graph::view_items()) {
                 if (item == nullptr || !item->draws(node->type_name)) continue;
+                // `result.fields` is a member of the result rather than a pointer into the run, because the run
+                // is gone by the time this line runs: it is the same reason `particle_positions` is a member.
                 const qp::graph::ViewRequest request{&graph, &result.render_declared,
-                                                     &result.particle_positions, result.report.steps};
+                                                     &result.particle_positions, result.report.steps,
+                                                     &result.fields};
                 if (!request.valid()) break;
                 particle_view->set_scene(item->scene(request));
                 break;

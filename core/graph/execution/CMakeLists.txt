@@ -21,6 +21,11 @@
 # It deliberately does **not** depend on `graph/kernels`: an operator here is two methods, and
 # binding this to `IBatchAdvancer` would mean a run loop that can only drive batch advancers. The
 # adapter that presents one as the other belongs to the plugin, next to the code it adapts.
+#
+# `field` is here because a run owns the field store, so a view item that draws a field can only get
+# it from the run: `IGraphRun::fields()`. The header states the cost of the old shape ("a view that wants
+# to draw the field itself cannot ask this interface for it") together with the condition that would pay
+# it -- a render domain declaring "draw the field of node X" -- and the condition has been met.
 
 add_library(qp_graph_execution STATIC
     src/execution.cpp)
@@ -35,5 +40,5 @@ target_include_directories(qp_graph_execution
 target_compile_features(qp_graph_execution PUBLIC cxx_std_20)
 target_link_libraries(qp_graph_execution
     PUBLIC qp::graph_ir qp::graph_structure qp::graph_validate qp::diag qp::plugin
-           qp::runtime_run qp::runtime_store qp::runtime_trace
+           qp::runtime_run qp::runtime_store qp::runtime_trace qp::field
     PRIVATE qp_warnings qp_sanitize)
