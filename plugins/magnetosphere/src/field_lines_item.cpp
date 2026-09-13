@@ -120,13 +120,15 @@ graph::ViewScene FieldLinesViewItem::scene(const graph::ViewRequest& request) {
             const double radius = first + (last - first) * t;
             const FieldLine traced = tracer.trace(Vec3{radius, 0.0, 0.0});
             if (!traced.usable()) continue;
-            // **The meridional plane**: `x` across, `z` up. A dipole's lines leave the equatorial plane
-            // immediately -- the field there points out of it -- so the equatorial projection the particle item
-            // uses is not an option here, and the plane every textbook draws a magnetosphere in is this one.
+            // **Three coordinates, and the plane is a view rather than a lost axis.** This item used to write
+            // `{x, z}` -- the meridional plane, chosen because a dipole's lines leave the equatorial plane
+            // immediately and the equatorial projection the particle item uses would draw a degenerate line. The
+            // points are now the traced ones in full and the choice is stated below as `view`, so a host with a
+            // camera opens on the textbook picture and the user can turn it.
             std::vector<graph::ViewScene::Point> curve;
             curve.reserve(traced.points_re.size());
             for (const Vec3& point : traced.points_re) {
-                curve.push_back(graph::ViewScene::Point{point.x, point.z});
+                curve.push_back(graph::ViewScene::Point{point.x, point.y, point.z});
             }
             out.polylines.push_back(std::move(curve));
         }
@@ -139,7 +141,16 @@ graph::ViewScene FieldLinesViewItem::scene(const graph::ViewRequest& request) {
         out.x_max = half;
         out.y_min = -half;
         out.y_max = half;
+        // The seeds lie in the equatorial plane and are traced both ways, so the traces span it symmetrically:
+        // the box is a cube, which is what a camera host needs to place its near and far planes.
+        out.z_min = -half;
+        out.z_max = half;
         out.has_bounds = !out.polylines.empty();
+        // **The textbook picture, stated as a direction instead of a dropped axis.** Looking from the `-y` side
+        // puts `+x` to the right and `+z` up: exactly the plane this item drew before it had a third coordinate,
+        // which is what makes the change invisible in the two-dimensional host.
+        out.view.azimuth_deg = -90.0;
+        out.view.elevation_deg = 0.0;
         // The body the traces stop at, one earth radius across, drawn under the curves.
         out.body_radius = 1.0;
         return out;

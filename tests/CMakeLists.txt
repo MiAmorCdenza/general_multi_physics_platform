@@ -780,6 +780,12 @@ if(TARGET qp::views_model AND TARGET qp::plugins::mechanics)
     # this subtree and the plugin invocation does not, and a case filed under
     # `unit/plugins/` had its contracts in a partition that could not see it -- which the
     # gate reported, correctly, as both orphans and dangling `@tests` ids.
+    # The projection, in the Qt-free half of the view layer: the arithmetic both hosts share, asserted on both
+    # compilers without a window.
+    qp_add_test(qp_test_scene_projection
+        SOURCES model/test_scene_projection.cpp
+        LIBS qp::views_model qp::graph_domain)
+
     qp_add_test(qp_test_run_controller
         SOURCES model/test_run_controller.cpp
         # qp::host and the magnetosphere kit are here for one case: the application's **provider** run path, which

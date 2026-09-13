@@ -1121,17 +1121,26 @@ TEST_CASE("magnetosphere.render.a_field_becomes_a_family_of_curves", "[magnetosp
         REQUIRE(curve.size() > 10);
     }
 
-    // **The projection is the meridional plane**, and this is what proves it: each curve starts and ends on the
-    // surface at `r = 1`, so its endpoints are at `(x, z)` with `x^2 + z^2 = 1`, and it reaches its widest `x` at
-    // `z = 0` -- the equator -- with that widest value being the seed. An item that had projected `(x, y)` would
-    // produce curves with `y = 0` everywhere and a degenerate vertical line here.
+    // **The curves are in the meridional plane, and now they say so in three coordinates.** Each starts and ends
+    // on the surface at `r = 1`, so its endpoints have `x^2 + z^2 = 1`, and it reaches its widest `x` at `z = 0` --
+    // the equator -- with that widest value being the seed. The traces are seeded in the equatorial plane and
+    // integrated in it, so **`y` is zero all the way along**: that assertion is the one this case could not make
+    // before the scene had a third coordinate, when the item wrote `{x, z}` into a two-component point and the plane
+    // was a lost axis rather than a stated view.
+    REQUIRE(drawn.view.azimuth_deg == -90.0);
+    REQUIRE(drawn.view.elevation_deg == 0.0);
     std::vector<double> widest;
     for (const std::vector<graph::ViewScene::Point>& curve : drawn.polylines) {
         const graph::ViewScene::Point& first = curve.front();
         const graph::ViewScene::Point& last = curve.back();
-        REQUIRE(std::abs(std::hypot(first.x, first.y) - 1.0) < 1.0e-9);
-        REQUIRE(std::abs(std::hypot(last.x, last.y) - 1.0) < 1.0e-9);
-        REQUIRE(first.y * last.y < 0.0);
+        REQUIRE(std::abs(std::hypot(first.x, first.z) - 1.0) < 1.0e-9);
+        REQUIRE(std::abs(std::hypot(last.x, last.z) - 1.0) < 1.0e-9);
+        REQUIRE(first.z * last.z < 0.0);
+        // Every point is in the plane the seeds were laid in. The endpoints are the exception to nothing: they are
+        // on the surface, which the two assertions above already say.
+        for (const graph::ViewScene::Point& point : curve) {
+            REQUIRE(std::abs(point.y) < 1.0e-9);
+        }
         double far = 0.0;
         for (const graph::ViewScene::Point& point : curve) far = std::max(far, point.x);
         widest.push_back(far);

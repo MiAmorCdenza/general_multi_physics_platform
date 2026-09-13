@@ -40,8 +40,14 @@ graph::ViewScene ParticleViewItem::scene(const graph::ViewRequest& request) {
     for (std::size_t i = 0; i + 2 < positions.size(); i += 3) {
         const double x = positions[i];
         const double y = positions[i + 1];
-        if (!std::isfinite(x) || !std::isfinite(y)) continue;
-        out.points.push_back(graph::ViewScene::Point{x, y});
+        const double z = positions[i + 2];
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
+        // **All three coordinates.** A ring current is a ring in three dimensions and its `z` is the interesting
+        // part -- the tilt and the thickness of the sheet -- which this item used to drop because the host could
+        // only draw a plane. The frame below is still the equatorial extent, deliberately: a particle that flies
+        // far along `z` should leave the picture rather than rescale it, which is the same rule the seeds rather
+        // than the curves set for the field-line item.
+        out.points.push_back(graph::ViewScene::Point{x, y, z});
         const double radius = std::sqrt(x * x + y * y);
         if (radius > largest) largest = radius;
     }
@@ -54,7 +60,16 @@ graph::ViewScene ParticleViewItem::scene(const graph::ViewRequest& request) {
     out.x_max = half;
     out.y_min = -half;
     out.y_max = half;
+    // The same half-width in `z`, so the box a camera host sees is a cube around the equatorial frame: a host
+    // that took the particles' own `z` extent would let one particle thrown far up the axis shrink everything
+    // else to a dot.
+    out.z_min = -half;
+    out.z_max = half;
     out.has_bounds = true;
+    // Looking down the `+z` axis: `+x` right, `+y` up. That is the equatorial projection this item has always
+    // drawn, so an orthographic host still draws the same picture and a camera host opens on it.
+    out.view.azimuth_deg = 0.0;
+    out.view.elevation_deg = 90.0;
     // One earth radius, because this scene is in earth radii: `positions()` converts at the kit's boundary, so the
     // planet is radius one by construction rather than by a number the widget would have to be told.
     out.body_radius = 1.0;

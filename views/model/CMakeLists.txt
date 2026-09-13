@@ -29,7 +29,9 @@ add_library(qp_views_model STATIC
     run_controller.cpp
     execution_binders.cpp
     document_controller.cpp
-    export_controller.cpp)
+    export_controller.cpp
+    scene_projection.cpp
+)
 
 add_library(qp::views_model ALIAS qp_views_model)
 

@@ -12,6 +12,8 @@
  */
 #include "scene_view.hpp"
 
+#include <qp/views/model/scene_projection.hpp>
+
 #include <QPainter>
 #include <QPaintEvent>
 #include <QPen>
@@ -60,27 +62,32 @@ void SceneView::paintEvent(QPaintEvent* event) {
         return;
     }
 
-    // The uniform fit: the smaller of the two scales, so equal distances stay equal on screen.
+    // **The plane this host draws is the scene's view, not the first two coordinates.** Until the scene grew a
+    // third coordinate, "the plane" was `x` and `y` and each item chose it by throwing an axis away: the field-line
+    // item wrote `{x, z}` and this widget drew it as if it were `{x, y}`. Now the item states the direction it wants
+    // to be seen from, the basis comes from the one definition both hosts share, and the plane is a consequence --
+    // which is what keeps the picture identical after the item stopped discarding `y`.
+    const qp::views::model::ScreenBasis basis = qp::views::model::screen_basis(scene_.view);
+
+    // The uniform fit: one scale for both screen axes, so equal distances stay equal. The half-width comes from the
+    // scene's box **projected through the basis**, so a rotated view is fitted as tightly as an axis-aligned one.
     const double width = static_cast<double>(std::max(1, rect().width())) - 2.0 * kMarginPixels;
     const double height = static_cast<double>(std::max(1, rect().height())) - 2.0 * kMarginPixels;
-    const double span_x = scene_.x_max - scene_.x_min;
-    const double span_y = scene_.y_max - scene_.y_min;
-    if (!(span_x > 0.0) || !(span_y > 0.0)) {
+    const double half = qp::views::model::fitted_half_width(scene_, basis, 1.0e-3);
+    if (!(half > 0.0) || !std::isfinite(half)) {
         painter.drawText(rect(), Qt::AlignCenter, empty_text_);
         return;
     }
-    const double scale = std::min(width / span_x, height / span_y);
+    const double scale = std::min(width, height) / (2.0 * half);
     const double centre_x = rect().center().x();
     const double centre_y = rect().center().y();
-    const double scene_centre_x = 0.5 * (scene_.x_min + scene_.x_max);
-    const double scene_centre_y = 0.5 * (scene_.y_min + scene_.y_max);
 
     // Scene units to widget pixels, once. The y flip is here rather than inverted at every call site, because
     // every consumer of a point -- curves, the body, the points -- needs the same mapping and a second copy of it
     // is how one of them ends up mirrored.
     const auto to_pixels = [&](const qp::graph::ViewScene::Point& point) {
-        return QPointF{centre_x + (point.x - scene_centre_x) * scale,
-                       centre_y - (point.y - scene_centre_y) * scale};
+        const std::pair<double, double> screen = qp::views::model::project_orthographic(basis, point);
+        return QPointF{centre_x + screen.first * scale, centre_y - screen.second * scale};
     };
 
     // The curves first, so the body and the particles sit on top of them.
@@ -98,8 +105,9 @@ void SceneView::paintEvent(QPaintEvent* event) {
     // the picture is a magnetosphere. Its radius is the scene's own number in the scene's own units, so it scales
     // with everything else rather than staying a fixed number of pixels.
     if (scene_.body_radius > 0.0) {
-        const QPointF origin{centre_x + (0.0 - scene_centre_x) * scale,
-                             centre_y - (0.0 - scene_centre_y) * scale};
+        // The projected origin, which is the widget's centre: a view looks at the origin by definition, and the
+        // body is at the origin by the scene's own contract.
+        const QPointF origin{centre_x, centre_y};
         painter.setBrush(QColor(60, 110, 180));
         painter.setPen(Qt::NoPen);
         painter.drawEllipse(origin, scene_.body_radius * scale, scene_.body_radius * scale);
@@ -113,7 +121,7 @@ void SceneView::paintEvent(QPaintEvent* event) {
     painter.setPen(QPen(QColor(90, 90, 90), 1.0));
     painter.setBrush(Qt::NoBrush);
     painter.drawText(rect().adjusted(6, 4, -6, -4), Qt::AlignTop | Qt::AlignLeft,
-                     QStringLiteral("%1 R_E").arg(scene_.x_max, 0, 'g', 3));
+                     QStringLiteral("%1 R_E").arg(half, 0, 'g', 3));
 }
 
 }  // namespace qp::views

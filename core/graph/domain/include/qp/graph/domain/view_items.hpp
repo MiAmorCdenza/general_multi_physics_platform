@@ -133,12 +133,20 @@ struct ViewRequest final {
 };
 
 /**
- * @brief What to draw, in the item's own units: points, an optional trail, and the bounds to fit.
+ * @brief What to draw, in the item's own units: points in space, curves, the bounds to fit, and the way to look at
+ * it.
  *
  * A value, copyable and Qt-free, so a test can assert what an item decided without a toolkit and without
- * pixels. The units are the item's; the host converts them to screen coordinates using `x_min`..`y_max`, which is
+ * pixels. The units are the item's; the host converts them to screen coordinates using the bounds, which is
  * why the bounds are part of the scene rather than something the host infers -- an inferred fit jumps when a
  * particle leaves the box, and the item is the only thing that knows what "the interesting region" is.
+ *
+ * **The coordinates are three, and the view is the item's choice.** Until this header grew a `z`, a scene was
+ * "points in a plane" and each item picked its own projection by throwing an axis away: the particle item drew
+ * the equatorial plane and the field-line item the meridional one. That worked while the host could only draw a
+ * plane, and it stopped working the moment a host grew a camera -- because a camera pointed at a family of
+ * meridional curves from the equatorial direction sees a line, and only the item knows that. So the scene carries
+ * a **default view**, an orthographic host projects with it, and a host with a camera starts there.
  *
  * @ownership   owns
  * @thread      main
@@ -150,10 +158,16 @@ struct ViewRequest final {
  * @tests       graph.domain.a_scene_is_a_value_not_a_widget
  */
 struct ViewScene final {
-    /// One 2-D point in the item's own units.
+    /// One point in space, in the item's own units.
+    ///
+    /// `z` is **appended** rather than inserted, so every `Point{x, y}` a producer already wrote still means what
+    /// it meant: a point in the equatorial plane. Three times this session a member inserted in the middle of a
+    /// positional aggregate has silently re-labelled every construction of it, and the rule that came out of those
+    /// is that a new coordinate goes at the end.
     struct Point final {
         double x = 0.0;
         double y = 0.0;
+        double z = 0.0;
     };
 
     /// One point per particle, in the order the run holds them.
@@ -167,11 +181,34 @@ struct ViewScene final {
     /// list of one, and the host draws them all the same way -- which is what makes "how many curves" a content
     /// decision instead of a change to this header.
     std::vector<std::vector<Point>> polylines{};
+    /// The direction an item wants its picture seen from. See the type's comment.
+    struct View final {
+        /// Degrees around the polar axis, measured from `+x` toward `+y`.
+        double azimuth_deg = 0.0;
+        /// Degrees above the equatorial plane, from `0` (in the plane) to `90` (on the `+z` axis).
+        double elevation_deg = 90.0;
+        /// How far the camera sits from the origin, in the scene's own units. Zero means "the host fits the
+        /// bounds", which is what an orthographic host does and what a camera host uses as a starting distance
+        /// before its own zoom takes over.
+        double distance = 0.0;
+    };
+
+    /// The default view. `azimuth 0, elevation 90` looks down the `+z` axis at the equatorial plane with `+x`
+    /// to the right and `+y` up -- the orientation the particle item has always drawn in, and therefore the
+    /// default a scene that says nothing gets.
+    View view{};
+
     /// The region to fit: the item's own idea of what matters, not the extent of `points`.
+    ///
+    /// A box rather than a rectangle, with the same three-of-everything rule as `Point`: `z_min`/`z_max` are
+    /// appended, an orthographic host ignores them, and a camera host uses the whole box to place its near and
+    /// far planes and to bound how far the user can pull back.
     double x_min = 0.0;
     double x_max = 0.0;
     double y_min = 0.0;
     double y_max = 0.0;
+    double z_min = 0.0;
+    double z_max = 0.0;
     /// Whether the bounds mean anything. A scene with no bounds is drawn in whatever the host had.
     bool has_bounds = false;
     /// The radius of a **body at the origin** to draw under everything else, in the item's own units.
