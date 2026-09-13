@@ -1310,6 +1310,42 @@ GCC 791、MSVC 793 全绿。**观察到一次未能复现的偶发失败**：第
 **契约门禁的一条规则也在这一轮被记住**：C6「孤儿用例」——未被任何头文件 `@tests` 引用的用例会被拒绝。
 渲染声明生产者那条用例第一次没被认领，门禁直接拦下了。
 
+### 9.19 剩下的最后一步：把场景画到屏幕上（交接）
+
+**渲染链条的四段已经通了**，缺的只有"画到屏幕上"。这一节把它写到仓库里而不是只留在一次对话里，
+因为它是唯一还开着的一步，而下一次接手的人应该从这里开始，不必重新侦察。
+
+**已经通了什么**（每一段都有自己的用例，双编译器全绿，GCC 798 / MSVC 800）：
+
+| 段 | 是什么 | 在哪里 |
+|---|---|---|
+| 声明 | 图说"我要画这个" | `plugins/magnetosphere/render_nodes.hpp`（`render.particles`） |
+| 生产者 | 谁算出一份渲染计划 | `RunResult::render_declared`（`views/model/run_controller.cpp`） |
+| 绘制者 | 把快照变成场景 | `plugins/magnetosphere/view_item.hpp`（`ParticleViewItem`） |
+| 值 | 画什么：点 + 边界 | `core/graph/domain/view_items.hpp`（`ViewScene`） |
+
+**缺的三件事，位置已经确认**：
+
+1. **一个控件**：`views/qt/particle_view.{hpp,cpp}`，收一个 `qp::graph::ViewScene` 并在 `paintEvent` 里把
+   `x_min..y_max` 线性映射到控件矩形画点；空场景画一句提示而不是空白。源码要加进
+   **`views/CMakeLists.txt` 的 `qp_views` 源列表**（全树只有 `views/CMakeLists.txt` 与
+   `views/model/CMakeLists.txt` 两个 CMakeLists 定义了库，Qt 库是前者）。照
+   `views/qt/confidence_panel.{hpp,cpp}` 的写法对齐风格与主题。
+2. **一个 dock**：`views/qt/editor_window.cpp` 里照 170–184 行现有的 `Measurement`/`Confidence` 写法加一个。
+   场景在 **848–850 行那次 `run_controller_->run()` 之后**构造：
+   `qp::graph::ViewRequest{&session.graph(), &result.render_declared, &result.particle_positions, result.report.steps}`，
+   然后遍历 `qp::graph::view_items()`，对 `draws(type_name)` 为真的项取 `scene(request)`。
+   类型名要从图里拿：`decl` 只给 `(node, port)`，所以 `graph.find_node(decl.node)->type_name`。
+3. **一次挂载**：`views/app/main.cpp` 里挂 `qp::plugins::magnetosphere::ParticleViewItem`
+   （与 node types、run provider 同一段，注意**声明要在使用它那行之前**——MSVC 抓过这个错）。
+
+**验证只能在 MSVC 树上做**：Qt 在 GCC 树里是关的，`main.cpp` 与 `views/qt` 根本不参与那次构建。
+所以收尾必须是 `powershell -File scripts\build.ps1`（两棵树都跑），而不是只跑 GCC。
+
+**为什么这里停住**：这一段的每一步都只能由一次约十分钟的 MSVC 构建来验证，而写它需要先读两处现状
+（Qt 控件的写法、`views/CMakeLists.txt` 的源列表）。本会话里三次"先写后查"（潜在链接错误、漏包含、
+声明顺序）都出了缺陷，所以宁可把它作为一次完整的、有充足上下文的改动来做，也不在这里挤。
+
 ### 9.9 内容的**类别**已经完成，具体内容仍需继续写（框架完成度审计）
 
 > 判据只有一条，而且是这个仓库从第一天起就写下的那一条：**加这一类内容是否需要新接口。** 如果不需要，
