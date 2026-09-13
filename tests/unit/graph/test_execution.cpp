@@ -20,6 +20,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <qp/graph/execution/execution.hpp>
+#include <qp/graph/execution/run_provider.hpp>
 
 #include <qp/diag/result.hpp>
 #include <qp/graph/ir.hpp>
@@ -1058,4 +1059,106 @@ TEST_CASE("execution.check_run.names_a_node_of_another_domain", "[execution]") {
     const RunReadiness nothing = check_run(inert_graph, inert_ctx, {&refuses}, execution::StateView::zeroed(1));
     REQUIRE(nothing.refusal == RunRefusal::no_operator);
     REQUIRE(nothing.detail.find("no node") != std::string::npos);
+}
+
+
+namespace {
+
+/// @brief A run that counts its steps, so the interface's own contract can be checked without a kit.
+class StubRun final : public execution::IGraphRun {
+public:
+    [[nodiscard]] qp::diag::Result<void> advance(std::size_t steps, double dt) override {
+        if (!(dt > 0.0)) return qp::diag::ErrorCode::invalid_argument;
+        steps_ += steps;
+        return {};
+    }
+
+    [[nodiscard]] execution::GraphRunReport report() const override {
+        execution::GraphRunReport out;
+        out.steps = steps_;
+        out.particles = 2;
+        out.live = 1;
+        out.absorbed = 1;
+        out.note = "stub";
+        return out;
+    }
+
+    [[nodiscard]] std::vector<double> positions() const override { return {1.0, 2.0, 3.0, 4.0, 5.0, 6.0}; }
+
+private:
+    std::size_t steps_ = 0;
+};
+
+/// @brief A provider that claims any non-empty graph and answers with `StubRun`, or with a sentence.
+class StubProvider final : public execution::IGraphRunProvider {
+public:
+    [[nodiscard]] std::string_view name() const noexcept override { return "stub"; }
+
+    [[nodiscard]] bool claims(const qp::graph::Graph& graph) const noexcept override {
+        return graph.node_count() > 0;
+    }
+
+    [[nodiscard]] execution::RunBuildResult build(const qp::graph::Graph&,
+                                                  const qp::graph::INodeCatalog&) override {
+        execution::RunBuildResult out;
+        if (refuse) {
+            out.refusal = "nothing to bake";
+            return out;
+        }
+        out.run = std::make_unique<StubRun>();
+        return out;
+    }
+
+    bool refuse = false;
+};
+
+}  // namespace
+
+TEST_CASE("execution.run_provider.a_provider_names_its_own_refusal", "[execution]") {
+    // The interface's own contract, checked with a stub rather than with a kit: the point is the **shape** --
+    // a question asked before the work ("is this graph yours"), a build that may answer with a sentence, and a
+    // run that reports and hands out a snapshot. A kit that got this wrong would still pass its own physics
+    // tests, which is why the contract is pinned here.
+    StubProvider provider;
+    REQUIRE(provider.name() == std::string_view{"stub"});
+
+    qp::graph::Graph graph;
+    REQUIRE_FALSE(provider.claims(graph));
+
+    const auto added = graph.add_node("anything");
+    REQUIRE(added.has_value());
+    REQUIRE(provider.claims(graph));
+
+    execution::RunBuildResult built = provider.build(graph, OneTypeCatalog{"anything"});
+    REQUIRE(built.ok());
+    REQUIRE(built.refusal.empty());
+    REQUIRE(built.run != nullptr);
+
+    // The report is consistent before a step and stays consistent after one: `live + absorbed + escaped` equals
+    // `particles` is the invariant a status line depends on, and it is the one thing a provider could plausibly
+    // get wrong by counting a retirement twice.
+    execution::GraphRunReport report = built.run->report();
+    REQUIRE(report.is_consistent());
+    REQUIRE(report.steps == 0);
+    REQUIRE(report.note == std::string{"stub"});
+    REQUIRE(built.run->positions().size() % 3 == 0);
+
+    REQUIRE(built.run->advance(7, 0.01).has_value());
+    REQUIRE(built.run->advance(3, 0.01).has_value());
+    report = built.run->report();
+    REQUIRE(report.steps == 10);
+    REQUIRE(report.is_consistent());
+
+    // A step that is not a step is refused, and the counters are untouched by the refusal: a run that counted a
+    // step it did not take would report a duration it never simulated.
+    REQUIRE_FALSE(built.run->advance(1, 0.0).has_value());
+    REQUIRE(built.run->report().steps == 10);
+
+    // A refusal is the provider's **own sentence**, passed through unchanged, and a refused build has no run.
+    StubProvider refusing;
+    refusing.refuse = true;
+    const execution::RunBuildResult refused = refusing.build(graph, OneTypeCatalog{"anything"});
+    REQUIRE_FALSE(refused.ok());
+    REQUIRE(refused.run == nullptr);
+    REQUIRE(refused.refusal == std::string{"nothing to bake"});
 }

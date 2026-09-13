@@ -18,7 +18,11 @@
  */
 #include <qp/plugins/magnetosphere/run.hpp>
 
+#include <qp/graph/eval/evaluator.hpp>
 #include <qp/graph/structure.hpp>
+
+#include <qp/plugins/magnetosphere/boris.hpp>
+#include <qp/plugins/magnetosphere/field_nodes.hpp>
 
 #include <cstddef>
 #include <utility>
@@ -105,8 +109,95 @@ void MagnetosphereRun::reset() noexcept {
     executor_refusal_ = pp::PlanRefusal::ok;
 }
 
-const pp::AdvanceReport& MagnetosphereRun::report() const noexcept {
+const pp::AdvanceReport& MagnetosphereRun::advance_report() const noexcept {
     return executor_ == nullptr ? empty_report() : executor_->report();
+}
+
+qp::graph::execution::GraphRunReport MagnetosphereRun::report() const {
+    qp::graph::execution::GraphRunReport out;
+    if (executor_ == nullptr) return out;
+    const pp::AdvanceReport& advanced = executor_->report();
+    out.steps = advanced.steps;
+    out.clamped = advanced.clamped;
+    out.particles = state_.count();
+    out.live = state_.live_count();
+    out.absorbed = state_.count_with(pp::Status::absorbed);
+    out.escaped = state_.count_with(pp::Status::escaped);
+    // The kernels this kit built are `BorisAdvancer`s, and the name check is what makes the downcast a checked
+    // claim rather than an assumption: a kernel this kit did not build would be skipped rather than read as one.
+    for (const std::unique_ptr<pk::IBatchAdvancer>& kernel : plan_.kernels) {
+        if (kernel != nullptr && kernel->name() == std::string_view{BorisAdvancer::kName}) {
+            out.speed_clamps += static_cast<const BorisAdvancer*>(kernel.get())->speed_clamps();
+        }
+    }
+    out.note = std::string{BorisAdvancer::kName} + ": " + std::to_string(out.steps) + " steps, " +
+               std::to_string(out.live) + " of " + std::to_string(out.particles) + " live";
+    return out;
+}
+
+std::vector<double> MagnetosphereRun::positions() const {
+    std::vector<double> out;
+    if (state_.count() == 0) return out;
+    out.reserve(state_.count() * 3);
+    for (std::size_t i = 0; i < state_.count(); ++i) {
+        out.push_back(state_.at(i, 0, pp::ParticleState::Slot::position) * kNormalizedPerMetre);
+        out.push_back(state_.at(i, 1, pp::ParticleState::Slot::position) * kNormalizedPerMetre);
+        out.push_back(state_.at(i, 2, pp::ParticleState::Slot::position) * kNormalizedPerMetre);
+    }
+    return out;
+}
+
+RunRefusal MagnetosphereRun::build_with_own_fields(const graph::Graph& g, const graph::Declarations& declared,
+                                                   const graph::INodeCatalog& catalog) {
+    reset();
+    owned_fields_ = std::make_unique<gfield::FieldSet>();
+
+    // The bake, with this kit's own evaluator and no cache: pressing Run means "bake what the graph says now".
+    DipoleEvaluator evaluator{*owned_fields_};
+    graph::EvalResult result;
+    const graph::EvalContext ctx{&catalog, &qp::ports::builtin_registry(), &evaluator, nullptr};
+    const auto baked = graph::evaluate_graph(g, ctx, result);
+    if (!baked.has_value()) {
+        // The bake refused. For this graph that means a field node whose parameters the evaluator could not
+        // honour, and `field_not_baked` is the code this kit already uses for "the field is not there".
+        reset();
+        return RunRefusal::field_not_baked;
+    }
+    return build(g, declared, catalog, *owned_fields_);
+}
+
+bool MagnetosphereRunProvider::claims(const graph::Graph& graph) const noexcept {
+    for (const graph::NodeSlot& slot : graph.slots()) {
+        if (!slot.occupied) continue;
+        const std::string& type = slot.node.type_name;
+        if (type == FieldNodes::kDipoleType || type == EmitterNodes::kRingType || type == PusherNodes::kBorisType) {
+            return true;
+        }
+    }
+    return false;
+}
+
+qp::graph::execution::RunBuildResult MagnetosphereRunProvider::build(const graph::Graph& graph,
+                                                                     const graph::INodeCatalog& catalog) {
+    // Every pusher in the graph, declared as what the caller wants: pressing Run on a particle graph means "run
+    // the pushers that are in it". A declared-output editor, when one exists, is what will replace this.
+    graph::Declarations declared;
+    for (const graph::NodeSlot& slot : graph.slots()) {
+        if (!slot.occupied) continue;
+        if (slot.node.type_name == PusherNodes::kBorisType) {
+            declared.add(graph::DeclaredOutput{slot.node.id, PusherNodes::kPortStateOut});
+        }
+    }
+
+    auto run = std::make_unique<MagnetosphereRun>();
+    const RunRefusal refusal = run->build_with_own_fields(graph, declared, catalog);
+    qp::graph::execution::RunBuildResult out;
+    if (refusal != RunRefusal::ok) {
+        out.refusal = std::string{to_string(refusal)};
+        return out;
+    }
+    out.run = std::move(run);
+    return out;
 }
 
 RunRefusal MagnetosphereRun::build(const graph::Graph& g, const graph::Declarations& declared,

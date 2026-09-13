@@ -61,5 +61,5 @@ target_compile_features(qp_plugins_magnetosphere PUBLIC cxx_std_20)
 # signatures, so anyone using this library needs their headers.
 target_link_libraries(qp_plugins_magnetosphere
     PUBLIC qp::units qp::diag qp::abi qp::field qp::graph_kernels qp::graph_particles
-           qp::graph_eval qp::graph_ir qp::graph_structure qp::graph_domain qp::host
+           qp::graph_eval qp::graph_ir qp::graph_structure qp::graph_domain qp::graph_execution qp::host
     PRIVATE qp_warnings qp_sanitize)

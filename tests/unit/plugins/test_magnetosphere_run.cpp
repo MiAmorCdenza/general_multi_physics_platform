@@ -422,7 +422,7 @@ TEST_CASE("magnetosphere.run.a_graph_becomes_a_run", "[magnetosphere]") {
     REQUIRE(run.emitter().count == 8);
     REQUIRE(run.emitter().l_shell_re == 6.6);
     REQUIRE(run.baked_bytes() > 0);
-    REQUIRE(run.report().steps == 0);
+    REQUIRE(run.advance_report().steps == 0);
 
     // The field the run reads is the one the graph baked: the state's particles were launched against it, and
     // the pusher binds the same entry.
@@ -431,10 +431,10 @@ TEST_CASE("magnetosphere.run.a_graph_becomes_a_run", "[magnetosphere]") {
 
     const std::size_t steps = 1000;
     REQUIRE(run.advance(steps, 0.01).has_value());
-    REQUIRE(run.report().steps == steps);
+    REQUIRE(run.advance_report().steps == steps);
     // Nothing was clamped and nothing was retired: a magnetic field does no work, so a population launched
     // inside the grid has no reason to leave it or to be throttled.
-    REQUIRE(run.report().clamped == 0);
+    REQUIRE(run.advance_report().clamped == 0);
     REQUIRE(run.state().live_count() == 8);
 
     // The physics the graph predicted, measured over the whole population. The gyroradius is `v / omega` with
@@ -463,11 +463,11 @@ TEST_CASE("magnetosphere.run.a_graph_becomes_a_run", "[magnetosphere]") {
 
     // A run that was asked for zero steps did nothing, and one that was asked for more kept going from where it
     // was rather than from the start.
-    const std::size_t before = run.report().steps;
+    const std::size_t before = run.advance_report().steps;
     REQUIRE(run.advance(0, 0.01).has_value());
-    REQUIRE(run.report().steps == before);
+    REQUIRE(run.advance_report().steps == before);
     REQUIRE(run.advance(10, 0.01).has_value());
-    REQUIRE(run.report().steps == before + 10);
+    REQUIRE(run.advance_report().steps == before + 10);
 
     // The counter strings a report quotes.
     REQUIRE(std::string{to_string(RunRefusal::ok)} == "ok");
@@ -585,13 +585,13 @@ TEST_CASE("magnetosphere.run.a_rebuild_replaces_the_run", "[magnetosphere]") {
     REQUIRE(run.build(scene.g, scene.declared, scene.host.node_types(), scene.fields) == RunRefusal::ok);
     REQUIRE(run.state().count() == 6);
     REQUIRE(run.advance(50, 0.01).has_value());
-    REQUIRE(run.report().steps == 50);
+    REQUIRE(run.advance_report().steps == 50);
 
     // The same graph again: the previous state is gone, and the counters are its own.
     REQUIRE(run.build(scene.g, scene.declared, scene.host.node_types(), scene.fields) == RunRefusal::ok);
     REQUIRE(run.built());
     REQUIRE(run.state().count() == 6);
-    REQUIRE(run.report().steps == 0);
+    REQUIRE(run.advance_report().steps == 0);
 
     // A changed parameter, re-baked and rebuilt: a different population, still with its own counters.
     scene.set(chain.emitter, EmitterNodes::kPortCount, 15.0);
@@ -600,7 +600,7 @@ TEST_CASE("magnetosphere.run.a_rebuild_replaces_the_run", "[magnetosphere]") {
     REQUIRE(run.build(scene.g, scene.declared, scene.host.node_types(), scene.fields) == RunRefusal::ok);
     REQUIRE(run.state().count() == 15);
     REQUIRE(run.emitter().l_shell_re == 4.0);
-    REQUIRE(run.report().steps == 0);
+    REQUIRE(run.advance_report().steps == 0);
 
     // And a failed rebuild leaves an **empty** run rather than the previous one wearing the new refusal: a
     // caller that read `state()` after a refusal would otherwise integrate the experiment it just replaced.
@@ -610,7 +610,82 @@ TEST_CASE("magnetosphere.run.a_rebuild_replaces_the_run", "[magnetosphere]") {
             RunRefusal::emitter_unusable);
     REQUIRE_FALSE(run.built());
     REQUIRE(run.state().count() == 0);
-    REQUIRE(run.report().steps == 0);
+    REQUIRE(run.advance_report().steps == 0);
     REQUIRE(run.plan().steps.empty());
     REQUIRE(run.plan_build() == PlanBuildRefusal::ok);
+}
+
+
+TEST_CASE("magnetosphere.run.a_provider_builds_a_run_from_a_graph", "[magnetosphere]") {
+    // **The interface a caller with no idea what a particle is uses.** `IGraphRunProvider` is asked two
+    // questions -- is this graph yours, and build me a run -- and the whole kit has to fit behind them: the bake,
+    // the launch, the plan, the executor. What a caller gets back is a report and a snapshot of positions, which
+    // is what a status line and a canvas need and is all this kit promises to hand out.
+    Scene scene;
+    const Chain chain = add_chain(scene, 0.0, 6.6, 8, 0.01, 90.0);
+    (void)chain;
+
+    MagnetosphereRunProvider provider;
+    REQUIRE(provider.name() == std::string_view{"magnetosphere"});
+    REQUIRE(provider.claims(scene.g));
+    // An empty graph is not this provider's, and saying so is not a failure: it is the normal answer from all
+    // but one provider in a list.
+    const graph::Graph empty;
+    REQUIRE_FALSE(provider.claims(empty));
+
+    // **The provider bakes for itself.** It has nobody to borrow a store from, so `build_with_own_fields` runs
+    // the field domain through this kit's evaluator and owns the result -- which is why the interface above can
+    // be written without naming a field type at all.
+    qp::graph::execution::RunBuildResult built = provider.build(scene.g, scene.host.node_types());
+    REQUIRE(built.ok());
+    REQUIRE(built.refusal.empty());
+    REQUIRE(built.run != nullptr);
+
+    // Before a step: the census is the emitter's, and nothing has moved.
+    qp::graph::execution::GraphRunReport report = built.run->report();
+    REQUIRE(report.particles == 8);
+    REQUIRE(report.live == 8);
+    REQUIRE(report.absorbed == 0);
+    REQUIRE(report.escaped == 0);
+    REQUIRE(report.steps == 0);
+    REQUIRE(report.is_consistent());
+    REQUIRE_FALSE(report.note.empty());
+    REQUIRE(built.run->positions().size() == 24);
+
+    // Ten thousand steps of the whole thing, through the interface and no other door.
+    REQUIRE(built.run->advance(1000, 0.01).has_value());
+    report = built.run->report();
+    REQUIRE(report.steps == 1000);
+    REQUIRE(report.live == 8);
+    REQUIRE(report.is_consistent());
+    REQUIRE(report.speed_clamps == 0);
+    REQUIRE(report.clamped == 0);
+
+    // The snapshot is in **earth radii**, converted at this boundary the way every other conversion in the kit
+    // is: a canvas whose axes are in metres is a canvas nobody can read, and a caller that had to know `R_E` to
+    // draw a picture would be a caller that had to know the physics.
+    const std::vector<double> positions = built.run->positions();
+    REQUIRE(positions.size() == 24);
+    for (std::size_t i = 0; i < 8; ++i) {
+        const double x = positions[i * 3 + 0];
+        const double y = positions[i * 3 + 1];
+        const double z = positions[i * 3 + 2];
+        const double radius = std::sqrt(x * x + y * y + z * z);
+        // The ring's guiding centres sit on 6.6 and each gyration adds at most twice a gyroradius, which is
+        // 0.0475 earth radii here.
+        REQUIRE(std::abs(radius - 6.6) < 0.11);
+    }
+
+    // A graph the provider claims but cannot build: a pusher with no field wired to it. The sentence is this
+    // kit's own word for the finding, not an error code squashed into a number -- which is the whole reason
+    // `RunBuildResult` carries a string.
+    Scene incomplete;
+    const graph::NodeId emitter = incomplete.add(EmitterNodes::kRingType);
+    const graph::NodeId pusher = incomplete.add(PusherNodes::kBorisType);
+    incomplete.wire(emitter, EmitterNodes::kPortState, pusher, PusherNodes::kPortStateIn);
+    REQUIRE(provider.claims(incomplete.g));
+    const qp::graph::execution::RunBuildResult refused = provider.build(incomplete.g, incomplete.host.node_types());
+    REQUIRE_FALSE(refused.ok());
+    REQUIRE(refused.run == nullptr);
+    REQUIRE(refused.refusal == std::string{to_string(RunRefusal::field_not_baked)});
 }
