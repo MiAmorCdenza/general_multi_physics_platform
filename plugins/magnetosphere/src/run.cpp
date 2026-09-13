@@ -72,6 +72,14 @@ namespace pp = qp::graph::particles;
     return false;
 }
 
+/// @brief Whether the graph holds a pusher, which is what decides if there is anything to step.
+[[nodiscard]] bool has_pusher(const graph::Graph& g) noexcept {
+    for (const graph::NodeSlot& slot : g.slots()) {
+        if (slot.occupied && slot.node.type_name == PusherNodes::kBorisType) return true;
+    }
+    return false;
+}
+
 /// @brief The empty report a run that was never built answers with.
 ///
 /// A static rather than a member, because the alternative is a second copy of the counters that could drift from
@@ -107,6 +115,7 @@ void MagnetosphereRun::reset() noexcept {
     emitter_ = EmitterSpec{};
     plan_refusal_ = PlanBuildRefusal::ok;
     executor_refusal_ = pp::PlanRefusal::ok;
+    field_only_ = false;
 }
 
 const pp::AdvanceReport& MagnetosphereRun::advance_report() const noexcept {
@@ -115,7 +124,12 @@ const pp::AdvanceReport& MagnetosphereRun::advance_report() const noexcept {
 
 qp::graph::execution::GraphRunReport MagnetosphereRun::report() const {
     qp::graph::execution::GraphRunReport out;
-    if (executor_ == nullptr) return out;
+    if (executor_ == nullptr) {
+        // A field-only run reports zeroes -- which is the true census -- and says so in the one place a status
+        // line reads. An empty note would be indistinguishable from a run that failed before doing anything.
+        if (field_only_) out.note = "field baked, no particles declared";
+        return out;
+    }
     const pp::AdvanceReport& advanced = executor_->report();
     out.steps = advanced.steps;
     out.clamped = advanced.clamped;
@@ -170,6 +184,23 @@ RunRefusal MagnetosphereRun::build_with_own_fields(const graph::Graph& g, const 
         // honour, and `field_not_baked` is the code this kit already uses for "the field is not there".
         reset();
         return RunRefusal::field_not_baked;
+    }
+
+    // **A graph that wants only a field drawn.** The bake above evaluates the whole graph, so a dipole wired to a
+    // `render.field_lines` item has already produced its table by the time the particle half would be asked for
+    // one -- and that half has nothing to do: no emitter, no pusher, no state. Refusing with `no_pusher` there
+    // would make the simplest possible picture ("draw this field") unbuildable, and the reference implementation
+    // does not have that problem because it keeps baking and running as two pipelines.
+    //
+    // It is one pipeline here, and deliberately: **the run is the only thing in this platform that bakes**, so the
+    // choice is between a field-only run and a second mechanism that bakes without running. The run wins on the
+    // argument the whole kit is built on -- one bake, one store, one place that says what a run is -- and the cost
+    // is paid in three places, each of which says what it means: `advance` does nothing and says so, `report`
+    // reports a zero census with a note rather than an empty one, and `built()` is true.
+    if (!has_pusher(g)) {
+        fields_ = owned_fields_.get();
+        field_only_ = true;
+        return RunRefusal::ok;
     }
     return build(g, declared, catalog, *owned_fields_);
 }
@@ -264,7 +295,13 @@ RunRefusal MagnetosphereRun::build(const graph::Graph& g, const graph::Declarati
 }
 
 qp::diag::Result<void> MagnetosphereRun::advance(std::size_t steps, double dt) {
-    if (executor_ == nullptr) return qp::diag::ErrorCode::not_implemented;
+    // **A run with nothing to step is not a failure.** A graph that wants only a field drawn -- a dipole wired to
+    // a `render.field_lines` item, no emitter and no pusher anywhere -- bakes and has no particles, and the
+    // controller asks every run to advance. Answering `not_implemented` there would turn "there is nothing to
+    // integrate" into "the run is broken", which is a sentence about the wrong thing.
+    if (executor_ == nullptr) {
+        return field_only_ ? qp::diag::Result<void>{} : qp::diag::Result<void>{qp::diag::ErrorCode::not_implemented};
+    }
     pk::AdvanceContext ctx;
     ctx.dt = dt;
     for (std::size_t step = 0; step < steps; ++step) {

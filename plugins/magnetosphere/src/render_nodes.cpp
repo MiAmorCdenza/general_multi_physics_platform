@@ -17,6 +17,45 @@ namespace {
 
 namespace graph = qp::graph;
 
+/// @brief A render item's own configuration: a parameter, not a socket.
+///
+/// The same shape `field_nodes.cpp` uses for a bake grid and for the same reason -- a wired parameter would have to
+/// be recomputed whenever its source changed -- with one difference worth stating: a **render** node's parameters
+/// are never read by an evaluator at all, because the node is never evaluated. They are read by the view item,
+/// through the graph, which is the only place they live.
+[[nodiscard]] graph::PortDesc parameter(graph::PortNumber number, const char* name, const char* label,
+                                        const char* unit, double step) {
+    graph::PortDesc port;
+    port.number = number;
+    port.name = name;
+    port.label = label;
+    port.description = "The item's own configuration. Read by the view item through the graph, never by an "
+                       "evaluator: a render node has no implementation.";
+    port.type = qp::ports::kScalarF64;
+    port.connectable = false;
+    port.required = true;
+    port.unit_symbol = unit;
+    port.step = step;
+    return port;
+}
+
+/// @brief The ports both render items share: the thing being drawn, and the item's own name for itself.
+///
+/// Factored out because the two items differ only in **what** they draw and in which parameters they carry, and a
+/// second hand-written copy of the output port is a second place "no value is ever produced" has to stay true.
+[[nodiscard]] graph::PortDesc item_output() {
+    graph::PortDesc out;
+    out.number = RenderNodes::kPortFieldItem;
+    out.name = "item";
+    out.label = "Render item";
+    out.description = "A name for the thing being drawn, so the graph can declare what it wants. No value is "
+                      "ever produced for it.";
+    out.type = qp::ports::kParticleBuffer;
+    out.connectable = true;
+    out.required = false;
+    return out;
+}
+
 }  // namespace
 
 std::vector<graph::NodeDesc> RenderNodes::node_types() {
@@ -69,7 +108,58 @@ std::vector<graph::NodeDesc> RenderNodes::node_types() {
     out.required = false;
     item.outputs.push_back(out);
 
-    return {std::move(item)};
+    // ---------------- the field-line item ----------------
+    graph::NodeDesc lines;
+    lines.type_name = kFieldLinesType;
+    lines.label = "Field lines";
+    lines.description = "Traces the field lines of the vector field arriving on the data wire and draws them in "
+                        "the meridional plane. A declaration like the particle item -- nothing here is ever "
+                        "evaluated -- but a declaration that **names a baked product**, so the item that draws it "
+                        "reads the run's own field samples.";
+    lines.category = "render";
+    lines.version = 1;
+    lines.has_compute = false;
+    lines.allow_in_field_domain = false;
+    lines.allow_in_particle_domain = false;
+
+    graph::PortDesc data;
+    data.number = kPortField;
+    data.name = "field";
+    data.label = "Field";
+    data.description = "The vector field to trace. Wired from a field node's output; no value crosses it, and "
+                       "the item follows the wire to the samples the bake published under that node.";
+    data.type = qp::ports::kVectorField;
+    data.connectable = true;
+    data.required = true;
+    lines.inputs.push_back(data);
+
+    graph::PortDesc count = parameter(kPortLineCount, "line_count", "Lines", "", 1.0);
+    count.description = "How many lines to trace. The seeds are spread evenly along the +x axis of the "
+                        "equatorial plane, so a count of seven is the nested family a first course draws.";
+    count.type = qp::ports::kInt64;
+    lines.inputs.push_back(count);
+    graph::PortDesc seed_start = parameter(kPortSeedStart, "seed_start", "First seed", "R_E", 0.5);
+    seed_start.description = "Where the innermost line crosses the equator. Below about 1.5 the line's foot "
+                             "points crowd into the polar cap and the inner shells stop being distinguishable.";
+    lines.inputs.push_back(seed_start);
+    graph::PortDesc seed_end = parameter(kPortSeedEnd, "seed_end", "Last seed", "R_E", 0.5);
+    seed_end.description = "Where the outermost line crosses the equator. Past the table's own box the trace "
+                           "stops as `left_table` and the line is simply short, which is visible rather than "
+                           "wrong.";
+    lines.inputs.push_back(seed_end);
+    graph::PortDesc step_max = parameter(kPortStepMax, "step_max", "Step cap", "R_E", 0.05);
+    step_max.description = "The largest step the tracer takes along a line. This is a drawing resolution and not "
+                           "an accuracy: the tracer chooses its own step from its error estimate, and the case "
+                           "that pins it traces one line at caps two orders apart and measures the same shape.";
+    lines.inputs.push_back(step_max);
+    graph::PortDesc tolerance = parameter(kPortTolerance, "tolerance", "Step error", "R_E", 1.0e-5);
+    tolerance.description = "The error the tracer allows per step. This and not the cap decides where a line "
+                            "goes; the default is four orders below the table's own interpolation error, so "
+                            "tightening it resolves the interpolant rather than the model.";
+    lines.inputs.push_back(tolerance);
+    lines.outputs.push_back(item_output());
+
+    return {std::move(item), std::move(lines)};
 }
 
 std::size_t RenderNodes::mount(qp::host::PluginHost& host) noexcept {

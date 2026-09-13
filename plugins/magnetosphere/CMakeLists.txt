@@ -48,6 +48,7 @@ add_library(qp_plugins_magnetosphere STATIC
     src/boris.cpp
     src/dipole.cpp
     src/emitter.cpp
+    src/field_lines_item.cpp
     src/field_nodes.cpp
     src/plan.cpp
     src/render_nodes.cpp

@@ -89,7 +89,8 @@ enum class RunRefusal : std::uint8_t {
     ok = 0,
     /// The declarations reached no particle-domain node: nothing was asked for, so nothing was built.
     empty_plan = 1,
-    /// The particle plan holds no pusher. An emitter and a declared output with nothing between them.
+    /// A pusher reached the particle plan and nothing feeds it: an emitter and a declared output with nothing
+    /// between them. **Not** the same as a graph with no pusher at all, which is a field-only run and succeeds.
     no_pusher = 2,
     /// A pusher's state channel leads to no emitter, so there are no particles to advance.
     no_emitter = 3,
@@ -367,6 +368,11 @@ public:
 
     /// @brief Whether a run was built and prepared.
     ///
+    /// True for a **field-only** run as well: a graph that declared a field and no particles has been built, its
+    /// bake is in the store, and `advance` is a legal call that does nothing. The alternative -- reporting false
+    /// because there is no executor -- would make the one state a caller can test say "this run does not work"
+    /// about a run whose whole purpose is to have baked.
+    ///
     /// @ownership   pure
     /// @thread      any
     /// @pre         none
@@ -376,8 +382,9 @@ public:
     /// @complexity  O(1)
     /// @nondet      none
     /// @frozen      no
-    /// @tests       magnetosphere.run.a_rebuild_replaces_the_run
-    [[nodiscard]] bool built() const noexcept { return executor_ != nullptr; }
+    /// @tests       magnetosphere.run.a_rebuild_replaces_the_run,
+    ///              magnetosphere.run.a_field_only_graph_bakes_without_particles
+    [[nodiscard]] bool built() const noexcept { return executor_ != nullptr || field_only_; }
 
     /// @brief Why `build_particle_plan` refused, when the refusal was `plan_rejected`.
     ///
@@ -416,6 +423,8 @@ private:
     qp::graph::field::FieldSet* fields_ = nullptr;
     /// The store, when this object baked it. Null when the caller owns one and passed it to `build`.
     std::unique_ptr<qp::graph::field::FieldSet> owned_fields_{};
+    /// Whether this run baked a field and has no particles to step. See `built()` and `build_with_own_fields`.
+    bool field_only_ = false;
     qp::graph::particles::ParticleState state_{};
     BuiltPlan plan_{};
     std::unique_ptr<qp::graph::particles::ParticleExecutor> executor_{};

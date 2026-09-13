@@ -23,6 +23,7 @@
 #include <qp/plugins/magnetosphere/baked_field.hpp>
 #include <qp/plugins/magnetosphere/dipole.hpp>
 #include <qp/plugins/magnetosphere/emitter.hpp>
+#include <qp/plugins/magnetosphere/field_lines_item.hpp>
 #include <qp/plugins/magnetosphere/field_nodes.hpp>
 #include <qp/plugins/magnetosphere/geomagnetic.hpp>
 #include <qp/plugins/magnetosphere/plan.hpp>
@@ -82,7 +83,7 @@ struct Scene final {
         REQUIRE(EmitterNodes::mount(host) == 1);
         // The render item too, or `build_plan` cannot look its descriptor up and silently records no
         // declaration for it -- which is the failure this case exists to catch, and it caught it here first.
-        REQUIRE(RenderNodes::mount(host) == 1);
+        REQUIRE(RenderNodes::mount(host) == 2);
     }
 
     [[nodiscard]] graph::EvalContext ctx() noexcept {
@@ -714,7 +715,7 @@ TEST_CASE("magnetosphere.render.the_item_is_declared_and_never_evaluated", "[mag
     scene.declared.add(graph::DeclaredOutput{item, RenderNodes::kPortItem});
 
     const std::vector<graph::NodeDesc> types = RenderNodes::node_types();
-    REQUIRE(types.size() == 1);
+    REQUIRE(types.size() == 2);
     REQUIRE(types.front().type_name == RenderNodes::kParticlesType);
     REQUIRE_FALSE(types.front().has_compute);
     REQUIRE(types.front().find_port(RenderNodes::kPortState, false) != nullptr);
@@ -740,6 +741,76 @@ TEST_CASE("magnetosphere.render.the_item_is_declared_and_never_evaluated", "[mag
     REQUIRE(plan.field.order().size() == 1);
 }
 
+
+TEST_CASE("magnetosphere.render.the_field_lines_type_declares_the_ports_the_item_reads",
+          "[magnetosphere]") {
+    // The second render type, and the case is about **one difference** from the first: this declaration names a
+    // baked product. A render node is still never evaluated -- `has_compute` is false here too -- but its data
+    // socket is wired to a field node, and the item that draws it follows that wire into the run's samples. That
+    // single difference is what made `ViewRequest` carry a field store and `IGraphRun` grow `fields()`, so it is
+    // worth pinning at the declaration rather than only at the item.
+    Scene scene;
+    const graph::NodeId dipole = scene.add_dipole(0.0);
+    const graph::NodeId lines = scene.add(RenderNodes::kFieldLinesType);
+    scene.set(lines, RenderNodes::kPortLineCount, 5.0);
+    scene.set(lines, RenderNodes::kPortSeedStart, 2.0);
+    scene.set(lines, RenderNodes::kPortSeedEnd, 6.0);
+    scene.set(lines, RenderNodes::kPortStepMax, 0.2);
+    scene.set(lines, RenderNodes::kPortTolerance, 1.0e-4);
+    scene.wire(dipole, FieldNodes::kPortField, lines, RenderNodes::kPortField);
+    scene.declared.add(graph::DeclaredOutput{lines, RenderNodes::kPortFieldItem});
+
+    const std::vector<graph::NodeDesc> types = RenderNodes::node_types();
+    REQUIRE(types.size() == 2);
+    const graph::NodeDesc& described = types[1];
+    REQUIRE(described.type_name == RenderNodes::kFieldLinesType);
+    REQUIRE(described.valid());
+    // The same two flags as the particle item, and for the same reason: a render type with `has_compute` true
+    // would be evaluated during a bake.
+    REQUIRE_FALSE(described.has_compute);
+    REQUIRE_FALSE(described.allow_in_field_domain);
+    REQUIRE_FALSE(described.allow_in_particle_domain);
+    // The data socket is a **connectable vector field**, which is what makes the wire to a field node legal:
+    // `check_connection` is what refuses a scalar field or a particle state here, and it can only do that if the
+    // declaration says which one it is.
+    const graph::PortDesc* data = described.find_port(RenderNodes::kPortField, false);
+    REQUIRE(data != nullptr);
+    REQUIRE(data->connectable);
+    REQUIRE(data->required);
+    REQUIRE(data->type == qp::ports::kVectorField);
+    REQUIRE(described.find_port(RenderNodes::kPortFieldItem, true) != nullptr);
+    // Every parameter is a port and none of them is connectable: the tracer's configuration is chosen once for
+    // the picture, and a wired step cap would be a value that changes under a drawing that has already been made.
+    for (const graph::PortNumber number : {RenderNodes::kPortLineCount, RenderNodes::kPortSeedStart,
+                                           RenderNodes::kPortSeedEnd, RenderNodes::kPortStepMax,
+                                           RenderNodes::kPortTolerance}) {
+        const graph::PortDesc* parameter = described.find_port(number, false);
+        REQUIRE(parameter != nullptr);
+        REQUIRE_FALSE(parameter->connectable);
+        REQUIRE(parameter->required);
+    }
+    // The two items agree about where the drawn thing goes, which is the point of sharing the port number: a
+    // reader who has wired one item has wired the other.
+    REQUIRE(types[0].find_port(RenderNodes::kPortState, false)->number ==
+            types[1].find_port(RenderNodes::kPortField, false)->number);
+
+    // The declaration reaches the render plan and the field branch reaches the field plan, which is what makes
+    // the item find a baked table when it follows the wire.
+    const graph::ExecutionPlan plan =
+        graph::build_plan(scene.g, graph::PlanContext{&scene.host.node_types()}, scene.declared);
+    REQUIRE(plan.render.declared().size() == 1);
+    REQUIRE(plan.render.declared().front().node == lines);
+    REQUIRE(plan.render.declared().front().port == RenderNodes::kPortFieldItem);
+    REQUIRE(plan.render.order().empty());
+    REQUIRE(plan.field.order().size() == 1);
+    REQUIRE(plan.field.order().front() == dipole);
+    // And the bake really publishes under the key the item will look up: the node it followed the wire to, and the
+    // port the wire lands on. This is the pair the item's lookup is built from, asserted here so that a change to
+    // either side of it fails in one place.
+    REQUIRE(scene.bake().has_value());
+    REQUIRE(scene.fields.contains(gfield::FieldKey{dipole.index, FieldNodes::kPortField}));
+    REQUIRE_FALSE(scene.fields.contains(gfield::FieldKey{lines.index, RenderNodes::kPortField}));
+}
 
 TEST_CASE("magnetosphere.render.a_snapshot_becomes_a_scene", "[magnetosphere]") {
     // The kit's drawing side, checked as a **value**: an item that painted would put this decision where no case
@@ -798,6 +869,100 @@ TEST_CASE("magnetosphere.render.a_snapshot_becomes_a_scene", "[magnetosphere]") 
     REQUIRE_FALSE(graph::ViewRequest{&scene.g, &declared, nullptr, 0}.valid());
 }
 
+
+TEST_CASE("magnetosphere.render.a_field_becomes_a_family_of_curves", "[magnetosphere]") {
+    // The second view item, end to end: a graph declares "draw this field", the run bakes it, and the item turns
+    // the baked table into curves. Every mechanism this feature needed is on the path here -- the declaration, the
+    // wire it follows, the store the run published, and the tracer -- which is why it is one case and not four.
+    //
+    // It also covers the **field-only run**: this graph has a dipole and a render item and no particles at all,
+    // which is the simplest picture the kit can draw and which used to be refused as `no_pusher`.
+    Scene scene;
+    const graph::NodeId dipole = scene.add_dipole(0.0);
+    const graph::NodeId declaration = scene.add(RenderNodes::kFieldLinesType);
+    scene.set(declaration, RenderNodes::kPortLineCount, 4.0);
+    scene.set(declaration, RenderNodes::kPortSeedStart, 2.0);
+    scene.set(declaration, RenderNodes::kPortSeedEnd, 5.0);
+    scene.set(declaration, RenderNodes::kPortStepMax, 0.2);
+    scene.set(declaration, RenderNodes::kPortTolerance, 1.0e-4);
+    scene.wire(dipole, FieldNodes::kPortField, declaration, RenderNodes::kPortField);
+
+    MagnetosphereRunProvider provider;
+    qp::graph::execution::RunBuildResult built = provider.build(scene.g, scene.host.node_types());
+    // A graph with no pusher is **built**, not refused: the bake is the whole of what it asked for.
+    REQUIRE(built.ok());
+    REQUIRE(built.run->advance(500, 0.01).has_value());
+    REQUIRE(built.run->positions().empty());
+    const qp::graph::execution::GraphRunReport report = built.run->report();
+    REQUIRE(report.is_consistent());
+    REQUIRE(report.particles == 0);
+    REQUIRE(report.note == std::string{"field baked, no particles declared"});
+    // And the field it baked is reachable through the interface the header says was reopened for exactly this.
+    REQUIRE(built.run->fields().size() == 1);
+    REQUIRE(built.run->fields().contains(gfield::FieldKey{dipole.index, FieldNodes::kPortField}));
+
+    const std::vector<graph::DeclaredOutput> declared{
+        graph::DeclaredOutput{declaration, RenderNodes::kPortFieldItem}};
+    const std::vector<double> no_particles;
+    const graph::ViewRequest request{&scene.g, &declared, &no_particles, 500, &built.run->fields()};
+    REQUIRE(request.valid());
+
+    FieldLinesViewItem item;
+    REQUIRE(item.draws(RenderNodes::kFieldLinesType));
+    REQUIRE_FALSE(item.draws(RenderNodes::kParticlesType));
+    REQUIRE(item.name() == std::string_view{"field lines"});
+
+    const graph::ViewScene drawn = item.scene(request);
+    // One curve per seed, and none of them empty: a seed whose trace produced nothing would be a missing line in
+    // a picture whose whole content is the nesting.
+    REQUIRE(drawn.polylines.size() == 4);
+    for (const std::vector<graph::ViewScene::Point>& curve : drawn.polylines) {
+        REQUIRE(curve.size() > 10);
+    }
+
+    // **The projection is the meridional plane**, and this is what proves it: each curve starts and ends on the
+    // surface at `r = 1`, so its endpoints are at `(x, z)` with `x^2 + z^2 = 1`, and it reaches its widest `x` at
+    // `z = 0` -- the equator -- with that widest value being the seed. An item that had projected `(x, y)` would
+    // produce curves with `y = 0` everywhere and a degenerate vertical line here.
+    std::vector<double> widest;
+    for (const std::vector<graph::ViewScene::Point>& curve : drawn.polylines) {
+        const graph::ViewScene::Point& first = curve.front();
+        const graph::ViewScene::Point& last = curve.back();
+        REQUIRE(std::abs(std::hypot(first.x, first.y) - 1.0) < 1.0e-9);
+        REQUIRE(std::abs(std::hypot(last.x, last.y) - 1.0) < 1.0e-9);
+        REQUIRE(first.y * last.y < 0.0);
+        double far = 0.0;
+        for (const graph::ViewScene::Point& point : curve) far = std::max(far, point.x);
+        widest.push_back(far);
+    }
+    // Ascending, because the seeds are spread along `+x`: the family is nested rather than tangled.
+    for (std::size_t i = 1; i < widest.size(); ++i) {
+        REQUIRE(widest[i] > widest[i - 1]);
+    }
+    // And each curve's widest point is its own seed, to the accuracy of a 0.25 R_E table -- the statement that the
+    // picture is of the field the graph asked for and not of some other shell.
+    REQUIRE(std::abs(widest[0] - 2.0) < 0.05);
+    REQUIRE(std::abs(widest[3] - 5.0) < 0.05);
+
+    // The frame is the seeds and not the curves: the same graph draws the same axes, and the outermost seed plus
+    // the item's own margin is what decides them.
+    REQUIRE(drawn.has_bounds);
+    REQUIRE(drawn.x_min == -drawn.x_max);
+    REQUIRE(drawn.y_min == -drawn.y_max);
+    REQUIRE(std::abs(drawn.x_max - 5.0 * FieldLinesViewItem::kFitMargin) < 1.0e-12);
+
+    // Three ways to have nothing to draw, each answered with an empty scene rather than a failure: no run yet (no
+    // store at all), a store that does not hold the field the wire names, and a declaration this item does not
+    // draw. The third is the one a host relies on to offer a declaration to every item it has.
+    REQUIRE(item.scene(graph::ViewRequest{&scene.g, &declared, &no_particles, 0}).empty());
+    const qp::graph::field::FieldSet empty_store;
+    const graph::ViewRequest not_baked{&scene.g, &declared, &no_particles, 0, &empty_store};
+    REQUIRE(item.scene(not_baked).empty());
+    const std::vector<graph::DeclaredOutput> other{
+        graph::DeclaredOutput{dipole, FieldNodes::kPortField}};
+    const graph::ViewRequest wrong_declaration{&scene.g, &other, &no_particles, 0, &built.run->fields()};
+    REQUIRE(item.scene(wrong_declaration).empty());
+}
 
 TEST_CASE("magnetosphere.field_nodes.a_uniform_field_is_uniform", "[magnetosphere]") {
     // The second field model, and the one whose answer is **exact** under trilinear interpolation at any

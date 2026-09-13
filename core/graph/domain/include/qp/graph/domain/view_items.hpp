@@ -24,13 +24,22 @@
  * and the bounds it wants fitted. **What to draw is content; how to draw it is the toolkit's.** That split is
  * the same one `IExporter` and `ports::Value` take, and for the same reason.
  *
- * ## Why there is no slot registry yet
+ * ## The slot registry, and the condition that fired without it
  *
- * The obvious next abstraction is a registry of named slots with items claiming them. It is not here because
- * there is one item: a registry with a single client is a declaration nothing else consumes, which is the shape
- * this repository keeps finding and refusing. The reopening condition is concrete -- **when a second view item
- * exists** (field lines, a trail-only view), extract the registry and let items claim slots, because then the
- * "which slot does this draw into" question has more than one possible answer.
+ * The obvious next abstraction is a registry of named slots with items claiming them, and this file said it would
+ * arrive "when a second view item exists (field lines, a trail-only view)". **That condition has now been met** --
+ * the magnetosphere kit ships a field-line item beside the particle one -- and the registry is still not here, so
+ * the condition is recorded as fired rather than quietly rewritten.
+ *
+ * The reason it did not need to arrive is that the question it answers never acquired a second answer: the host
+ * gives **every mounted item its own panel**, so "which slot does this draw into" is one panel per item, decided by
+ * the item's identity rather than by a claim. What the second item did change is the host itself, which no longer
+ * looks a panel up by widget type: it walks `view_items()`, asks each item about each declaration, and keeps one
+ * panel per item -- the smallest thing that stops two items from drawing over each other.
+ *
+ * The registry reopens when an item has a **choice**: two items claiming one panel, one item drawing into two, or
+ * a graph declaring two items of one type. None of those exists today, and a registry built for a question with
+ * one answer is the shape this repository keeps finding and refusing.
  *
  * @ownership   mixed -- see each declaration
  * @thread      main (mounting) and the drawing thread (reading)
