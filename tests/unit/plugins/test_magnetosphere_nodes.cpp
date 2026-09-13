@@ -119,12 +119,13 @@ struct Scene final {
     graph::EvalResult result{};
 
     Scene() {
-        // Eleven field models now: the dipole, the uniform field, the sum, the uniform electric field, the region
-        // mask, the multiplier, the convection field, the corotation field, the atmosphere, the current sheet and
-        // the blend. Each is a **type of its own** with its own port numbers, which is the composition principle --
-        // a shielding field is `mul(convection, shield)` -- and the blend is the one that could not be composed
-        // out of the others: no wiring of sums and products keeps a field divergence-free.
-        REQUIRE(FieldNodes::mount(host) == 11);
+        // Twelve field models now: the dipole, the uniform field, the sum, the uniform electric field, the region
+        // mask, the multiplier, the convection field, the corotation field, the atmosphere, the current sheet, the
+        // blend and the resampler. Each is a **type of its own** with its own port numbers, which is the
+        // composition principle -- a shielding field is `mul(convection, shield)` -- and two of them could not be
+        // composed out of the others: no wiring of sums and products keeps a field divergence-free (the blend), and
+        // none of them moves a field onto another lattice (the resampler).
+        REQUIRE(FieldNodes::mount(host) == 12);
         REQUIRE(PusherNodes::mount(host) == 1);
     }
 
@@ -219,7 +220,7 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // mask, the multiplier and the convection field. Each is a **type of its own** with its own port numbers,
     // which is the composition principle -- a shielding field is `mul(convection, shield)`, not a switch inside a
     // node.
-    REQUIRE(types.size() == 11);
+    REQUIRE(types.size() == 12);
     REQUIRE(types[0].type_name == FieldNodes::kDipoleType);
     REQUIRE(types[1].type_name == FieldNodes::kUniformType);
     REQUIRE(types[2].type_name == FieldNodes::kSumType);
@@ -286,9 +287,9 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // Mounting is what makes the type reachable from a running program rather than only from a test fixture. The
     // second mount registers nothing, because a name that is taken is left alone rather than duplicated.
     qp::host::PluginHost host{qp::plugin::Capability::node_types};
-    // Eleven field models now, and the count is asserted rather than assumed: it is the one place a new type
+    // Twelve field models now, and the count is asserted rather than assumed: it is the one place a new type
     // announces itself in the test suite, so a type that silently failed to register is a failure here.
-    REQUIRE(FieldNodes::mount(host) == 11);
+    REQUIRE(FieldNodes::mount(host) == 12);
     REQUIRE(host.node_types().find(FieldNodes::kDipoleType) != nullptr);
     REQUIRE(FieldNodes::mount(host) == 0);
 }
@@ -482,7 +483,7 @@ TEST_CASE("magnetosphere.field_nodes.a_field_scales_by_its_weight", "[magnetosph
     // where the weight belongs are both refused by `check_connection`, so the multiplier's own check is the second
     // line of defence rather than the only one.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 11);
+    REQUIRE(types.size() == 12);
     REQUIRE(types[5].type_name == FieldNodes::kMulType);
     REQUIRE(types[5].has_compute);
     const graph::PortDesc* mul_field = types[5].find_port(FieldNodes::kPortMulField, false);
@@ -719,7 +720,7 @@ TEST_CASE("magnetosphere.field_nodes.a_blend_does_not_open_a_divergence", "[magn
     // The declaration: the type's own port numbers, both sockets vector fields, and three parameters that are
     // typed into a panel rather than wired from a node.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 11);
+    REQUIRE(types.size() == 12);
     REQUIRE(types[10].type_name == FieldNodes::kBlendType);
     REQUIRE(types[10].has_compute);
     REQUIRE(types[10].allow_in_field_domain);
@@ -844,7 +845,7 @@ TEST_CASE("magnetosphere.field_nodes.the_convection_field_is_the_potentials_grad
 
     // The type is declared like the others and allowed only where a bake is.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 11);
+    REQUIRE(types.size() == 12);
     REQUIRE(types[6].type_name == FieldNodes::kConvectionType);
     REQUIRE(types[6].has_compute);
     REQUIRE(types[6].allow_in_field_domain);
@@ -973,7 +974,7 @@ TEST_CASE("magnetosphere.field_nodes.corotation_is_the_rotation_the_field_allows
     // The type declares one socket and no grid parameters, which is the decision this node makes: it bakes on the
     // lattice of the field it reads, so there is no second grid to disagree with the first.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 11);
+    REQUIRE(types.size() == 12);
     REQUIRE(types[7].type_name == FieldNodes::kCorotationType);
     REQUIRE(types[7].has_compute);
     REQUIRE(types[7].inputs.size() == 1);
@@ -1067,6 +1068,36 @@ TEST_CASE("magnetosphere.field_nodes.a_wired_field_reports_the_grid_it_was_baked
     REQUIRE(blended.desc.count[0] == 41);
     REQUIRE(blended.desc.dimension.M == 1);
     REQUIRE(blended.desc.dimension.T == -2);
+
+    // **And through the one node here that has a grid of its own without baking a model.** The resampler is a grid
+    // *source*: a pusher wired to it must be handed the **target** lattice, because that is where its samples are.
+    // This is what makes it the answer to every other combinator's refusal -- `sum(resample(a), b)` is how two
+    // boxes become one -- and a resolver that walked *past* it to the original source would hand the pusher six
+    // numbers describing a lattice the samples are not on.
+    const graph::NodeId finer = scene.add(FieldNodes::kResampleType);
+    const double target_origin = -2.5 * kEarthRadiusM;
+    const double target_spacing = 0.125 * kEarthRadiusM;
+    for (graph::PortNumber axis = 0; axis < 3; ++axis) {
+        scene.set(finer, FieldNodes::kPortResampleOrigin0 + axis, target_origin);
+        scene.set(finer, FieldNodes::kPortResampleOrigin0 + 3 + axis, target_spacing);
+        scene.set(finer, FieldNodes::kPortResampleOrigin0 + 6 + axis, 41.0);
+    }
+    scene.wire(uniform, FieldNodes::kPortField, finer, FieldNodes::kPortResampleField);
+    const graph::NodeId fourth_pusher = scene.add(PusherNodes::kBorisType);
+    scene.wire(finer, FieldNodes::kPortResampleOut, fourth_pusher, PusherNodes::kPortMagnetic);
+    GridSpec through_resample;
+    REQUIRE(resolve_field_origin(scene.g, fourth_pusher, PusherNodes::kPortMagnetic, through_resample));
+    REQUIRE(through_resample.nx == 41);
+    REQUIRE(through_resample.origin_m.x == target_origin);
+    REQUIRE(through_resample.spacing_m.x == target_spacing);
+    // The bake has to run for the store to hold it, and the resampler's own input is the uniform field it was
+    // wired to -- the evaluator resolves that socket with the same walk.
+    REQUIRE(scene.bake().has_value());
+    const gfield::FieldValue resampled =
+        scene.fields.view(gfield::FieldKey{finer.index, FieldNodes::kPortResampleOut});
+    REQUIRE(gfield::is_readable(resampled));
+    REQUIRE(resampled.desc.count[0] == 41);
+    REQUIRE(resampled.desc.dimension.T == -2);
 
     // A socket with nothing wired is not a grid, and neither is a wire to a node that is gone: the resolver
     // answers false so that the caller can make its own refusal rather than sampling a box it invented.
@@ -1243,7 +1274,7 @@ TEST_CASE("magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_
 
     // And the type is declared with its own grid ports, three parameters first -- the same shape the mask has.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 11);
+    REQUIRE(types.size() == 12);
     REQUIRE(types[8].type_name == FieldNodes::kAtmosphereType);
     REQUIRE(types[8].has_compute);
     REQUIRE(types[8].allow_in_field_domain);
@@ -1409,7 +1440,7 @@ TEST_CASE("magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_impl
 
     // The type declares its own grid ports after its two parameters, and publishes tesla.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 11);
+    REQUIRE(types.size() == 12);
     REQUIRE(types[9].type_name == FieldNodes::kCurrentSheetType);
     REQUIRE(types[9].has_compute);
     REQUIRE(types[9].allow_in_field_domain);
@@ -1420,6 +1451,169 @@ TEST_CASE("magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_impl
     REQUIRE(out->unit_symbol == std::string{"T"});
     REQUIRE(types[9].find_port(FieldNodes::kPortSheetOrigin0, false) != nullptr);
     REQUIRE_FALSE(types[9].find_port(FieldNodes::kPortSheetOrigin0, false)->connectable);
+}
+
+TEST_CASE("magnetosphere.field_nodes.a_resample_moves_the_samples_and_adds_no_information",
+          "[magnetosphere]") {
+    // **The node every other combinator's refusal points at.** A sum, a product and a blend are all defined on the
+    // lattice their inputs share and refuse two -- which is honest and, without this node, a dead end. `resample`
+    // is the explicit step that puts a field on the lattice the next node wants, and it is the one node here whose
+    // whole job is to change where the samples are.
+    //
+    // What it costs is measured rather than hidden: resampling onto a **finer** grid adds no information, and the
+    // case measures what a dipole actually loses and how that loss falls. Second order in the source spacing is
+    // the claim `baked_field.hpp` makes about the interpolant, so a factor of four per halving is the prediction.
+    const double re = kEarthRadiusM;
+    const gfield::FieldKey source_key{31, FieldNodes::kPortField};
+    const gfield::FieldKey same_key{32, FieldNodes::kPortResampleOut};
+    const gfield::FieldKey moved_key{33, FieldNodes::kPortResampleOut};
+    gfield::FieldSet fields;
+
+    // A **uniform** field first, because it is the one case with an exact answer: trilinear interpolation
+    // reproduces a constant, so a resample of one is that constant on the new lattice -- at every node, and not
+    // only at the nodes the two boxes happen to share.
+    const GridSpec uniform_grid{Vec3{-4.0 * re, -4.0 * re, -4.0 * re},
+                                Vec3{0.5 * re, 0.5 * re, 0.5 * re}, 17, 17, 17};
+    const Vec3 uniform_value{1.0e-6, -2.0e-6, 3.0e-6};
+    REQUIRE(bake_uniform(uniform_value, uniform_grid, source_key, fields, tesla_dimension()));
+    const gfield::FieldValue uniform_source = fields.view(source_key);
+
+    // Onto **its own** lattice: the resample must be the identity, and exactly the identity rather than nearly --
+    // a node that moved a field onto the lattice it was already on would otherwise be allowed to edit it.
+    REQUIRE(bake_resample(uniform_source, uniform_grid, uniform_grid, same_key, fields));
+    const gfield::FieldValue unchanged = fields.view(same_key);
+    REQUIRE(gfield::is_readable(unchanged));
+    REQUIRE(unchanged.point_count() == uniform_source.point_count());
+    REQUIRE(unchanged.desc.dimension.M == 1);
+    REQUIRE(unchanged.desc.dimension.T == -2);
+    for (std::uint64_t point = 0; point < unchanged.point_count(); ++point) {
+        for (std::uint64_t component = 0; component < 3; ++component) {
+            REQUIRE(gfield::get_component(unchanged, point, component) ==
+                    gfield::get_component(uniform_source, point, component));
+        }
+    }
+    // And onto a **different** lattice -- offset by a value no spacing divides, so no target node coincides with a
+    // source node and the answer comes from the blend rather than from a lookup.
+    const GridSpec shifted{Vec3{-3.97 * re, -1.03 * re, -0.11 * re}, Vec3{0.3 * re, 0.3 * re, 0.3 * re}, 9, 9, 9};
+    REQUIRE(bake_resample(uniform_source, uniform_grid, shifted, moved_key, fields));
+    const gfield::FieldValue moved = fields.view(moved_key);
+    REQUIRE(gfield::is_readable(moved));
+    REQUIRE(moved.desc.count[0] == 9);
+    for (std::uint64_t point = 0; point < moved.point_count(); ++point) {
+        REQUIRE(relative_to(gfield::get_component(moved, point, 0), uniform_value.x) < 1.0e-15);
+        REQUIRE(relative_to(gfield::get_component(moved, point, 1), uniform_value.y) < 1.0e-15);
+        REQUIRE(relative_to(gfield::get_component(moved, point, 2), uniform_value.z) < 1.0e-15);
+    }
+
+    // **What a resample of a dipole loses, and how it falls.** One fixed target and five source spacings, halving
+    // each time: the error is the source table's interpolation error, so it must fall by about four per halving
+    // once the spacing is small against the field's own scale. The target sits **out at three and a half earth
+    // radii and does not contain the origin**: the first version of this experiment spanned a box with the dipole
+    // at its centre, where the field diverges, so the RMS was dominated by the nodes nearest the singularity and
+    // the ratios stalled at 1.9 and 1.1 instead of converging. The assertions below caught the experiment rather
+    // than the code, which is what a convergence study is for.
+    const std::size_t steps = 5;
+    const GridSpec target{Vec3{2.0 * re, 2.0 * re, 2.0 * re}, Vec3{0.02 * re, 0.02 * re, 0.02 * re}, 50, 50, 50};
+    const DipoleField dipole{0.0, kDipoleMomentAm2};
+    double rms[steps] = {0.0, 0.0, 0.0, 0.0, 0.0};
+    double worst[steps] = {0.0, 0.0, 0.0, 0.0, 0.0};
+    const double spacings[steps] = {1.0, 0.5, 0.25, 0.125, 0.0625};
+    for (std::size_t step = 0; step < steps; ++step) {
+        const double h = spacings[step] * re;
+        // The source's counts, from a three-earth-radius box and the spacing: 4, 7, 13, 25 and 49 nodes an axis,
+        // the whole box at `r >= sqrt(3)` earth radii so that no sample sits near the dipole's centre.
+        const auto nodes = static_cast<std::uint32_t>(3.0 / spacings[step]) + 1;
+        const GridSpec box{Vec3{1.0 * re, 1.0 * re, 1.0 * re}, Vec3{h, h, h}, nodes, nodes, nodes};
+        const gfield::FieldKey box_key{40 + static_cast<graph::PortNumber>(step), FieldNodes::kPortField};
+        REQUIRE(bake_dipole(0.0, kDipoleMomentAm2, box, box_key, fields));
+        const gfield::FieldKey moved_dipole_key{50 + static_cast<graph::PortNumber>(step),
+                                                FieldNodes::kPortResampleOut};
+        REQUIRE(bake_resample(fields.view(box_key), box, target, moved_dipole_key, fields));
+        const gfield::FieldValue resampled = fields.view(moved_dipole_key);
+        REQUIRE(gfield::is_readable(resampled));
+        double sum = 0.0;
+        for (std::uint32_t i = 0; i < target.nx; ++i) {
+            for (std::uint32_t j = 0; j < target.ny; ++j) {
+                for (std::uint32_t k = 0; k < target.nz; ++k) {
+                    const Vec3 point = target.node_position(i, j, k);
+                    const Vec3 exact = dipole.at(point);
+                    const std::uint64_t at = (static_cast<std::uint64_t>(i) * target.ny + j) * target.nz + k;
+                    double gap = 0.0;
+                    for (std::uint64_t component = 0; component < 3; ++component) {
+                        const double got = gfield::get_component(resampled, at, component);
+                        const double want = component == 0 ? exact.x : (component == 1 ? exact.y : exact.z);
+                        const double difference = std::abs(got - want);
+                        if (difference > gap) gap = difference;
+                    }
+                    const double relative = gap / norm(exact);
+                    sum += relative * relative;
+                    if (relative > worst[step]) worst[step] = relative;
+                }
+            }
+        }
+        rms[step] = std::sqrt(sum / static_cast<double>(resampled.point_count()));
+        REQUIRE(worst[step] > 0.0);
+    }
+    CAPTURE(rms[0], rms[1], rms[2], rms[3], rms[4], worst[0], worst[1], worst[2], worst[3], worst[4]);
+    // Second order, seen the way a convergence study sees it: each halving of the source spacing divides the error
+    // by between 3.2 and 4.6, and the ratios come **down to four from above** -- 4.33, 4.08, 4.02, 4.00 as the
+    // spacing falls from one earth radius to a sixteenth of one. A first-order scheme would sit at two, a
+    // fourth-order one at sixteen, and a resample that returned the nearest node would not fall at all.
+    for (std::size_t step = 0; step + 1 < steps; ++step) {
+        const double ratio = rms[step] / rms[step + 1];
+        REQUIRE(ratio > 3.2);
+        REQUIRE(ratio < 4.6);
+    }
+    REQUIRE(relative_to(rms[3] / rms[4], 4.0) < 0.05);
+    // The worst node's relative error, which is the number a course would quote for a table: six percent at one
+    // earth radius and a quarter of a thousandth at a sixteenth of one. Both are measured, and both are the
+    // reason a resample is worth doing at all -- what it keeps is what the coarse table had, and no more.
+    REQUIRE(worst[0] < 0.08);
+    REQUIRE(worst[4] < 4.0e-4);
+
+    // Refusals. A target that reaches outside the source is refused rather than clamped: the sampler clamps for a
+    // particle that leaves the modelled box, and a *static* resample that clamped would fill a slab of the target
+    // with the boundary value and call it a field.
+    const GridSpec bigger{Vec3{-7.0 * re, -4.0 * re, -4.0 * re}, Vec3{0.5 * re, 0.5 * re, 0.5 * re}, 17, 17, 17};
+    REQUIRE_FALSE(bake_resample(uniform_source, uniform_grid, bigger, moved_key, fields));
+    // One node further along `x` at the same spacing: the box is the source's plus half an earth radius.
+    const GridSpec one_past{Vec3{-4.0 * re, -4.0 * re, -4.0 * re}, Vec3{0.5 * re, 0.5 * re, 0.5 * re}, 18, 17, 17};
+    REQUIRE_FALSE(bake_resample(uniform_source, uniform_grid, one_past, moved_key, fields));
+    // A source grid that disagrees with the table it is supposed to describe: a plausible field from the wrong
+    // place, which is what the check is for.
+    const GridSpec wrong_source{Vec3{-4.0 * re, -4.0 * re, -4.0 * re}, Vec3{0.5 * re, 0.5 * re, 0.5 * re}, 16, 17,
+                                17};
+    REQUIRE_FALSE(bake_resample(uniform_source, wrong_source, uniform_grid, moved_key, fields));
+    // A scalar where a vector belongs, an unreadable socket, and a target with no interior.
+    const gfield::FieldKey weight_key{34, FieldNodes::kPortWeight};
+    FieldNodes::MaskSpec mask;
+    REQUIRE(bake_mask(mask, uniform_grid, weight_key, fields));
+    REQUIRE_FALSE(bake_resample(fields.view(weight_key), uniform_grid, uniform_grid, moved_key, fields));
+    REQUIRE_FALSE(bake_resample(gfield::FieldValue{}, uniform_grid, uniform_grid, moved_key, fields));
+    const GridSpec no_interior{Vec3{}, Vec3{re, re, re}, 1, 1, 1};
+    REQUIRE_FALSE(bake_resample(uniform_source, uniform_grid, no_interior, moved_key, fields));
+
+    // The declaration: its own numbers, nine grid ports that are typed rather than wired, and a grid of its own --
+    // which is what makes it the node a pusher can be pointed at when the field it wants is on another lattice.
+    const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
+    REQUIRE(types.size() == 12);
+    REQUIRE(types[11].type_name == FieldNodes::kResampleType);
+    REQUIRE(types[11].has_compute);
+    REQUIRE(types[11].allow_in_field_domain);
+    REQUIRE_FALSE(types[11].allow_in_particle_domain);
+    const graph::PortDesc* source_port = types[11].find_port(FieldNodes::kPortResampleField, false);
+    REQUIRE(source_port != nullptr);
+    REQUIRE(source_port->type == qp::ports::kVectorField);
+    REQUIRE(source_port->required);
+    const graph::PortDesc* resampled_out = types[11].find_port(FieldNodes::kPortResampleOut, true);
+    REQUIRE(resampled_out != nullptr);
+    REQUIRE(resampled_out->type == qp::ports::kVectorField);
+    REQUIRE(resampled_out->unit_symbol == std::string{"T"});
+    for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+        const graph::PortDesc* port = types[11].find_port(FieldNodes::kPortResampleOrigin0 + offset, false);
+        REQUIRE(port != nullptr);
+        REQUIRE_FALSE(port->connectable);
+    }
 }
 
 TEST_CASE("magnetosphere.field_nodes.the_dipole_is_baked_onto_the_grid_it_declares", "[magnetosphere]") {

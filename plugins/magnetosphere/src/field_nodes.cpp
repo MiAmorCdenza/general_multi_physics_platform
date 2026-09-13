@@ -155,6 +155,13 @@ namespace {
         out = FieldNodes::kPortSheetOrigin0;
         return true;
     }
+    if (type_name == FieldNodes::kResampleType) {
+        // The resampler **is** a grid source: its own nine ports describe where its samples are, which is the
+        // target lattice. It is the one type whose whole job is to move samples, so a caller that reaches it has
+        // reached the answer rather than a node to walk past.
+        out = FieldNodes::kPortResampleOrigin0;
+        return true;
+    }
     // `field.mul` and `field.blend` are the types that declare no grid at all: a product and a blend are both
     // defined on the lattice their inputs share, so they forward. A caller reaching here with one of them has
     // failed to follow the wire, which is what the walk below exists to do.
@@ -590,6 +597,51 @@ bool bake_blend(const gfield::FieldValue& inner, const gfield::FieldValue& outer
     return fields.publish(key, desc, std::move(table.data()));
 }
 
+bool bake_resample(const gfield::FieldValue& source, const GridSpec& source_grid, const GridSpec& target_grid,
+                   gfield::FieldKey key, gfield::FieldSet& fields) {
+    if (!gfield::is_readable(source)) return false;
+    if (source.kind() != gfield::Kind::Volume || !source.is_vector()) return false;
+    if (source.desc.element != qp::abi::ElementType::f64) return false;
+    if (source.desc.count[0] != source_grid.nx || source.desc.count[1] != source_grid.ny ||
+        source.desc.count[2] != source_grid.nz) {
+        return false;
+    }
+    if (!bakeable(target_grid)) return false;
+
+    // **Refused rather than clamped**, and exactly rather than with a tolerance: see the declaration. The far edge
+    // is computed the way a caller computes it -- `origin + (count - 1) * spacing` -- so a target that *is* the
+    // source, described by the same numbers, compares equal and is accepted.
+    const auto far_edge = [](double origin, double spacing, std::uint32_t count) {
+        return origin + static_cast<double>(count - 1) * spacing;
+    };
+    if (target_grid.origin_m.x < source_grid.origin_m.x || target_grid.origin_m.y < source_grid.origin_m.y ||
+        target_grid.origin_m.z < source_grid.origin_m.z) {
+        return false;
+    }
+    if (far_edge(target_grid.origin_m.x, target_grid.spacing_m.x, target_grid.nx) >
+            far_edge(source_grid.origin_m.x, source_grid.spacing_m.x, source_grid.nx) ||
+        far_edge(target_grid.origin_m.y, target_grid.spacing_m.y, target_grid.ny) >
+            far_edge(source_grid.origin_m.y, source_grid.spacing_m.y, source_grid.ny) ||
+        far_edge(target_grid.origin_m.z, target_grid.spacing_m.z, target_grid.nz) >
+            far_edge(source_grid.origin_m.z, source_grid.spacing_m.z, source_grid.nz)) {
+        return false;
+    }
+
+    BakedField table{target_grid.origin_m, target_grid.spacing_m, target_grid.nx, target_grid.ny, target_grid.nz};
+    for (std::uint32_t i = 0; i < target_grid.nx; ++i) {
+        for (std::uint32_t j = 0; j < target_grid.ny; ++j) {
+            for (std::uint32_t k = 0; k < target_grid.nz; ++k) {
+                const Vec3 point = target_grid.node_position(i, j, k);
+                table.set_node(i, j, k,
+                               sample_baked(source, source_grid.origin_m, source_grid.spacing_m, point));
+            }
+        }
+    }
+    // The source's dimension on the target's lattice: a resample moves samples, it does not change what they are.
+    const qp::abi::LatticeDesc desc = table.view(source.desc.dimension).desc;
+    return fields.publish(key, desc, std::move(table.data()));
+}
+
 std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipole;
     dipole.type_name = kDipoleType;
     dipole.label = "Dipole field";
@@ -937,6 +989,61 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     blend_out.unit_symbol = "T";
     blend.outputs.push_back(blend_out);
 
+    // ---------------- the resampler ----------------
+    graph::NodeDesc resample;
+    resample.type_name = kResampleType;
+    resample.label = "Resample";
+    resample.description = "Moves the field on its socket onto the lattice its own grid ports declare, "
+                           "trilinearly -- the same interpolation a kernel reads a table with. It is the explicit "
+                           "step every other combinator's refusal points at: a sum, a product or a blend needs "
+                           "its inputs on one lattice, and this is the node that puts them there. A target that "
+                           "reaches outside the source is refused rather than filled with the boundary value.";
+    resample.category = "field";
+    resample.version = 1;
+    resample.allow_in_field_domain = true;
+    resample.allow_in_particle_domain = false;
+    resample.has_compute = true;
+    graph::PortDesc resample_in;
+    resample_in.number = kPortResampleField;
+    resample_in.name = "field";
+    resample_in.label = "Field";
+    resample_in.description = "The field to move. Its samples are read through the sampler, so a field baked on a "
+                              "coarse box and one baked on a fine box can be combined after this node has put "
+                              "them together.";
+    resample_in.type = qp::ports::kVectorField;
+    resample_in.connectable = true;
+    resample_in.required = true;
+    resample.inputs.push_back(resample_in);
+    // Its own nine grid ports, after the single field socket, and its own numbers -- the rule every type here
+    // follows after a shared numbering produced a registration collision.
+    for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+        const char* names[9] = {"origin_x", "origin_y", "origin_z", "spacing_x", "spacing_y",
+                                "spacing_z", "count_x",  "count_y",   "count_z"};
+        const char* labels[9] = {"Grid origin x", "Grid origin y", "Grid origin z",   "Grid spacing x",
+                                 "Grid spacing y", "Grid spacing z", "Nodes along x", "Nodes along y",
+                                 "Nodes along z"};
+        const char* units[9] = {"m", "m", "m", "m", "m", "m", "", "", ""};
+        const double steps[9] = {kEarthRadiusM, kEarthRadiusM, kEarthRadiusM, 0.25 * kEarthRadiusM,
+                                 0.25 * kEarthRadiusM, 0.25 * kEarthRadiusM, 1.0, 1.0, 1.0};
+        graph::PortDesc port = parameter(kPortResampleOrigin0 + offset, names[offset], labels[offset],
+                                         units[offset], steps[offset]);
+        port.description = "The target lattice's own description. A box that reaches outside the source's is "
+                           "refused: the sampler clamps for a particle that leaves the modelled region, and a "
+                           "resample that clamped would fill a slab of the target with the boundary value and "
+                           "call it a field.";
+        resample.inputs.push_back(port);
+    }
+    graph::PortDesc resample_out;
+    resample_out.number = kPortResampleOut;
+    resample_out.name = "field";
+    resample_out.label = "Field";
+    resample_out.description = "The same field on the target lattice, described exactly as the input is.";
+    resample_out.type = qp::ports::kVectorField;
+    resample_out.connectable = true;
+    resample_out.required = false;
+    resample_out.unit_symbol = "T";
+    resample.outputs.push_back(resample_out);
+
     // ---------------- the convection field ----------------
     graph::NodeDesc convection;
     convection.type_name = kConvectionType;
@@ -1111,7 +1218,7 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
 
     return {std::move(dipole),      std::move(uniform),    std::move(sum),        std::move(electric),
             std::move(mask),        std::move(mul),        std::move(convection), std::move(corotation),
-            std::move(atmosphere),  std::move(sheet),      std::move(blend)};
+            std::move(atmosphere),  std::move(sheet),      std::move(blend),      std::move(resample)};
 }
 
 gfield::FieldValue DipoleEvaluator::input_field(const graph::NodeId id, const graph::PortNumber port) const noexcept {
@@ -1227,6 +1334,29 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
         }
         Outcome out;
         out.emplace_back(FieldNodes::kPortBlendOut, qp::ports::Value{fields_->view(blend_key).desc});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
+    if (desc.type_name == FieldNodes::kResampleType) {
+        // Two geometries and neither of them is in a table: the **source**'s comes from the node that baked it
+        // (`resolve_field_origin`, the same walk the plan builder uses) and the **target**'s is this node's own
+        // declaration. Nothing is inferred from the counts, which is the point -- a resample is the one operation
+        // that must know both boxes.
+        const graph::InputView resample_view{inputs};
+        const GridSpec target_grid = FieldNodes::read_from(resample_view, FieldNodes::kPortResampleOrigin0);
+        GridSpec source_grid;
+        if (graph_ == nullptr ||
+            !resolve_field_origin(*graph_, id, FieldNodes::kPortResampleField, source_grid)) {
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        const gfield::FieldKey resample_key{id.index, FieldNodes::kPortResampleOut};
+        const gfield::FieldValue source = input_field(id, FieldNodes::kPortResampleField);
+        if (!bake_resample(source, source_grid, target_grid, resample_key, *fields_)) {
+            // An unreadable socket, a source grid that disagrees with the table, or a target the source cannot
+            // cover: all three are refusals rather than approximations.
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        Outcome out;
+        out.emplace_back(FieldNodes::kPortResampleOut, qp::ports::Value{fields_->view(resample_key).desc});
         return qp::diag::Result<Outcome>{std::move(out)};
     }
     if (desc.type_name == FieldNodes::kMaskType) {

@@ -661,6 +661,55 @@ public:
     /// @tests       magnetosphere.field_nodes.a_blend_does_not_open_a_divergence
     [[nodiscard]] static BlendSpec read_blend_from(const graph::InputView& inputs) noexcept;
 
+    /// @brief Moves a field onto **another lattice**: the reference's `resample`, and the one node whose whole job is
+    /// to change where the samples are.
+    ///
+    /// ## Why this is the node that makes the lattice rules livable
+    ///
+    /// Everything in this kit that combines two fields refuses two lattices: a sum, a product and a blend are all
+    /// defined on the lattice their inputs share, because fitting one table to another would invent a field neither
+    /// model produced. That refusal is honest and, without this node, it is also a dead end -- the kit could not
+    /// combine a tail baked on a long thin box with a dipole baked on a cube. `resample` is the explicit step the
+    /// refusals point at, and `field.mul`'s own documentation has named it as "another node" since it was written.
+    ///
+    /// ## The target is nine numbers, not a preset
+    ///
+    /// The reference takes an enum of three fixed lattices (`legacy`, `coarse`, `fine`) and says why in its own
+    /// docstring: its engine had **one lattice per graph**, so a node could only choose among the ones the engine
+    /// already knew. This kit has no graph lattice -- every node declares its own grid -- so the target is the same
+    /// nine parameter ports every producer here carries. That removes the three hard-coded boxes and makes the node
+    /// able to answer the only question that matters: *which* lattice do you want.
+    ///
+    /// ## The interpolation is the sampler the pusher already uses
+    ///
+    /// Trilinear, through the same `sample_baked` a kernel reads with, so this node introduces **no new
+    /// approximation**: it is the sampler promoted to a node. That is a decision with a cost, and the cost is
+    /// measurable rather than hidden: resampling onto a finer grid does not add information, and the case measures
+    /// what a resample of a dipole loses and how that loss falls -- a convergence study, five source spacings
+    /// halving from one earth radius to a sixteenth of one, whose error ratios came out **4.33, 4.08, 4.02, 4.00**
+    /// against the four that second order predicts. The worst node's relative error was 5.9% at one earth radius
+    /// and 2.6e-4 at a sixteenth of one, which is the honest size of what a table on that box can say between its
+    /// nodes.
+    ///
+    /// ## A target that reaches outside the source is refused, not clamped
+    ///
+    /// `sample_baked` clamps out-of-range points to the boundary node, and it is right to: at run time a particle
+    /// can leave the modelled box, and a run that grew an unbounded `1/r^3` force there would be worse than one
+    /// that freezes the field at the wall. **Here the same situation is a user error**, and clamping would fill a
+    /// whole slab of the target with the boundary value and call it a field -- numbers from nowhere, which is the
+    /// failure this kit exists to refuse. The reference raises a `ValueError` from scipy in exactly this case; the
+    /// same policy in a better channel, which is what a refusal is for.
+    ///
+    /// The comparison is **exact**: a target box that reaches past the source by one metre is refused, because the
+    /// positions are the user's numbers and nothing here is entitled to round them.
+    static constexpr const char* kResampleType = "field.resample";
+    /// @brief The field to move.
+    static constexpr qp::graph::PortNumber kPortResampleField = 1;
+    /// @brief Where the **target** grid starts: after the field socket.
+    static constexpr qp::graph::PortNumber kPortResampleOrigin0 = 2;
+    /// @brief The moved field.
+    static constexpr qp::graph::PortNumber kPortResampleOut = 1;
+
     /// @brief The default drag rate at the surface, in per second. Zero: no atmosphere until a course asks for one.
     static constexpr double kDefaultAtmosphereNu0 = 0.0;
     /// @brief The default scale height, in metres: 100 km, the thermosphere's order at low altitude.
@@ -1292,6 +1341,51 @@ public:
 [[nodiscard]] bool bake_blend(const qp::graph::field::FieldValue& inner, const qp::graph::field::FieldValue& outer,
                               const GridSpec& grid, const FieldNodes::BlendSpec& spec,
                               qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
+
+/**
+ * @brief Resamples a published field onto another lattice, trilinearly, refusing a target the source cannot cover.
+ *
+ * The model and the two policies are argued on `kResampleType`. What belongs here is the shape of the call and the
+ * one check that has no counterpart in the other bakes.
+ *
+ * ## Two grids, and the source's is the caller's business
+ *
+ * `abi::LatticeDesc` carries counts and not positions, so a table cannot say where its samples are. The **target**
+ * is the node's own declaration and arrives as a `GridSpec`; the **source**'s geometry has to come from the node
+ * that baked it, which is what `resolve_field_origin` is for. The counts in `source_grid` are compared against the
+ * source's description: a caller that resolved the wrong node's grid would otherwise resample a box that is not
+ * where the samples are -- a plausible field from the wrong place, which is the failure `plan.hpp` warns about at
+ * length.
+ *
+ * ## Refuse, do not clamp
+ *
+ * Every target node must lie inside the source box, and the test is exact rather than tolerant: `origin + (n - 1) *
+ * spacing` on each axis, compared with `<=`. A tolerance here would decide *where to refuse* rather than what the
+ * numbers mean, and the refusals in this kit are about meaning.
+ *
+ * @param source      The field to move. A readable f64 volume of vectors.
+ * @param source_grid Where the source's samples are: origin, spacing and counts.
+ * @param target_grid The lattice to publish on. At least two nodes an axis, and inside the source's box.
+ * @param key         Who is publishing, for the store's key.
+ * @param fields      The store. Mutated on success.
+ *
+ * @ownership   owns the samples it publishes on success
+ * @thread      main
+ * @pre         none
+ * @post        On true, `fields.view(key)` is the source sampled trilinearly at every target node, described
+ *              exactly as the source is -- same dimension, the target's lattice
+ * @invariant   On false the store is unchanged
+ * @errors      Returns false -- never throws -- for an unreadable, non-volume, non-vector or f32 source, for a
+ *              `source_grid` whose counts disagree with the source's description, for a target that cannot be
+ *              baked, and for a target that reaches outside the source on any axis
+ * @complexity  O(target points)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.a_resample_moves_the_samples_and_adds_no_information
+ */
+[[nodiscard]] bool bake_resample(const qp::graph::field::FieldValue& source, const GridSpec& source_grid,
+                                 const GridSpec& target_grid, qp::graph::field::FieldKey key,
+                                 qp::graph::field::FieldSet& fields);
 
 /**
  * @brief The node evaluator that bakes this kit's field types into a store.
