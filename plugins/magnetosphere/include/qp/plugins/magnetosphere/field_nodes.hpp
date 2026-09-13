@@ -148,6 +148,45 @@ class FieldNodes final {
 public:
     /// @brief The tilted-dipole node type. The first of the family, and the one a first course needs.
     static constexpr const char* kDipoleType = "field.dipole";
+    /// @brief A uniform field: the same vector everywhere.
+    ///
+    /// The second field model, and it is here before the Tsyganenko family for a reason that is not laziness: a
+    /// uniform field is the case whose answer is **exact under trilinear interpolation** at any spacing, so it is
+    /// the field a course uses to check a pusher (a gyrofrequency, a pitch angle, a drift) against a closed form
+    /// with no interpolation error in the comparison at all. Every test of the Boris kernel in this kit builds
+    /// one by hand; this node is what puts that in the palette.
+    static constexpr const char* kUniformType = "field.uniform";
+
+    /// @brief The uniform field's three components, in tesla: `x`, `y`, `z`.
+    static constexpr qp::graph::PortNumber kPortField0 = 1;
+    /// @brief The uniform field's `y` component, in tesla.
+    static constexpr qp::graph::PortNumber kPortField1 = 2;
+    /// @brief The uniform field's `z` component, in tesla.
+    static constexpr qp::graph::PortNumber kPortField2 = 3;
+    /// @brief Where the **uniform** node's grid starts.
+    ///
+    /// The dipole's grid starts at 3 because its model-specific ports are 1 and 2; a uniform field needs three
+    /// (the components), so its grid starts at 4. Port numbers are unique within a type, and a grid that reused
+    /// the dipole's numbering would declare ports 3, 4 and 5 twice -- which the host refuses at registration,
+    /// silently for the caller: `mount` counts successes, so the second field type simply did not appear in the
+    /// catalog until this was fixed.
+    static constexpr qp::graph::PortNumber kPortUniformOrigin0 = 4;
+    /// @brief The uniform grid's origin `y`.
+    static constexpr qp::graph::PortNumber kPortUniformOrigin1 = 5;
+    /// @brief The uniform grid's origin `z`.
+    static constexpr qp::graph::PortNumber kPortUniformOrigin2 = 6;
+    /// @brief The uniform grid's spacing along `x`, `y`, `z`.
+    static constexpr qp::graph::PortNumber kPortUniformSpacing0 = 7;
+    /// @brief The uniform grid's spacing along `y`.
+    static constexpr qp::graph::PortNumber kPortUniformSpacing1 = 8;
+    /// @brief The uniform grid's spacing along `z`.
+    static constexpr qp::graph::PortNumber kPortUniformSpacing2 = 9;
+    /// @brief The uniform grid's node counts along `x`, `y`, `z`.
+    static constexpr qp::graph::PortNumber kPortUniformCount0 = 10;
+    /// @brief The uniform grid's node count along `y`.
+    static constexpr qp::graph::PortNumber kPortUniformCount1 = 11;
+    /// @brief The uniform grid's node count along `z`.
+    static constexpr qp::graph::PortNumber kPortUniformCount2 = 12;
 
     /// @brief The magnetic latitude of the dipole axis, in degrees.
     static constexpr qp::graph::PortNumber kPortTiltDegrees = 1;
@@ -242,7 +281,8 @@ public:
      * wants. A parameter that is missing takes the description's own default, so a node a user dropped on the
      * canvas without touching anything bakes and runs.
      *
-     * @param node The node instance.
+     * @param node        The node instance.
+     * @param origin_port The first of the nine grid ports; see the `InputView` overload.
      *
      * @ownership   pure
      * @thread      main
@@ -255,7 +295,8 @@ public:
      * @frozen      no
      * @tests       magnetosphere.field_nodes.the_dipole_is_baked_onto_the_grid_it_declares
      */
-    [[nodiscard]] static GridSpec read_from(const qp::graph::Node& node) noexcept;
+    [[nodiscard]] static GridSpec read_from(const qp::graph::Node& node,
+                                            qp::graph::PortNumber origin_port = kPortOrigin0) noexcept;
 
     /**
      * @brief The grid declared by a node's **input values**.
@@ -265,7 +306,10 @@ public:
      * node's parameters otherwise, so the values the evaluator sees are the node's own parameters whenever
      * nothing is wired -- which for a bake grid is always.
      *
-     * @param inputs The input values the evaluator was handed.
+     * @param inputs      The input values the evaluator was handed.
+     * @param origin_port The first of the nine grid ports. Defaulted to the dipole's, because the dipole's grid
+     *                    is the one at 3; a type whose model-specific ports run to three or more starts its grid
+     *                    later and says so here.
      *
      * @ownership   pure
      * @thread      main
@@ -278,7 +322,8 @@ public:
      * @frozen      no
      * @tests       magnetosphere.field_nodes.a_node_of_another_domain_produces_nothing
      */
-    [[nodiscard]] static GridSpec read_from(const qp::graph::InputView& inputs) noexcept;
+    [[nodiscard]] static GridSpec read_from(const qp::graph::InputView& inputs,
+                                            qp::graph::PortNumber origin_port = kPortOrigin0) noexcept;
 };
 
 /**
@@ -309,6 +354,32 @@ public:
  */
 [[nodiscard]] bool bake_dipole(double tilt_degrees, double moment_am2, const GridSpec& grid,
                                qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
+
+/**
+ * @brief Bakes a uniform field onto a grid and publishes it.
+ *
+ * Separate from `bake_dipole` rather than a branch inside it: the two share the grid and the publication and
+ * nothing else, and a function that took "which model" as an argument would be the first line of a switch that
+ * every future field model has to be added to.
+ *
+ * @param value The field everywhere, in tesla.
+ * @param grid  Where to evaluate and how finely.
+ * @param key   Who is publishing, for the store's key.
+ * @param fields The store. Mutated: a successful bake leaves one more field in it.
+ *
+ * @ownership   observes `fields`, owns nothing after the call
+ * @thread      main
+ * @pre         none
+ * @post        On true, `fields.view(key)` is a readable volume of tesla vectors equal to `value` at every node
+ * @invariant   On false the store is unchanged
+ * @errors      Returns false -- never throws -- for an unusable grid or a non-finite component
+ * @complexity  O(points)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.a_uniform_field_is_uniform
+ */
+[[nodiscard]] bool bake_uniform(const Vec3& value, const GridSpec& grid, qp::graph::field::FieldKey key,
+                                qp::graph::field::FieldSet& fields);
 
 /**
  * @brief The node evaluator that bakes this kit's field types into a store.

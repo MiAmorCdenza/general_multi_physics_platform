@@ -78,7 +78,8 @@ struct Scene final {
     graph::EvalResult result{};
 
     Scene() {
-        REQUIRE(FieldNodes::mount(host) == 1);
+        // Two field models now: the dipole and the uniform field.
+        REQUIRE(FieldNodes::mount(host) == 2);
         REQUIRE(PusherNodes::mount(host) == 1);
     }
 
@@ -166,7 +167,12 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // declaration never made. The check is that every port the reader asks for exists, with the type the reader
     // needs, and that the output is the field port a pusher can be wired to.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 1);
+    // Two field models: the dipole and the uniform field. Each is a **type of its own** with its own port
+    // numbers, which is the composition principle -- a shielding field is `mul(convection, shield)`, not a
+    // switch inside a node -- and what the uniform field was added to make demonstrable.
+    REQUIRE(types.size() == 2);
+    REQUIRE(types[0].type_name == FieldNodes::kDipoleType);
+    REQUIRE(types[1].type_name == FieldNodes::kUniformType);
     const graph::NodeDesc& dipole = types.front();
     REQUIRE(dipole.type_name == FieldNodes::kDipoleType);
     REQUIRE(dipole.valid());
@@ -214,7 +220,8 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // Mounting is what makes the type reachable from a running program rather than only from a test fixture. The
     // second mount registers nothing, because a name that is taken is left alone rather than duplicated.
     qp::host::PluginHost host{qp::plugin::Capability::node_types};
-    REQUIRE(FieldNodes::mount(host) == 1);
+    // Two field models now: the dipole and the uniform field.
+        REQUIRE(FieldNodes::mount(host) == 2);
     REQUIRE(host.node_types().find(FieldNodes::kDipoleType) != nullptr);
     REQUIRE(FieldNodes::mount(host) == 0);
 }

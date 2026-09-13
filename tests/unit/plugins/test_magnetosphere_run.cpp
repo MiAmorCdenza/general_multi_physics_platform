@@ -76,7 +76,8 @@ struct Scene final {
     graph::Declarations declared{};
 
     Scene() {
-        REQUIRE(FieldNodes::mount(host) == 1);
+        // Two field models now: the dipole and the uniform field.
+        REQUIRE(FieldNodes::mount(host) == 2);
         REQUIRE(PusherNodes::mount(host) == 1);
         REQUIRE(EmitterNodes::mount(host) == 1);
         // The render item too, or `build_plan` cannot look its descriptor up and silently records no
@@ -790,4 +791,63 @@ TEST_CASE("magnetosphere.render.a_snapshot_becomes_a_scene", "[magnetosphere]") 
     REQUIRE_FALSE(blank.has_bounds);
     // And no snapshot at all is refused by `valid()`, which is a host's check rather than an item's.
     REQUIRE_FALSE(graph::ViewRequest{&scene.g, &declared, nullptr, 0}.valid());
+}
+
+
+TEST_CASE("magnetosphere.field_nodes.a_uniform_field_is_uniform", "[magnetosphere]") {
+    // The second field model, and the one whose answer is **exact** under trilinear interpolation at any
+    // spacing: every node holds the same vector, so a sample anywhere is that vector to the last bit. That is
+    // what makes it the field a course checks a pusher against -- there is no interpolation error between the
+    // measurement and the closed form it is compared with.
+    Scene scene;
+    const graph::NodeId uniform = scene.add(FieldNodes::kUniformType);
+    scene.set(uniform, FieldNodes::kPortField0, 0.0);
+    scene.set(uniform, FieldNodes::kPortField1, 0.0);
+    scene.set(uniform, FieldNodes::kPortField2, 1.0e-4);
+    for (graph::PortNumber axis = 0; axis < 3; ++axis) {
+        scene.set(uniform, FieldNodes::kPortUniformOrigin0 + axis, -2.0 * kEarthRadiusM);
+        scene.set(uniform, FieldNodes::kPortUniformSpacing0 + axis, 1.0 * kEarthRadiusM);
+        scene.set(uniform, FieldNodes::kPortUniformCount0 + axis, 5.0);
+    }
+    REQUIRE(scene.host.node_types().find(FieldNodes::kUniformType) != nullptr);
+
+    REQUIRE(scene.bake().has_value());
+    REQUIRE(scene.fields.size() == 1);
+    const gfield::FieldValue view = scene.fields.view(gfield::FieldKey{uniform.index, FieldNodes::kPortField});
+    REQUIRE(gfield::is_readable(view));
+    REQUIRE(view.kind() == gfield::Kind::Volume);
+    REQUIRE(view.is_vector());
+    REQUIRE(view.point_count() == 125);
+
+    // Every node, and not only the first: a bake that wrote one value and left the rest zero would pass a
+    // single-point check.
+    for (std::uint64_t point = 0; point < view.point_count(); ++point) {
+        REQUIRE(gfield::get_component(view, point, 0) == 0.0);
+        REQUIRE(gfield::get_component(view, point, 1) == 0.0);
+        REQUIRE(gfield::get_component(view, point, 2) == 1.0e-4);
+    }
+    // And between nodes, which is where the exactness claim lives.
+    const GridSpec grid = FieldNodes::read_from(*scene.g.find_node(uniform), FieldNodes::kPortUniformOrigin0);
+    const Vec3 middle = grid.node_position(1, 1, 1) + grid.spacing_m * 0.5;
+    const Vec3 sampled = sample_baked(view, grid.origin_m, grid.spacing_m, middle);
+    // **Relative**, and the exactness claim is why: every node holds the same value, so the blend of eight equal
+    // terms is that value up to the order the eight products are summed in -- which is a rounding, not an
+    // interpolation error. At a node the read is exact bit for bit (the test above asserts that); between nodes
+    // it is exact to the arithmetic, and that is the distinction a "uniform field" test exists to make.
+    REQUIRE(relative(sampled.z, 1.0e-4) < 1.0e-15);
+    REQUIRE(sampled.x == 0.0);
+
+    // The two field types are independent node types with independent ports: a graph may hold both, and each
+    // publishes under its own key -- which is what a sum of the two will need.
+    const graph::NodeId dipole = scene.add_dipole(0.0);
+    REQUIRE(scene.bake().has_value());
+    REQUIRE(scene.fields.size() == 2);
+    REQUIRE(scene.fields.contains(gfield::FieldKey{dipole.index, FieldNodes::kPortField}));
+    REQUIRE(scene.fields.contains(gfield::FieldKey{uniform.index, FieldNodes::kPortField}));
+
+    // A non-finite component is refused rather than baked: a field table full of NaN is a run that produces
+    // NaN positions with nothing said.
+    gfield::FieldSet refused;
+    REQUIRE_FALSE(bake_uniform(Vec3{0.0, 0.0, std::nan("")}, grid, gfield::FieldKey{1, 1}, refused));
+    REQUIRE(refused.size() == 0);
 }

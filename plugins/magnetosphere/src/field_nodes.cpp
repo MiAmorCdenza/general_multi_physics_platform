@@ -75,27 +75,27 @@ namespace gfield = qp::graph::field;
 
 }  // namespace
 
-GridSpec FieldNodes::read_from(const graph::Node& node) noexcept {
+GridSpec FieldNodes::read_from(const graph::Node& node, const graph::PortNumber origin_port) noexcept {
     // One reader for two sources: the node's parameters are put into the same `InputView` shape the evaluator is
     // handed, so there is exactly one place where "port 6 is spacing x" is interpreted. The view borrows
     // `values`, which lives until this call returns -- long enough, because the result is a value.
     graph::PortValues values;
     values.reserve(node.params.size());
     for (const graph::ParamValue& p : node.params) values.emplace_back(p.number, p.value);
-    return read_from(graph::InputView{values});
+    return read_from(graph::InputView{values}, origin_port);
 }
 
-GridSpec FieldNodes::read_from(const graph::InputView& inputs) noexcept {
+GridSpec FieldNodes::read_from(const graph::InputView& inputs, const graph::PortNumber origin_port) noexcept {
     GridSpec grid;
-    grid.origin_m = Vec3{real_or(inputs, kPortOrigin0, -kDefaultHalfExtentRe * kEarthRadiusM),
-                         real_or(inputs, kPortOrigin1, -kDefaultHalfExtentRe * kEarthRadiusM),
-                         real_or(inputs, kPortOrigin2, -kDefaultHalfExtentRe * kEarthRadiusM)};
-    grid.spacing_m = Vec3{real_or(inputs, kPortSpacing0, kDefaultSpacingRe * kEarthRadiusM),
-                          real_or(inputs, kPortSpacing1, kDefaultSpacingRe * kEarthRadiusM),
-                          real_or(inputs, kPortSpacing2, kDefaultSpacingRe * kEarthRadiusM)};
-    grid.nx = count_or(inputs, kPortCount0, kDefaultNodesPerAxis);
-    grid.ny = count_or(inputs, kPortCount1, kDefaultNodesPerAxis);
-    grid.nz = count_or(inputs, kPortCount2, kDefaultNodesPerAxis);
+    grid.origin_m = Vec3{real_or(inputs, origin_port, -kDefaultHalfExtentRe * kEarthRadiusM),
+                         real_or(inputs, origin_port + 1, -kDefaultHalfExtentRe * kEarthRadiusM),
+                         real_or(inputs, origin_port + 2, -kDefaultHalfExtentRe * kEarthRadiusM)};
+    grid.spacing_m = Vec3{real_or(inputs, origin_port + 3, kDefaultSpacingRe * kEarthRadiusM),
+                          real_or(inputs, origin_port + 4, kDefaultSpacingRe * kEarthRadiusM),
+                          real_or(inputs, origin_port + 5, kDefaultSpacingRe * kEarthRadiusM)};
+    grid.nx = count_or(inputs, origin_port + 6, kDefaultNodesPerAxis);
+    grid.ny = count_or(inputs, origin_port + 7, kDefaultNodesPerAxis);
+    grid.nz = count_or(inputs, origin_port + 8, kDefaultNodesPerAxis);
     return grid;
 }
 
@@ -131,6 +131,19 @@ bool bake_dipole(double tilt_degrees, double moment_am2, const GridSpec& grid, g
     // The descriptor is the table's own, taken **before** the samples move, and the samples move rather than
     // copy: a 100 MB field copied once per bake for no reason is a cost a user would feel as a pause with
     // nothing to explain it.
+    const qp::abi::LatticeDesc desc = table.view().desc;
+    return fields.publish(key, desc, std::move(table.data()));
+}
+
+bool bake_uniform(const Vec3& value, const GridSpec& grid, gfield::FieldKey key, gfield::FieldSet& fields) {
+    if (!is_finite(value)) return false;
+    if (!bakeable(grid)) return false;
+    BakedField table{grid.origin_m, grid.spacing_m, grid.nx, grid.ny, grid.nz};
+    for (std::uint32_t i = 0; i < grid.nx; ++i) {
+        for (std::uint32_t j = 0; j < grid.ny; ++j) {
+            for (std::uint32_t k = 0; k < grid.nz; ++k) table.set_node(i, j, k, value);
+        }
+    }
     const qp::abi::LatticeDesc desc = table.view().desc;
     return fields.publish(key, desc, std::move(table.data()));
 }
@@ -182,7 +195,46 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {
     field.unit_symbol = "T";
     dipole.outputs.push_back(field);
 
-    return {std::move(dipole)};
+    graph::NodeDesc uniform;
+    uniform.type_name = kUniformType;
+    uniform.label = "Uniform field";
+    uniform.description = "The same magnetic field everywhere, in tesla. Its answer is exact under trilinear "
+                          "interpolation at any spacing, which is what makes it the field a course checks a "
+                          "pusher against.";
+    uniform.category = "field";
+    uniform.version = 1;
+    uniform.allow_in_field_domain = true;
+    uniform.allow_in_particle_domain = false;
+    uniform.has_compute = true;
+    graph::PortDesc bx = parameter(kPortField0, "b_x", "B x", "T", 1.0e-6);
+    bx.description = "The field's x component, in tesla. Defaults to a microtesla, which is a visible gyration "
+                     "at a thermal speed and costs nothing to compute.";
+    graph::PortDesc by = parameter(kPortField1, "b_y", "B y", "T", 0.0);
+    graph::PortDesc bz = parameter(kPortField2, "b_z", "B z", "T", 0.0);
+    uniform.inputs.push_back(bx);
+    uniform.inputs.push_back(by);
+    uniform.inputs.push_back(bz);
+    uniform.inputs.push_back(parameter(kPortUniformOrigin0, "origin_x", "Grid origin x", "m", kEarthRadiusM));
+    uniform.inputs.push_back(parameter(kPortUniformOrigin1, "origin_y", "Grid origin y", "m", kEarthRadiusM));
+    uniform.inputs.push_back(parameter(kPortUniformOrigin2, "origin_z", "Grid origin z", "m", kEarthRadiusM));
+    uniform.inputs.push_back(parameter(kPortUniformSpacing0, "spacing_x", "Grid spacing x", "m", 0.1 * kEarthRadiusM));
+    uniform.inputs.push_back(parameter(kPortUniformSpacing1, "spacing_y", "Grid spacing y", "m", 0.1 * kEarthRadiusM));
+    uniform.inputs.push_back(parameter(kPortUniformSpacing2, "spacing_z", "Grid spacing z", "m", 0.1 * kEarthRadiusM));
+    uniform.inputs.push_back(parameter(kPortUniformCount0, "count_x", "Nodes along x", "", 1.0));
+    uniform.inputs.push_back(parameter(kPortUniformCount1, "count_y", "Nodes along y", "", 1.0));
+    uniform.inputs.push_back(parameter(kPortUniformCount2, "count_z", "Nodes along z", "", 1.0));
+    graph::PortDesc uniform_out;
+    uniform_out.number = kPortField;
+    uniform_out.name = "field";
+    uniform_out.label = "Magnetic field";
+    uniform_out.description = "The baked field, as a volume of tesla vectors.";
+    uniform_out.type = qp::ports::kVectorField;
+    uniform_out.connectable = true;
+    uniform_out.required = false;
+    uniform_out.unit_symbol = "T";
+    uniform.outputs.push_back(uniform_out);
+
+    return {std::move(dipole), std::move(uniform)};
 }
 
 std::size_t FieldNodes::mount(qp::host::PluginHost& host) noexcept {
@@ -197,6 +249,20 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
     graph::NodeId id, const graph::NodeDesc& desc,
     const std::vector<std::pair<graph::PortNumber, qp::ports::Value>>& inputs) {
     using Outcome = std::vector<std::pair<graph::PortNumber, qp::ports::Value>>;
+    if (desc.type_name == FieldNodes::kUniformType) {
+        const graph::InputView uniform_view{inputs};
+        const Vec3 value{real_or(uniform_view, FieldNodes::kPortField0, 0.0),
+                         real_or(uniform_view, FieldNodes::kPortField1, 0.0),
+                         real_or(uniform_view, FieldNodes::kPortField2, 0.0)};
+        const GridSpec uniform_grid = FieldNodes::read_from(uniform_view, FieldNodes::kPortUniformOrigin0);
+        const gfield::FieldKey uniform_key{id.index, FieldNodes::kPortField};
+        if (!bake_uniform(value, uniform_grid, uniform_key, *fields_)) {
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        Outcome out;
+        out.emplace_back(FieldNodes::kPortField, qp::ports::Value{fields_->view(uniform_key).desc});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
     if (desc.type_name != FieldNodes::kDipoleType) {
         // Not mine. See the header: the bake is called for every node in the graph, including the particle and
         // render domains, and a bake that failed on them would make a mixed graph unbakeable.
