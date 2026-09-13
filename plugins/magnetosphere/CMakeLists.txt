@@ -45,7 +45,8 @@ add_library(qp_plugins_magnetosphere STATIC
     src/field_nodes.cpp
     src/plan.cpp
     src/render_nodes.cpp
-    src/run.cpp)
+    src/run.cpp
+    src/view_item.cpp)
 
 add_library(qp::plugins::magnetosphere ALIAS qp_plugins_magnetosphere)
 

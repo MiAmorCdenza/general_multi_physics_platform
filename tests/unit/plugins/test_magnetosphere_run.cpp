@@ -28,6 +28,7 @@
 #include <qp/plugins/magnetosphere/plan.hpp>
 #include <qp/plugins/magnetosphere/render_nodes.hpp>
 #include <qp/plugins/magnetosphere/run.hpp>
+#include <qp/plugins/magnetosphere/view_item.hpp>
 #include <qp/plugins/magnetosphere/units.hpp>
 
 #include <cmath>
@@ -733,4 +734,60 @@ TEST_CASE("magnetosphere.render.the_item_is_declared_and_never_evaluated", "[mag
     // declaration meaningful.
     REQUIRE_FALSE(plan.particle.order().empty());
     REQUIRE(plan.field.order().size() == 1);
+}
+
+
+TEST_CASE("magnetosphere.render.a_snapshot_becomes_a_scene", "[magnetosphere]") {
+    // The kit's drawing side, checked as a **value**: an item that painted would put this decision where no case
+    // could reach it, which is the whole reason `ViewScene` is a value and `IViewItem` lives in `core/`.
+    ParticleViewItem item;
+    REQUIRE(item.name() == std::string_view{"particles"});
+    REQUIRE(item.draws(RenderNodes::kParticlesType));
+    REQUIRE_FALSE(item.draws("render.field_lines"));
+
+    // A declaration, a run and a snapshot: the request is what a host has after pressing Run.
+    Scene scene;
+    const Chain chain = add_chain(scene, 0.0, 6.6, 8, 0.01, 90.0);
+    const graph::NodeId node = scene.add(RenderNodes::kParticlesType);
+    scene.wire(chain.pusher, PusherNodes::kPortStateOut, node, RenderNodes::kPortState);
+    REQUIRE(scene.bake().has_value());
+
+    MagnetosphereRunProvider provider;
+    qp::graph::execution::RunBuildResult built = provider.build(scene.g, scene.host.node_types());
+    REQUIRE(built.ok());
+    REQUIRE(built.run->advance(500, 0.01).has_value());
+    const std::vector<double> positions = built.run->positions();
+    REQUIRE(positions.size() == 24);
+
+    const std::vector<graph::DeclaredOutput> declared{graph::DeclaredOutput{node, RenderNodes::kPortItem}};
+    const graph::ViewRequest request{&scene.g, &declared, &positions, 500};
+    REQUIRE(request.valid());
+
+    const graph::ViewScene drawn = item.scene(request);
+    REQUIRE(drawn.points.size() == 8);
+    // Earth radii, not metres: the conversion happens in `MagnetosphereRun::positions`, so an item that
+    // converted again would put the unit system in a second place.
+    for (const graph::ViewScene::Point& point : drawn.points) {
+        const double radius = std::sqrt(point.x * point.x + point.y * point.y);
+        REQUIRE(radius > 6.0);
+        REQUIRE(radius < 7.5);
+    }
+    // The fit is symmetric about the Earth and carries a margin, so a particle on the boundary has somewhere to
+    // go before the frame has to change.
+    REQUIRE(drawn.has_bounds);
+    REQUIRE(drawn.x_min == -drawn.x_max);
+    REQUIRE(drawn.y_min == -drawn.y_max);
+    REQUIRE(drawn.x_max > 6.0);
+    REQUIRE(drawn.x_max < 8.0);
+    // No trail: a trail is a series of snapshots and a request carries one. The host accumulates them; an item
+    // that remembered them would be stateful, which the interface forbids.
+    REQUIRE(drawn.trail.empty());
+
+    // A window that has not run yet: a valid request with an empty snapshot is an empty scene, not a failure.
+    const std::vector<double> none;
+    const graph::ViewScene blank = item.scene(graph::ViewRequest{&scene.g, &declared, &none, 0});
+    REQUIRE(blank.empty());
+    REQUIRE_FALSE(blank.has_bounds);
+    // And no snapshot at all is refused by `valid()`, which is a host's check rather than an item's.
+    REQUIRE_FALSE(graph::ViewRequest{&scene.g, &declared, nullptr, 0}.valid());
 }
