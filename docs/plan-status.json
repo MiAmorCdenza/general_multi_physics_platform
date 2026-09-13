@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "**两张表与一个大缺陷。**（一）**`ExportSubject::fit`：拟合参数能出窗口了**——`fit_session.hpp` 自己写着「它的不确定度就是要交上去报告被打分的东西」，而那一列此前出不了窗口；表是**一种行形状** `model,parameter,value,uncertainty`（系数一行一个、名字与面板行名同一条规则；`chi_squared`/`degrees_of_freedom`/`r_squared` 同样行、不确定度写空字段；`model` 是列而不是注释行，因为 CSV 按契约拒绝 `#` 注释）。同时把 `readings_not_supported` 换成 `subject_not_supported`——一个主题时那是够用的最小形状，第二个主题到来正是「最小形状必须被完整版本替换」的条件；代价是句子失去具体性，所以把主题带进句子（`describe_export_refusal(refusal, subject)`）。（二）**真正的发现：`if(TARGET qp::plugins::analysis)` 永远是假的**——根 CMake 里 `views` 排在 `plugins` 之前，而 CMake 的 TARGET 判断只看得见已添加的目标：于是 **qp_views 从不链接分析插件、应用在任何构建里都显示「本构建没有拟合器」（功能一次都没跑过）**，而三条断言拟合的用例一直走 `#else` 分支、断言「没有拟合器」而通过——**一个不可能失败的绿用例比缺用例更糟**，这正是那条守卫的注释想避免的事而它自己从未生效。把 `plugins` 移到 `views` 之前（层级门禁保证方向安全）后测量：ninja 里带该宏的目标 **0→16**，`qt.views.fit.*` 断言数 **3→86**，并立刻抓出我两处错误（`MeasurementModel::clear()` 不存在、面板按 6 位有效数字显示而我按等值断言）。用例 187→191。",
+  "updated": "**三处修正，全部关于「一句话说得对不对」。（一）参考实现能跑，而套件的两处注释说它不能。** `views/CMakeLists.txt` 与 `views/app/main.cpp` 都写着「按 Run 会告诉你跑不了」，理由是「第二条运行通路（provider）还没写」——而那条通路早已写好（控制器在算子通路拒绝后询问挂载的 `IGraphRunProvider`，`run.hpp` 给出自己的节奏，main.cpp 就在节点类型上方挂载了它）。按用户的方式实测：新建文档 → Demos → magnetosphere → Run，窗口报 **「boris: 4096 steps, 24 of 24 live」**，粒子与场线分别画在两个场景里（`nodes 16 | edges 21 | graph v154`）。第一次尝试看起来像「跑不了」，是因为 `Demos → magnetosphere` 是把蓝图**加进**当前文档（3 + 16 = 19 个节点），演示的振子还在，于是算子通路抢先成功——这正是控制器明文规定的顺序。两处注释改写，并新增用例 `run.controller.a_content_graph_runs_through_the_provider` 把这条通路钉住（39 条断言：未挂载时被拒绝且账本为空、挂载后提供者名字、16 个粒子、四个通道且 `radius` 是长度量纲、场的键、账本可按 id 找到）——与上一轮「应用里根本没有拟合器」是同一类缺陷，只是方向相反。（二）**台账一处误记**：§9.44 把参考实现的 `render_item_diagnostics` 记成「置信度面板就是那个表面」，而参考实现自己的说明是「**标量场**在诊断点处采样为标记点集」——两件不同的事，唯一联系是名字里都有 diagnostic；我没有看它的输入端口（`data: scalar_field`）就下了结论。现改为**未移植**，重新开启条件写在 §9.50。（三）**GUI 自查量到一条具名缺口**：磁层运行后置信度面板报「能量漂移无法测量（二次势需要位移与速度）」——这句话是对的（能量守恒是振子的诊断），而磁层轨迹里真正守恒的是磁矩 μ = m v⊥²/(2B)；重新开启条件是有人问「这条轨迹守不守恒」，届时正确的形状是按内容选诊断表。用例 191→192；GCC 与 MSVC 双绿。",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -81,7 +81,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 853,
+    "ctest_registered": 854,
     "compilers_green": [
       "gcc-15.2.0-i686",
       "msvc-19.51-x64"

@@ -782,8 +782,11 @@ if(TARGET qp::views_model AND TARGET qp::plugins::mechanics)
     # gate reported, correctly, as both orphans and dangling `@tests` ids.
     qp_add_test(qp_test_run_controller
         SOURCES model/test_run_controller.cpp
+        # qp::host and the magnetosphere kit are here for one case: the application's **provider** run path, which
+        # the shell reaches by mounting the kit's provider and node types. A case that asserted that path without the
+        # kit linked could only assert the refusal.
         LIBS qp::views_model qp::plugins::mechanics qp::graph_execution qp::authoring_commands
-             qp::graph_mutate)
+             qp::graph_mutate qp::host qp::plugins::magnetosphere)
 
     # The file menu's behaviour: new, save, open. It saves and reopens through the real
     # JSON format, so this is the case that proves a document survives the trip -- and the

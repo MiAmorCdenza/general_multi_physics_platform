@@ -211,13 +211,18 @@ int main(int argc, char** argv) {
 
     // The magnetosphere kit's node types: the field model, the emitter and the pusher.
     //
-    // **Mounted even though the Run action cannot drive them yet**, and the alternative was worse: a kit whose
-    // types are registered only by a test fixture is a kit no user can reach, which is the failure
-    // `docs/plan-tree.md` section 9.9 calls out by name -- "a capability only a test fixture can reach looks
-    // green in every check". What a user *can* do with them today is real: place a dipole, wire a ring emitter
-    // and a Boris push to it, set the pitch angle and the L shell, and save the document. What they cannot do is
-    // press Run, because the particle domain is driven by `MagnetosphereRun` -- a run path the view layer does
-    // not have -- and the Run action says exactly that rather than starting something else.
+    // **This comment used to say the Run action could not drive them, and that had been false for a long time.**
+    // The claim was that "the particle domain is driven by `MagnetosphereRun` -- a run path the view layer does not
+    // have"; the path exists (the controller asks the mounted providers after the operator path declines, and the
+    // run provider is mounted a few lines below), and the measured answer to pressing Run on the flagship graph is
+    // **"boris: 4096 steps, 24 of 24 live"** with the particles and the field lines drawn. The passage is kept in
+    // outline because its argument about *why* mounting matters is still right, and because it is an example of the
+    // one kind of comment that goes stale on its own: a claim about what a capability can do.
+    //
+    // `run.controller.a_content_graph_runs_through_the_provider` asserts the path now -- the provider's name in the
+    // report, the sixteen particles, the four channels with `radius` in metres, the ledger entry, and the refusal
+    // when the provider is absent -- so the two comments here and in `views/CMakeLists.txt` have something to be
+    // checked against.
     //
     // The count is reported rather than asserted, for the reason the instruments' is: a name clash is one
     // palette entry missing, not a build that cannot open a window.

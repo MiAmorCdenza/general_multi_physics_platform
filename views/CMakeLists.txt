@@ -177,12 +177,19 @@ if(QP_BUILD_PLUGINS)
     # graph can be drawn from. Linked here for the same reason as the instruments -- the types must be in the
     # catalog whether or not anything was loaded from disk, or the kit is reachable only from a test fixture.
     #
-    # **What this does not yet do is run them.** `views/model`'s run controller drives `IStateOperator`s over its
-    # own `StateView`, and this kit's particles live in a `ParticleState` that a `MagnetosphereRun` builds from
-    # the graph's emitter. That second run path belongs to the view layer and the framework, not to a kit, and it
-    # is not written: pressing Run on a magnetosphere graph says so (see `run_controller.cpp`). Mounting the
-    # types without that path is deliberate -- a palette entry that can be placed, wired and saved is a real
-    # capability, and it is honest about the one it does not have.
+    # **This comment used to say the kit could not be run, and that was wrong.** It claimed that "pressing Run on a
+    # magnetosphere graph says so", because `views/model`'s run controller drives `IStateOperator`s and this kit's
+    # particles live in a `ParticleState` -- and the second run path had in fact been written: the controller asks
+    # the mounted `IGraphRunProvider`s after the operator path declines, `run.hpp` states the run's own cadence, and
+    # `main.cpp` mounts the provider four lines above the node types. What is below is the correction, measured by
+    # doing what a user does: a new document, `Demos -> magnetosphere`, Run, and the window reports
+    # **"boris: 4096 steps, 24 of 24 live"** with the particles drawn in one scene and the traced field lines in the
+    # other (`nodes 16 | edges 21 | graph v154`).
+    #
+    # The lesson is not the mount but the comment: a claim about a *capability* is the one kind of comment that
+    # becomes false without anybody editing it, and this one was used to justify a design decision.
+    # `run.controller.a_content_graph_runs_through_the_provider` now asserts the path -- including that the same
+    # graph is *refused* when the provider is not mounted -- so the sentence cannot rot again unnoticed.
     target_compile_definitions(qp_shell PRIVATE QP_HAS_MAGNETOSPHERE_PLUGIN)
     target_link_libraries(qp_shell PRIVATE qp::plugins::magnetosphere)
 endif()

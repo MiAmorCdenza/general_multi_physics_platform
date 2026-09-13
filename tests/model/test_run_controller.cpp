@@ -30,6 +30,11 @@
  * matters.
  */
 #include <catch2/catch_test_macros.hpp>
+#include <qp/host/host.hpp>
+#include <qp/plugins/magnetosphere/field_nodes.hpp>
+#include <qp/plugins/magnetosphere/emitter.hpp>
+#include <qp/plugins/magnetosphere/pusher.hpp>
+#include <qp/plugins/magnetosphere/run.hpp>
 
 #include <qp/views/model/run_controller.hpp>
 #include <qp/views/model/run_providers.hpp>
@@ -130,6 +135,125 @@ private:
 };
 
 }  // namespace
+
+TEST_CASE("run.controller.a_content_graph_runs_through_the_provider", "[run]") {
+    // **The application's second run path, asserted end to end.** `run_controller.cpp` asks the operator path first
+    // and the mounted providers after it declines; the shell mounts `MagnetosphereRunProvider` and the kit's node
+    // types, and pressing Run on the flagship graph is what a user does with the whole kit. Until this existed,
+    // nothing tested that path through *this* layer: `test_magnetosphere_run.cpp` drives the provider directly, so a
+    // controller that never asked it -- or a shell that never mounted it -- would have left every case green. That is
+    // not hypothetical here: the analysis plugin was missing from the Qt build for many rounds behind a
+    // configure-time guard, and three cases asserting a fit passed by asserting its absence.
+    //
+    // The graph is built through the command bus, the way the window's Demos menu builds one.
+    qp::host::PluginHost host{qp::plugin::Capability::node_types | qp::plugin::Capability::field_domain |
+                              qp::plugin::Capability::particle_domain};
+    using qp::plugins::magnetosphere::FieldNodes;
+    using qp::plugins::magnetosphere::PusherNodes;
+    using qp::plugins::magnetosphere::EmitterNodes;
+    REQUIRE(FieldNodes::mount(host) == 17);
+    REQUIRE(EmitterNodes::mount(host) == 1);
+    REQUIRE(PusherNodes::mount(host) == 3);
+
+    qp::authoring::Session session;
+    // The id is taken the way the fixture above takes it: checked, then read -- a `Result` is not dereferenced with
+    // `operator*` in this codebase, and the value accessor is the one that reports the check.
+    const auto add = [&session](const char* type, const char* name) {
+        const auto reserved = session.reserve_node();
+        REQUIRE(reserved.has_value());
+        const qp::graph::NodeId id = reserved.value();
+        REQUIRE(session.apply(qp::graph::AddNode{id, type, name}).has_value());
+        return id;
+    };
+    const auto put = [&session](qp::graph::NodeId id, qp::graph::PortNumber port, qp::ports::Value value) {
+        REQUIRE(session.apply(qp::graph::SetParam{id, port, std::move(value)}).has_value());
+    };
+
+    // A small but complete kit: a dipole to bake, an emitter launched against it, and a Boris push. The flagship
+    // blueprint adds the tail, the envelope and the shielding; none of that changes *which path* runs, and a case
+    // that says what it means is worth more than one that repeats the flagship.
+    const double re = qp::plugins::magnetosphere::kEarthRadiusM;
+    const qp::graph::NodeId dipole = add("field.dipole", "dipole");
+    for (qp::graph::PortNumber axis = 0; axis < 3; ++axis) {
+        put(dipole, static_cast<qp::graph::PortNumber>(FieldNodes::kPortOrigin0 + axis),
+            qp::ports::Value{-8.0 * re});
+        put(dipole, static_cast<qp::graph::PortNumber>(FieldNodes::kPortSpacing0 + axis),
+            qp::ports::Value{0.25 * re});
+        put(dipole, static_cast<qp::graph::PortNumber>(FieldNodes::kPortCount0 + axis),
+            qp::ports::Value{65.0});
+    }
+    const qp::graph::NodeId emitter = add("particle.ring_emitter", "emitter");
+    put(emitter, EmitterNodes::kPortCount, qp::ports::Value{std::int64_t{16}});
+    const qp::graph::NodeId pusher = add("particle.boris", "push");
+    // The same three wires the kit's own case draws: the field into both the emitter (so it can compute a pitch
+    // angle) and the pusher, and the emitter's state into the pusher's state socket.
+    put(pusher, PusherNodes::kPortMaxRangeRe, qp::ports::Value{20.0});
+
+    const auto wire = [&session](qp::graph::NodeId from, qp::graph::PortNumber out, qp::graph::NodeId to,
+                                 qp::graph::PortNumber in) {
+        REQUIRE(session.apply(qp::graph::Connect{
+                    qp::graph::PortRef{from, out, qp::graph::PortDirection::output},
+                    qp::graph::PortRef{to, in, qp::graph::PortDirection::input}})
+                    .has_value());
+    };
+    wire(dipole, FieldNodes::kPortField, emitter, EmitterNodes::kPortMagnetic);
+    wire(dipole, FieldNodes::kPortField, pusher, PusherNodes::kPortMagnetic);
+    wire(emitter, EmitterNodes::kPortState, pusher, PusherNodes::kPortStateIn);
+
+    qp::runtime::RunLedger ledger;
+    const qp::graph::ResolveContext resolve{&host.node_types(), &qp::ports::builtin_registry()};
+
+    // ---- Without the mount the graph is *refused*: this is the failure the mount prevents ---------------------
+    {
+        RunController controller{session, ledger, binders(), resolve};
+        const RunResult result = controller.run();
+        REQUIRE_FALSE(result.report.ok);
+        REQUIRE(result.trace.empty());
+        // ... and the ledger stays empty, because a refused run is not an event.
+        REQUIRE(ledger.size() == 0);
+    }
+
+    // ---- With it, the run happens and the record is where the panels read it ----------------------------------
+    {
+        qp::plugins::magnetosphere::MagnetosphereRunProvider provider;
+        qp::views::model::mount_run_provider(&provider);
+
+        RunController controller{session, ledger, binders(), resolve};
+        const RunResult result = controller.run();
+        // The provider's own name is what the status line shows, so a user can tell which path ran.
+        REQUIRE(result.report.ok);
+        REQUIRE(result.report.operator_name == std::string{"magnetosphere"});
+        REQUIRE(result.report.run.valid());
+        REQUIRE(result.report.samples > 0);
+        // The particles are where the particle scene reads them: sixteen triples.
+        REQUIRE(result.particle_positions.size() == 16 * 3);
+        // The field is the snapshot the field-lines item traces, under the dipole's own key.
+        REQUIRE(result.fields.contains(qp::graph::field::FieldKey{dipole.index, FieldNodes::kPortField}));
+
+        // **The trace's channels are this layer's contract with the rest of the window**: the measurement panel
+        // reads one of them, and their names are what a report quotes. `radius` is the channel a length measurement
+        // reads, and it is in metres because the session's dimension is SI.
+        const qp::runtime::Trace& trace = result.trace;
+        REQUIRE(trace.channel_count() == 4);
+        bool has_radius = false;
+        for (const qp::runtime::Channel& channel : trace.channels()) {
+            if (channel.name == "radius") {
+                has_radius = true;
+                REQUIRE(channel.dim == qp::units::dims::length);
+            }
+        }
+        REQUIRE(has_radius);
+        REQUIRE(trace.size() > 0);
+
+        // The ledger entry exists and carries the id the trace's samples point back into -- the chain a reading's
+        // provenance follows.
+        REQUIRE(ledger.size() == 1);
+        REQUIRE(ledger.find(result.report.run) != nullptr);
+
+        qp::views::model::clear_run_providers();
+        REQUIRE(qp::views::model::run_providers().empty());
+    }
+}
 
 TEST_CASE("run.controller.refuses_a_graph_with_nothing_to_run", "[run]") {
     // An empty graph and a graph nothing can run are **different** problems, and the sentences say which
