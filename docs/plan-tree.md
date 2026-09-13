@@ -2694,6 +2694,38 @@ GCC 843 / MSVC 845 全绿（各 +2）；plugins 契约 262（用例 181），C7 
 **数字**：core 441→511 契约、plugins 269→351、views/model 76→99、views/qt 68→81（合计 +188，正好是搬运数）；
 C7 从 190 处归零；四个分区、层级、方言、编码与 Qt 模块门禁与它们的八个自检全绿；GCC 845 / MSVC 847 双绿。
 
+### 9.47 移植台账总表：参考实现的每一个节点类型现在是什么状态
+
+> **这一节存在的理由**：前面几十节把每一项决定都记在了各自那一轮里，而「参考实现还剩什么没搬」这个问题需要一页纸来回答。
+> 参考实现（重构版 `nodes/` 加初版 `physics_engine.cpp`）一共声明 **39 个节点类型**。下面按它们所在的模块列出**每一个**的
+> 归宿，四类：**已移植**、**以更好的形状存在**（附判据）、**被具名条件挡住**（附重新开启条件）、**刻意不移植**（附理由）。
+> 判据一律是那一轮的测量或那段契约，不是印象。
+
+| 参考模块（节点数） | 已移植 | 以更好的形状存在 | 被挡住 / 不移植 |
+|---|---|---|---|
+| `sources.py`（3） | `source.kp` §9.35、`source.day` §9.37、`field.imf` §9.40 | —— | —— |
+| `field_models.py`（7） | `field.dipole`（含倾角插座 §9.37） | —— | **`t89`/`t96`/`t01`/`t04`/`ts05`/`ta16`**：需要 geopack 那族外部 Fortran 展开（本树里没有可移植的实现）。`baked_field.hpp` 从第一天起就是为它们准备的，所以它们到来时是**新的 baker**。重新开启条件：一个真的要用它们的实验 |
+| `combine.py`（5） | `field.sum`、`field.mul`、`field.blend`、`field.mask`、`field.resample` | —— | —— |
+| `efield.py`（3） | `field.convection`、`field.corotation`、`field.shield` §9.36 | —— | —— |
+| `envelope.py`（3） | `field.magnetopause`（含半径第二输出 §9.42）、`field.blend`（两个 blend 节点合一，宽度是参数 §9.28）、`field.draping` §9.42、`field.mix` §9.31 | —— | **`msh23`**：43 KB 的 Fortran 模型（`MS_field_model.for` 加一层 DLL 包装），与 T 模型同一类。重新开启条件同上 |
+| `tail.py`（1） | `field.current_sheet`：harris/flaring 两种剖面 §9.41、铰链 §9.39、被指数驱动的瓣场与闭合比例 §9.41 | **`kan`**：参考实现自己的注释说它与 `flaring` **是同一个表达式**，给两个名字就是给一个模型两个名字 | **`off`**：它回答零场，而零场是合法的物理状态——「关掉了」与「尾场是零」必须分得开 |
+| `atmosphere.py`（2） | `field.atmosphere`（单层指数；参考半径与标高是参数，比那边写死更好）§9.26、分层剖面 §9.45 | —— | —— |
+| `gravity.py`（1） | —— | **推送器自己的引力端口**（`kPortGravity`，表达式与常数逐字相同）：再做一个引力**表**节点会是同一个模型的第二种说法 | —— |
+| `particle_nodes.py`（7） | `particle.boris`、`particle.rk4`、`particle.verlet` §9.43、`particle.ring_emitter`（物种是枚举参数） | **`leapfrog`**：参考实现那句「Boris 旋转 + 踢-漂-踢」正是本套件 Boris 已经在做的事，而这是**量出来的**（静态引力场里两者能量误差包络在四个时间窗各自相同到六位）§9.43；**`particle_species`**：本套件里它是发射器的枚举参数（`kPortSpecies`），单独一个节点没有端口可给 | **`output_encoder`**：属于导出层，其形状应由要读它的东西决定；与 `render_item_particle_trails` **并成一条**重新开启条件（一个需要回看粒子来处的实验） |
+| `render_nodes.py`（6） | `render.particles`、`render.field_lines`（声明加视图项 §9.18/§9.22） | **`render_item_efield_lines`**：这里就是同一个渲染项——`draws()` 认类型名而不认量纲、追踪器的契约里没有量纲，用例量了「同一项、两张不同量纲的表、两族不同曲线」§9.44；**`render_item_diagnostics`**：置信度面板与状态线就是那个表面，再画一遍就是把一个数放到两个地方；**`render_pipeline_start`**：由**声明**（`graph::Declarations`）取代 | **`render_item_particle_trails`**：见上一行的合并条件 |
+| `outputs.py`（1） | —— | **`output_slot`**：这里的对应物是 `graph::Declarations` 加运行账本——图声明它要什么，不需要在画布上再放一个终端节点 | —— |
+
+**合计**：39 个类型里 **26 个已移植**（其中若干是合并后的形状，例如两个 blend 节点合一、六个 T 模型未计）、
+**8 个以更好的形状存在**（每条都有上面那一列里的判据）、**5 个被挡住或不移植**（T 模型六个算一类、`msh23`、`off`、
+`output_encoder`、`render_item_particle_trails`，后两条并成一条条件）。
+
+**这个套件自己新增的类型**（参考实现里没有对应的，所以不在这张表的分子里）：`field.uniform`、`field.uniform_electric`
+（参考实现的均匀场是被 envelope 内联的）、`field.sum` 的通用性带来的组合（§9.20），以及演示库的 `demo.*` 四个类型。
+
+**一页纸要说的另一件事**：这张表里没有「还没轮到」这一栏。重制版未完成、初版被放弃，所以真正的风险不是漏搬，
+而是**搬错**——而这张表的四类归宿里，每一类的判据都是一次测量或一段契约，这也是为什么最后几轮里「什么都不做、
+只查清一项」也占了两次（§9.44 的三个渲染项、§9.43 的蛙跳）。
+
 ### 9.9 内容的**类别**已经完成，具体内容仍需继续写（框架完成度审计）
 
 > 判据只有一条，而且是这个仓库从第一天起就写下的那一条：**加这一类内容是否需要新接口。** 如果不需要，
