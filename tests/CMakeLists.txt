@@ -467,6 +467,7 @@ if(QP_BUILD_PLUGINS)
         SOURCES unit/plugins/test_magnetosphere.cpp
                 unit/plugins/test_magnetosphere_nodes.cpp
                 unit/plugins/test_magnetosphere_run.cpp
+                unit/plugins/test_magnetosphere_trace.cpp
         LIBS qp::plugins::magnetosphere qp::units qp::graph_particles qp::graph_kernels
              qp::graph_eval qp::graph_ir qp::graph_structure qp::graph_domain qp::ports qp::host)
 endif()

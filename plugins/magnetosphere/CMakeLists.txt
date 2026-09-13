@@ -33,6 +33,12 @@
 # graph. Those are the widest dependencies any plugin in this tree has, and they are the price of being a
 # **domains** kit rather than a model: a node type is a graph citizen, so it needs the graph's vocabulary.
 #
+# `trace.cpp` is the kit's second numerical method, beside the pusher, and the same argument puts it here rather
+# than in `core/graph/field`: that module says what a field *is* and holds no algorithm, and `core/graph/kernels`
+# says by its own words that it "contains not a single integrator". How a curve is found is a numerical method
+# with a tolerance, which is content -- a cheaper Euler tracer for a preview is a second function here, not a
+# change to any interface.
+#
 # Nothing here includes a Qt header, and nothing here depends on `core/` beyond the graph and the host.
 #
 # Dependency rule: plugins may depend on core, core may never depend on plugins.
@@ -46,6 +52,7 @@ add_library(qp_plugins_magnetosphere STATIC
     src/plan.cpp
     src/render_nodes.cpp
     src/run.cpp
+    src/trace.cpp
     src/view_item.cpp)
 
 add_library(qp::plugins::magnetosphere ALIAS qp_plugins_magnetosphere)
