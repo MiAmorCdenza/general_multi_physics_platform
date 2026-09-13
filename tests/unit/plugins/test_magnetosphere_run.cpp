@@ -1081,6 +1081,83 @@ TEST_CASE("magnetosphere.run.the_recorded_channels_are_the_ones_a_report_names",
     REQUIRE(std::abs(mu_first - energy_first / b_equator) / mu_first < 0.01);
 }
 
+TEST_CASE("magnetosphere.run.the_cadence_resolves_the_gyration", "[magnetosphere]") {
+    // **The measurement that made this widening necessary, and the before/after that justifies it.** The window's
+    // cadence -- 4096 steps of `1e-4`, chosen and measured for a laboratory oscillator -- is 8.7 **milliseconds**
+    // here, because one normalized time unit is the light crossing time of an earth radius. A proton's gyro-period
+    // at six earth radii is 0.63 seconds, so that run covers one seventy-third of a single gyration: the ring is
+    // drawn almost exactly where it started, and nothing dynamic can be seen.
+    //
+    // Two runs over the same graph make that concrete rather than rhetorical: the same particles, the same field,
+    // the two cadences, and the **range of the recorded radius channel** as the measure of whether the run was
+    // about anything.
+    Scene scene;
+    const Chain chain = add_chain(scene, 0.0, 6.6, 4, 0.01, 90.0);
+    MagnetosphereRunProvider provider;
+
+    const auto radius_range = [](const qp::runtime::Trace& record) {
+        double lowest = std::numeric_limits<double>::max();
+        double highest = std::numeric_limits<double>::lowest();
+        for (const qp::runtime::Sample& sample : record.samples()) {
+            for (std::size_t slot = 0; slot < record.channels().size(); ++slot) {
+                if (record.channels()[slot].name != std::string{MagnetosphereRun::kRadiusChannel}) continue;
+                lowest = std::min(lowest, sample.values[slot].value);
+                highest = std::max(highest, sample.values[slot].value);
+            }
+        }
+        return highest - lowest;
+    };
+
+    // The window's cadence, which the operator path measures and keeps. **Spelled out as literals**, because a
+    // plugin may not include the view layer -- `RunController` is where these two numbers live and this partition
+    // cannot name it. That the kit has to spell them out is the point of the whole case: the window's cadence is
+    // not something the kit knows, which is exactly why the *run* states its own.
+    qp::graph::execution::RunBuildResult short_run = provider.build(scene.g, scene.host.node_types());
+    REQUIRE(short_run.ok());
+    short_run.run->set_run(qp::runtime::RunId{21});
+    REQUIRE(short_run.run->advance(4096, 1.0e-4).has_value());
+    const double short_range = radius_range(short_run.run->trace());
+
+    // And the run's own, which resolves the gyration.
+    qp::graph::execution::RunBuildResult long_run = provider.build(scene.g, scene.host.node_types());
+    REQUIRE(long_run.ok());
+    const std::optional<qp::graph::execution::RunCadence> cadence = long_run.run->preferred_cadence();
+    REQUIRE(cadence.has_value());
+    REQUIRE(cadence->steps > 0);
+    REQUIRE(cadence->dt > 0.0);
+
+    // The step size is one thirty-second of the gyro-period at the launch radius, computed here from the same
+    // physics the kit used -- the species' charge-to-mass ratio and the field sampled at `L`:
+    // `omega_c = |q/m| B(L)`, `T = 2 pi / omega_c`, and the normalized step is `T / 32` in light-crossing units.
+    const double b_at_launch = kEquatorialSurfaceFieldT / (6.6 * 6.6 * 6.6);
+    const double gyro_period_s = 2.0 * 3.14159265358979323846 / (kProtonChargeMassSI * b_at_launch);
+    REQUIRE(std::abs(cadence->dt - gyro_period_s / 32.0 * kNormalizedPerSecond) / cadence->dt < 0.02);
+    // The run it proposes is 128 gyrations -- 81 seconds -- rather than 8.7 milliseconds.
+    const double total_s = static_cast<double>(cadence->steps) * cadence->dt / kNormalizedPerSecond;
+    REQUIRE(total_s > 60.0);
+    REQUIRE(total_s < 120.0);
+    REQUIRE(std::abs(total_s / (128.0 * gyro_period_s) - 1.0) < 0.02);
+
+    long_run.run->set_run(qp::runtime::RunId{22});
+    REQUIRE(long_run.run->advance(cadence->steps, cadence->dt).has_value());
+    const double long_range = radius_range(long_run.run->trace());
+
+    // **The before and after.** Twenty-six kilometres of travel against a gyro-radius of three hundred: the short
+    // run's radius channel is flat to a few kilometres, and the long run's swings by the full two gyro-radii.
+    REQUIRE(short_range < 5.0e3);
+    REQUIRE(long_range > 1.0e5);
+    REQUIRE(long_range > 100.0 * short_range);
+
+    // A graph with no particles to gyrate has no opinion, and says so rather than inventing a cadence: the
+    // field-only run of the kit's own case is the example.
+    Scene field_only_scene;
+    field_only_scene.add_dipole(0.0);
+    qp::graph::execution::RunBuildResult field_only =
+        provider.build(field_only_scene.g, field_only_scene.host.node_types());
+    REQUIRE(field_only.ok());
+    REQUIRE_FALSE(field_only.run->preferred_cadence().has_value());
+}
+
 TEST_CASE("magnetosphere.field_nodes.a_uniform_field_is_uniform", "[magnetosphere]") {
     // The second field model, and the one whose answer is **exact** under trilinear interpolation at any
     // spacing: every node holds the same vector, so a sample anywhere is that vector to the last bit. That is

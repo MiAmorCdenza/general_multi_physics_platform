@@ -286,6 +286,13 @@ const qp::runtime::Trace& IGraphRun::trace() const noexcept {
     return kNoTrace;
 }
 
+std::optional<RunCadence> IGraphRun::preferred_cadence() const noexcept {
+    // No opinion, which leaves the caller's own step count and size in place: the operator loop's oscillator was
+    // measured against those two numbers, and a default that overrode them would change a run nobody asked to
+    // change. See the declaration for why a run that *does* have an opinion must state one.
+    return std::nullopt;
+}
+
 RunOutcome GraphRun::run(std::size_t steps, double dt) {
     RunOutcome out;
     out.operator_name = operator_name_;

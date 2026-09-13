@@ -49,7 +49,8 @@
  *              magnetosphere.run.a_run_without_a_field_is_refused,
  *              magnetosphere.run.a_provider_builds_a_run_from_a_graph,
  *              magnetosphere.render.a_field_becomes_a_family_of_curves,
- *              magnetosphere.run.the_recorded_channels_are_the_ones_a_report_names
+ *              magnetosphere.run.the_recorded_channels_are_the_ones_a_report_names,
+ *              magnetosphere.run.the_cadence_resolves_the_gyration
  */
 #pragma once
 
@@ -361,6 +362,59 @@ public:
     /// @frozen      no
     /// @tests       magnetosphere.run.the_recorded_channels_are_the_ones_a_report_names
     [[nodiscard]] const qp::runtime::Trace& trace() const noexcept override;
+
+    /// @brief How many steps of the preferred cadence make one gyro-period.
+    ///
+    /// A named constant rather than a number inside the arithmetic, because it is the one free choice in the
+    /// cadence and a reader has to be able to argue with it: 32 steps per gyration is eleven degrees of rotation
+    /// per step, which is where a second-order rotation stops visibly losing amplitude, and it costs nothing --
+    /// the run's length in gyro-periods is `steps / 32` either way.
+    static constexpr std::size_t kStepsPerGyration = 32;
+
+    /// @brief How many steps one run of this kit proposes: 128 gyrations at `kStepsPerGyration` steps each.
+    ///
+    /// A budget this kit can justify rather than a copy of the window's: 128 periods is long enough for the ring to
+    /// be a ring (the gyration is the fastest process, and the bounce is longer) and short enough that pressing Run
+    /// stays a button press rather than a wait. It is the same number the window uses, arrived at from this side.
+    static constexpr std::size_t kDefaultRunSteps = 4096;
+
+    /// @brief How long one run of this kit is: enough steps to resolve the gyration, and no more.
+    ///
+    /// ## The measurement that made this necessary
+    ///
+    /// The window's own cadence -- 4096 steps of `1e-4` seconds, chosen and measured for a laboratory oscillator --
+    /// is **8.7 milliseconds** in this kit's units, because one normalized time unit is the light crossing time of
+    /// an earth radius (0.0213 s). A proton's gyro-period at six earth radii is **0.63 seconds**. So the ring the
+    /// kit launches completed one seventy-third of a single gyration over a whole run: the particles were drawn
+    /// almost exactly where they started, and every dynamic feature -- gyration, bounce, drift, convection -- was
+    /// invisible. Nothing in the kit was wrong; the run was simply too short to be about anything.
+    ///
+    /// ## What this answers, and what it deliberately does not
+    ///
+    /// `steps` stays at the window's own count, because a step count is a **budget** and the budget is the
+    /// caller's; what this run knows is the **time scale**. So `dt` is `1/32` of a gyro-period at the launch
+    /// radius, computed from the emitted species' charge-to-mass ratio and the field actually sampled there. That
+    /// resolves the fastest process by a comfortable margin (about eleven degrees of gyration per step, with the
+    /// kernel's own sub-stepping as the safety net for a particle that drifts into a stronger field) and makes the
+    /// run 4096/32 = 128 gyro-periods long -- 81 seconds at six earth radii.
+    ///
+    /// **It does not reach the drift.** The gradient-curvature drift period at that radius is hours, so no fixed
+    /// step of a Boris push can show it: resolving it needs either millions of steps or a guiding-centre model, and
+    /// the kit has neither. That limitation is stated here rather than discovered by a user who wonders why the
+    /// ring does not move.
+    ///
+    /// @ownership   pure
+    /// @thread      main
+    /// @pre         none
+    /// @post        A cadence whose `dt` resolves the gyration, or nothing when there is no field to compute one
+    ///              from -- in which case the caller's default applies and its own limits are the honest answer
+    /// @invariant   Depends only on the launched species and the field, never on the caller
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.run.the_cadence_resolves_the_gyration
+    [[nodiscard]] std::optional<qp::graph::execution::RunCadence> preferred_cadence() const noexcept override;
 
     /**
      * @brief Builds a run over a graph, **baking the field domain into a store this object owns**.

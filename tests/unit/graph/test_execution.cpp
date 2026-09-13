@@ -1169,6 +1169,27 @@ private:
     qp::runtime::Trace trace_{qp::runtime::RunId{}};
 };
 
+/// @brief A run that states a cadence, so the *other* answer is checked too.
+class CadencedRun final : public execution::IGraphRun {
+public:
+    [[nodiscard]] qp::diag::Result<void> advance(std::size_t, double dt) override {
+        if (!(dt > 0.0)) return qp::diag::ErrorCode::invalid_argument;
+        return {};
+    }
+    [[nodiscard]] execution::GraphRunReport report() const override { return {}; }
+    [[nodiscard]] std::vector<double> positions() const override { return {}; }
+    [[nodiscard]] std::optional<execution::RunCadence> preferred_cadence() const noexcept override {
+        if (!built) return std::nullopt;
+        execution::RunCadence cadence;
+        cadence.steps = 7;
+        cadence.dt = 0.25;
+        return cadence;
+    }
+
+    /// Whether this run has anything built to have a time scale about.
+    bool built = true;
+};
+
 }  // namespace
 
 TEST_CASE("execution.run_provider.a_run_with_no_field_answers_with_an_empty_set", "[execution]") {
@@ -1250,6 +1271,29 @@ TEST_CASE("execution.run_provider.a_run_records_under_the_id_it_was_given", "[ex
     const qp::runtime::Trace& kept = recording.trace();
     REQUIRE(&kept != &plain.trace());
     REQUIRE(kept.empty());
+}
+
+TEST_CASE("execution.run_provider.a_run_may_state_its_own_cadence", "[execution]") {
+    // The third opinion a run may have about itself, after its fields and its record. The caller's step count and
+    // size are the *caller's* business -- they were measured against the operator loop's oscillator -- and a run
+    // whose state has a faster time scale than that has to be able to say so, because the caller cannot know what a
+    // gyro-period is.
+    //
+    // The default is the interesting half, and it is `nullopt` rather than a pair of numbers: "I have no opinion"
+    // is a different statement from "4096 steps", and a default that named a count would override the oscillator's
+    // measured cadence with a guess.
+    StubRun plain;
+    REQUIRE_FALSE(plain.preferred_cadence().has_value());
+
+    CadencedRun cadenced;
+    REQUIRE(cadenced.preferred_cadence().has_value());
+    REQUIRE(cadenced.preferred_cadence()->steps == 7);
+    REQUIRE(cadenced.preferred_cadence()->dt == 0.25);
+    // And it is asked *after* the build, when there is a state to have a time scale: a run built over nothing
+    // answers nothing, which is the honest answer for an object that launched no particles.
+    CadencedRun empty;
+    empty.built = false;
+    REQUIRE_FALSE(empty.preferred_cadence().has_value());
 }
 
 TEST_CASE("execution.run_provider.a_provider_names_its_own_refusal", "[execution]") {

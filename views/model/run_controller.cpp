@@ -142,7 +142,15 @@ RunResult RunController::run() const {
             // the uncertainty follows from there.
             const qp::runtime::RunId id = ledger_.begin(spec_for());
             built.run->set_run(id);
-            const auto advanced = built.run->advance(kSteps, kDt);
+            // **The run's own cadence, when it has one.** The two constants on this class were measured against a
+            // laboratory oscillator, and applying them to a magnetosphere makes a run 8.7 milliseconds long --
+            // one seventy-third of a proton's gyration, which is a run about nothing. A run that knows its own
+            // fastest time scale states it; one with no opinion keeps this class's numbers, which is why the
+            // operator path is unchanged.
+            const std::optional<execution::RunCadence> cadence = built.run->preferred_cadence();
+            const std::size_t steps = cadence.has_value() ? cadence->steps : kSteps;
+            const double dt = cadence.has_value() ? cadence->dt : kDt;
+            const auto advanced = built.run->advance(steps, dt);
             if (!advanced.has_value()) {
                 out.report.message = std::string{provider->name()} + " refused a step";
                 return out;

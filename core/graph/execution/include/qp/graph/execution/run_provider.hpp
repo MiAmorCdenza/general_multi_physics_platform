@@ -68,6 +68,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -119,6 +120,39 @@ struct GraphRunReport final {
     [[nodiscard]] bool is_consistent() const noexcept {
         return live + absorbed + escaped == particles;
     }
+};
+
+/**
+ * @brief How long one run of a given kind is: a step count and a step size, in the run's own units.
+ *
+ * ## Why this is the run's opinion and not the caller's decision
+ *
+ * The window used to decide, with two constants chosen for a laboratory oscillator: 4096 steps of `1e-4` seconds.
+ * For that experiment they are right, and the kit they were chosen for is the one they were measured against. For
+ * a magnetosphere they are **not wrong so much as meaningless**: this kit's time unit is the light crossing time of
+ * an earth radius, so 4096 steps of `1e-4` is 8.7 **milliseconds**, while a proton's gyro-period at six earth radii
+ * is 0.63 seconds. The run therefore covers one seventy-third of a single gyration, and every dynamic feature the
+ * kit models -- gyration, bounce, drift, convection -- is invisible at every step count the pusher could afford.
+ *
+ * The caller cannot fix that, because the caller does not know what a gyro-period is. The **run** does: it has the
+ * launched particles, the field they move in, and therefore the fastest time scale that must be resolved for its
+ * own output to mean anything. So a run may state its cadence, and a run with no opinion leaves the caller's
+ * default in place -- which is what keeps every existing run behaving exactly as it did.
+ *
+ * @ownership   pure
+ * @thread      main
+ * @pre         none
+ * @post        none
+ * @invariant   `steps > 0` and `dt > 0` when a cadence is given
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       execution.run_provider.a_run_may_state_its_own_cadence
+ */
+struct RunCadence final {
+    /// How many host steps one run should take.
+    std::size_t steps = 0;
+    /// The step size, in the units the run's own `advance` expects.
+    double dt = 0.0;
 };
 
 /**
@@ -280,6 +314,31 @@ public:
      * @tests       execution.run_provider.a_run_records_under_the_id_it_was_given
      */
     [[nodiscard]] virtual const qp::runtime::Trace& trace() const noexcept;
+
+    /**
+     * @brief How long this run should be, or nothing when the caller's default applies.
+     *
+     * Asked **after** a successful build and before the first step, because the answer depends on what was built:
+     * a run's step size comes from the time scale of the state it launched, and that state does not exist until
+     * the build has succeeded.
+     *
+     * An empty answer is the default and means "I have no opinion", which is the honest answer for a run whose
+     * configuration is the caller's business -- the operator loop's oscillator, for instance, whose cadence the
+     * window has measured and chosen. A run that answers must answer with a cadence that resolves its own fastest
+     * process; a run that resolves nothing is a run whose numbers are about no experiment.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        A positive step count and step size, or nothing
+     * @invariant   The answer depends only on what was built, never on the caller
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.run_provider.a_run_may_state_its_own_cadence
+     */
+    [[nodiscard]] virtual std::optional<RunCadence> preferred_cadence() const noexcept;
 };
 
 /**

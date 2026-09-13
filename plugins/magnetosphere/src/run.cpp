@@ -178,6 +178,38 @@ const qp::graph::field::FieldSet& MagnetosphereRun::fields() const noexcept {
 
 const qp::runtime::Trace& MagnetosphereRun::trace() const noexcept { return trace_; }
 
+std::optional<qp::graph::execution::RunCadence> MagnetosphereRun::preferred_cadence() const noexcept {
+    // No run, no opinion: the caller's default is the only honest answer for an object that launched nothing.
+    if (!built() || field_only_) return std::nullopt;
+    if (!gfield::is_readable(recorded_field_)) return std::nullopt;
+    if (!(std::abs(emitter_.charge_mass_si) > 0.0)) return std::nullopt;
+
+    // The field where the ring was launched, which is the field the gyration happens in: the launch point is on the
+    // equator at the emitter's L shell, and the same sampler the kernel reads through is used here so that "the
+    // field at the launch radius" means one thing in this file.
+    const Vec3 launch{emitter_.l_shell_re * kEarthRadiusM, 0.0, 0.0};
+    const Vec3 b = sample_baked(recorded_field_, recorded_grid_.origin_m, recorded_grid_.spacing_m, launch);
+    const double b_magnitude = norm(b);
+    if (!(b_magnitude > 0.0)) return std::nullopt;
+
+    // `omega_c = |q/m| B`, so the gyro-period is `2 pi / omega_c` -- in **seconds**, because that is the unit the
+    // physics is written in, and then converted once into the normalized time the kernel's `dt` is expressed in.
+    // One conversion, at this boundary, like every other unit in this kit.
+    const double omega_c = std::abs(emitter_.charge_mass_si) * b_magnitude;
+    const double gyro_period_s = 2.0 * 3.14159265358979323846 / omega_c;
+    const double dt_s = gyro_period_s / static_cast<double>(kStepsPerGyration);
+
+    qp::graph::execution::RunCadence cadence;
+    // Both halves, and the count is a **budget this kit can justify rather than a sentinel for "unchanged"**: 4096
+    // steps of one thirty-second of a gyro-period is 128 gyrations, which is long enough for the ring to be a ring
+    // and short enough that the window's Run button stays a button. A `steps = 0` meaning "use yours" would be the
+    // kind of field whose zero means something other than zero, which is the shape this repository refuses.
+    cadence.steps = kDefaultRunSteps;
+    cadence.dt = dt_s * kNormalizedPerSecond;
+    if (!(cadence.dt > 0.0) || !std::isfinite(cadence.dt)) return std::nullopt;
+    return cadence;
+}
+
 void MagnetosphereRun::set_run(qp::runtime::RunId run) noexcept {
     // A fresh trace rather than a cleared one, because `Trace` takes its identity at construction and exposes no
     // way to change it afterwards -- deliberately, so the id a trace carries is always one a ledger issued.
