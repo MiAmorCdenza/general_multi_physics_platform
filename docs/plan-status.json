@@ -81,7 +81,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 796,
+    "ctest_registered": 800,
     "compilers_green": [
       "gcc-15.2.0-i686",
       "msvc-19.51-x64"
