@@ -311,6 +311,58 @@ public:
     /// @brief The product, a vector lattice on the input's own grid.
     static constexpr qp::graph::PortNumber kPortMulOut = 1;
 
+    /// @brief The **convection** electric field: the dawn-dusk potential, in volts per metre.
+    ///
+    /// `efield.py` in the reference implementation carries three of these -- the convection field, the corotation
+    /// field and the Volland-Stern shielding factor -- and this is the first of them. It is the field that makes a
+    /// magnetosphere *interesting*: with the magnetic field it produces the `E x B` drift, and that drift is why a
+    /// magnetosphere has a convection pattern at all rather than being a set of closed shells.
+    ///
+    /// ## The model, and the reason it can be checked exactly
+    ///
+    /// The Volland-Stern potential is `phi = A r^gamma sin(gamma * azimuth)` in the equatorial plane, and at
+    /// `gamma = 2` -- the value every course writes down -- the trigonometry collapses in Cartesian coordinates:
+    ///
+    ///     sin(2 * azimuth) = 2 x y / r^2   =>   phi(x, y) = 2 A x y
+    ///
+    /// which is a **quadratic polynomial**, so the field
+    ///
+    ///     E = -grad phi = (-2 A y, -2 A x, 0)
+    ///
+    /// is *linear*. A linear field sampled on a uniform lattice is reproduced by the kit's trilinear interpolation
+    /// **exactly**, at nodes and between them, so this node's case can assert equality with the closed form rather
+    /// than a tolerance. That is worth the sentence: it is the difference between testing a bake and testing a
+    /// model, and it is why `gamma` is fixed at 2 rather than being a parameter.
+    ///
+    /// ## Why gamma is fixed, and what would reopen it
+    ///
+    /// The full Volland-Stern scaling comes from `Kp`, which is a **driver** -- the reference implementation has a
+    /// `kp_source` node for it -- and this platform does not have one. A parameter that had to be a function of a
+    /// driver would be a knob a user could set to a configuration the model never describes. The reopening
+    /// condition is that source: when `Kp` exists, it feeds this node (and the shielding factor) rather than
+    /// replacing them.
+    ///
+    /// ## The sign convention, stated because a drift that goes the wrong way is undebuggable
+    ///
+    /// `+x` is sunward -- the same convention the region mask's `dayside` uses -- and the azimuth is measured from
+    /// it towards `+y`. With `A > 0` the field is `(-2Ay, -2Ax, 0)`, and against the dipole's southward equatorial
+    /// field (`B = -B z_hat`) the `E x B` drift is **sunward on the dayside and antisunward on the nightside**,
+    /// which is the observed pattern. The case asserts that drift direction through the cross product rather than
+    /// asserting the numbers, because the numbers are the model and the direction is the physics.
+    static constexpr const char* kConvectionType = "field.convection";
+    /// @brief The potential's amplitude `A`, in volts per metre squared.
+    static constexpr qp::graph::PortNumber kPortConvectionA = 1;
+    /// @brief Where the **convection** node's grid starts: after the one parameter.
+    static constexpr qp::graph::PortNumber kPortConvectionOrigin0 = 2;
+
+    /// @brief The default amplitude, in volts per metre squared.
+    ///
+    /// Chosen by its **observable** rather than picked: `|E| = 2 A r` is 0.2 mV/m at ten earth radii, which is the
+    /// order of the real cross-polar-cap field mapped to the equatorial plane. A course that measures the drift
+    /// speed at that radius gets a number it can check against a textbook, and the arithmetic is in this comment so
+    /// that changing the default is a decision rather than a nudge.
+    static constexpr double kDefaultConvectionA = 1.5e-12;
+
     /// @brief What a mask node's parameters say.
     ///
     /// @ownership   owns
@@ -639,6 +691,39 @@ public:
  */
 [[nodiscard]] bool bake_scaled(const qp::graph::field::FieldValue& a, const qp::graph::field::FieldValue& w,
                                qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
+
+/**
+ * @brief Bakes the Volland-Stern convection field, `E = (-2Ay, -2Ax, 0)`, onto `grid`.
+ *
+ * The model and the sign convention are argued on `kConvectionType`; what belongs here is why the arithmetic is
+ * written the way it is. The field is **linear in position**, so it is evaluated from the node's own coordinates
+ * rather than from a potential that was differenced numerically: a finite difference of `phi = 2Axy` would be a
+ * second approximation stacked on the interpolation, and it would make the exactness this node's case rests on
+ * impossible to state.
+ *
+ * `z` is untouched, and that is the model rather than an oversight: the Volland-Stern potential is defined in the
+ * equatorial plane, and a field that grew with `|z|` would be a field with a divergence and a curl nobody asked
+ * for. A three-dimensional convection model is a different node.
+ *
+ * @param amplitude_v_per_m2 The potential's amplitude `A`. Zero gives a zero field, which is a legal experiment.
+ * @param grid  Where to bake. At least two nodes an axis and a positive spacing; anything else is refused.
+ * @param key   Who is publishing it.
+ * @param fields The store. Borrowed; the samples are moved into it on success.
+ *
+ * @ownership   owns the samples it publishes on success
+ * @thread      main
+ * @pre         none
+ * @post        On true, `fields.view(key)` is a readable vector volume of volt-per-metre values, equal at every
+ *              node to `(-2Ay, -2Ax, 0)` evaluated there
+ * @invariant   On false the store is unchanged
+ * @errors      Returns false rather than throwing, for an un-bakeable grid or a non-finite amplitude
+ * @complexity  O(points)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.the_convection_field_is_the_potentials_gradient
+ */
+[[nodiscard]] bool bake_convection(double amplitude_v_per_m2, const GridSpec& grid,
+                                   qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
 
 /**
  * @brief The node evaluator that bakes this kit's field types into a store.

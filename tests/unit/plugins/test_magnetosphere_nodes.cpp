@@ -78,10 +78,11 @@ struct Scene final {
     graph::EvalResult result{};
 
     Scene() {
-        // Six field models now: the dipole, the uniform field, the sum, the uniform electric field, the region
-        // mask and the multiplier. Each is a **type of its own** with its own port numbers, which is the
-        // composition principle -- a shielding field is `mul(convection, shield)`, not a switch inside a node.
-        REQUIRE(FieldNodes::mount(host) == 6);
+        // Seven field models now: the dipole, the uniform field, the sum, the uniform electric field, the region
+        // mask, the multiplier and the convection field. Each is a **type of its own** with its own port numbers,
+        // which is the composition principle -- a shielding field is `mul(convection, shield)`, not a switch
+        // inside a node.
+        REQUIRE(FieldNodes::mount(host) == 7);
         REQUIRE(PusherNodes::mount(host) == 1);
     }
 
@@ -172,10 +173,11 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // declaration never made. The check is that every port the reader asks for exists, with the type the reader
     // needs, and that the output is the field port a pusher can be wired to.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    // Six field models: the dipole, the uniform magnetic field, the sum, the uniform electric field, the region
-    // mask and the multiplier. Each is a **type of its own** with its own port numbers, which is the composition
-    // principle -- a shielding field is `mul(convection, shield)`, not a switch inside a node.
-    REQUIRE(types.size() == 6);
+    // Seven field models: the dipole, the uniform magnetic field, the sum, the uniform electric field, the region
+    // mask, the multiplier and the convection field. Each is a **type of its own** with its own port numbers,
+    // which is the composition principle -- a shielding field is `mul(convection, shield)`, not a switch inside a
+    // node.
+    REQUIRE(types.size() == 7);
     REQUIRE(types[0].type_name == FieldNodes::kDipoleType);
     REQUIRE(types[1].type_name == FieldNodes::kUniformType);
     REQUIRE(types[2].type_name == FieldNodes::kSumType);
@@ -242,9 +244,9 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // Mounting is what makes the type reachable from a running program rather than only from a test fixture. The
     // second mount registers nothing, because a name that is taken is left alone rather than duplicated.
     qp::host::PluginHost host{qp::plugin::Capability::node_types};
-    // Six field models now, and the count is asserted rather than assumed: it is the one place a new type
+    // Seven field models now, and the count is asserted rather than assumed: it is the one place a new type
     // announces itself in the test suite, so a type that silently failed to register is a failure here.
-    REQUIRE(FieldNodes::mount(host) == 6);
+    REQUIRE(FieldNodes::mount(host) == 7);
     REQUIRE(host.node_types().find(FieldNodes::kDipoleType) != nullptr);
     REQUIRE(FieldNodes::mount(host) == 0);
 }
@@ -438,7 +440,7 @@ TEST_CASE("magnetosphere.field_nodes.a_field_scales_by_its_weight", "[magnetosph
     // where the weight belongs are both refused by `check_connection`, so the multiplier's own check is the second
     // line of defence rather than the only one.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 6);
+    REQUIRE(types.size() == 7);
     REQUIRE(types[5].type_name == FieldNodes::kMulType);
     REQUIRE(types[5].has_compute);
     const graph::PortDesc* mul_field = types[5].find_port(FieldNodes::kPortMulField, false);
@@ -462,6 +464,121 @@ TEST_CASE("magnetosphere.field_nodes.a_field_scales_by_its_weight", "[magnetosph
     REQUIRE(qp::ports::check_connection(*vector_type, qp::ports::PortDirection::output, *vector_type,
                                         qp::ports::PortDirection::input)
                 .acceptable());
+}
+
+TEST_CASE("magnetosphere.field_nodes.the_convection_field_is_the_potentials_gradient", "[magnetosphere]") {
+    // **A model whose answer is known in closed form, which is why gamma is fixed at 2.** The Volland-Stern
+    // potential `phi = A r^2 sin(2 azimuth)` collapses to `2 A x y` in Cartesian coordinates, so the field is
+    // `E = -grad phi = (-2Ay, -2Ax, 0)`: **linear** in position. A linear field on a uniform lattice is reproduced
+    // by trilinear interpolation exactly, which turns this case from "the bake is close to the model" into "the
+    // bake *is* the model" -- at the nodes and between them.
+    const GridSpec grid{Vec3{-4.0 * kEarthRadiusM, -4.0 * kEarthRadiusM, -4.0 * kEarthRadiusM},
+                        Vec3{0.5 * kEarthRadiusM, 0.5 * kEarthRadiusM, 0.5 * kEarthRadiusM},
+                        17, 17, 17};
+    const double amplitude = 1.5e-12;
+    gfield::FieldSet fields;
+    const gfield::FieldKey key{9, FieldNodes::kPortField};
+    REQUIRE(bake_convection(amplitude, grid, key, fields));
+
+    const gfield::FieldValue field = fields.view(key);
+    REQUIRE(gfield::is_readable(field));
+    REQUIRE(field.is_vector());
+    // Volts per metre, which is what tells this apart from the dipole's tesla: the pusher reads both sockets
+    // through one vocabulary and cannot tell them apart by the value.
+    REQUIRE(field.desc.dimension.L == 1);
+    REQUIRE(field.desc.dimension.T == -3);
+    REQUIRE(field.desc.dimension.I == -1);
+
+    // Every node, against the closed form, as an **equality**: `-2 A y` and `-2 A x` are two multiplications, and
+    // the bake performs the same two, so a difference here would be a difference in the model rather than in the
+    // arithmetic.
+    for (std::uint32_t i = 0; i < grid.nx; ++i) {
+        for (std::uint32_t j = 0; j < grid.ny; ++j) {
+            for (std::uint32_t k = 0; k < grid.nz; ++k) {
+                const Vec3 point = grid.node_position(i, j, k);
+                const std::uint64_t at = (static_cast<std::uint64_t>(i) * grid.ny + j) * grid.nz + k;
+                REQUIRE(gfield::get_component(field, at, 0) == -2.0 * amplitude * point.y);
+                REQUIRE(gfield::get_component(field, at, 1) == -2.0 * amplitude * point.x);
+                // `z` is untouched: the potential is defined in the equatorial plane, and a field that grew with
+                // |z| would be one with a divergence nobody asked for.
+                REQUIRE(gfield::get_component(field, at, 2) == 0.0);
+            }
+        }
+    }
+
+    // **Between the nodes too**, which is the claim the exactness rests on: a linear field's trilinear blend is
+    // the field. Sampled at a point that is deliberately not a node in any axis.
+    //
+    // The tolerance here is **not** the same as at the nodes, and the difference is the honest part: at a node the
+    // value *is* the closed form's two multiplications, while between nodes the blend evaluates `a(1-f) + bf`,
+    // which rounds. So the claim is a relative error of a few ulps rather than equality -- and stating it as
+    // equality was this case's first version, which the machine refused. A tolerance of 1e-12 is still eight
+    // orders tighter than the interpolation error a *non*-linear field would show here, so it separates "the
+    // model is reproduced" from "the model is approximated" without pretending the arithmetic is exact.
+    const Vec3 between = Vec3{1.7 * kEarthRadiusM, -2.3 * kEarthRadiusM, 0.9 * kEarthRadiusM};
+    const Vec3 sampled = sample_baked(field, grid.origin_m, grid.spacing_m, between);
+    const auto close = [](double got, double want) {
+        const double scale = std::max(std::abs(want), 1.0e-300);
+        return std::abs(got - want) / scale < 1.0e-12;
+    };
+    REQUIRE(close(sampled.x, -2.0 * amplitude * between.y));
+    REQUIRE(close(sampled.y, -2.0 * amplitude * between.x));
+    REQUIRE(sampled.z == 0.0);
+    // `|E| = 2 A r` in the plane, which is the observable the default amplitude was chosen by.
+    const double radius = std::hypot(between.x, between.y);
+    REQUIRE(close(std::hypot(sampled.x, sampled.y), 2.0 * amplitude * radius));
+
+    // **The physics, through the cross product rather than through the numbers.** Against the dipole's southward
+    // equatorial field the drift `E x B` must be sunward on the dayside and antisunward on the nightside -- the
+    // observed convection pattern, and the reason this node exists. Asserting the numbers would assert the model;
+    // this asserts what the model is for.
+    //
+    // The magnetic field is the **local** dipole value, `B(r) = B_surface / r_re^3`, and the first version of this
+    // case used the surface value at every radius. That is a factor of twenty-seven at three earth radii, and it
+    // showed up as a drift speed of 1.93 m/s where the arithmetic said 52 -- which is the whole value of asserting
+    // a speed rather than only a sign.
+    const auto dipole_equator_t = [](const Vec3& point) {
+        const double r_re = std::hypot(point.x, point.y) / kEarthRadiusM;
+        return Vec3{0.0, 0.0, -(kEquatorialSurfaceFieldT / (r_re * r_re * r_re))};
+    };
+    const auto drift_x = [&](const Vec3& point) {
+        const Vec3 e = sample_baked(field, grid.origin_m, grid.spacing_m, point);
+        const Vec3 b = dipole_equator_t(point);
+        const Vec3 drift = cross(e, b);
+        return drift.x / norm2(b);   // the sign is what matters here; the speed is checked below
+    };
+    // `+x` is sunward: the same convention the region mask's `dayside` uses.
+    REQUIRE(drift_x(Vec3{2.0 * kEarthRadiusM, 0.5 * kEarthRadiusM, 0.0}) > 0.0);
+    REQUIRE(drift_x(Vec3{-2.0 * kEarthRadiusM, 0.5 * kEarthRadiusM, 0.0}) < 0.0);
+    // And it is the `E x B` speed, `|E| / |B|` at that radius.
+    const Vec3 dusk = Vec3{0.0, 3.0 * kEarthRadiusM, 0.0};
+    const Vec3 e_dusk = sample_baked(field, grid.origin_m, grid.spacing_m, dusk);
+    const Vec3 b_dusk = dipole_equator_t(dusk);
+    const double speed = std::sqrt(norm2(cross(e_dusk, b_dusk))) / norm2(b_dusk);
+    REQUIRE(close(speed, norm(e_dusk) / norm(b_dusk)));
+    // 0.2 mV/m at ten earth radii is the order the default amplitude was chosen for; at three the drift is
+    // `|E|/|B| = 5.7e-5 / 1.1e-6` = **52 m/s**, which is slow for a reason worth knowing: in this model `|E|`
+    // grows with `r` while the dipole's `|B|` falls as `r^3`, so the drift speed goes as `r^4` and convection is a
+    // phenomenon of the outer magnetosphere. It is also why the inner region corotates in the real thing.
+    REQUIRE(close(norm(e_dusk), 2.0 * amplitude * 3.0 * kEarthRadiusM));
+    REQUIRE(speed > 20.0);
+    REQUIRE(speed < 200.0);
+
+    // The type is declared like the others and allowed only where a bake is.
+    const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
+    REQUIRE(types.size() == 7);
+    REQUIRE(types[6].type_name == FieldNodes::kConvectionType);
+    REQUIRE(types[6].has_compute);
+    REQUIRE(types[6].allow_in_field_domain);
+    REQUIRE_FALSE(types[6].allow_in_particle_domain);
+    REQUIRE(types[6].find_port(FieldNodes::kPortConvectionA, false) != nullptr);
+    REQUIRE(types[6].find_port(FieldNodes::kPortField, true) != nullptr);
+    REQUIRE(types[6].find_port(FieldNodes::kPortField, true)->type == qp::ports::kVectorField);
+
+    // A grid that cannot be baked, and a non-finite amplitude, are refused rather than approximated.
+    const GridSpec too_small{Vec3{}, Vec3{1.0, 1.0, 1.0}, 1, 1, 1};
+    REQUIRE_FALSE(bake_convection(amplitude, too_small, key, fields));
+    REQUIRE_FALSE(bake_convection(std::numeric_limits<double>::quiet_NaN(), grid, key, fields));
 }
 
 TEST_CASE("magnetosphere.field_nodes.the_dipole_is_baked_onto_the_grid_it_declares", "[magnetosphere]") {

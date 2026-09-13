@@ -286,6 +286,26 @@ bool bake_scaled(const gfield::FieldValue& a, const gfield::FieldValue& w, gfiel
     return fields.publish(key, a.desc, std::move(product));
 }
 
+bool bake_convection(double amplitude_v_per_m2, const GridSpec& grid, gfield::FieldKey key,
+                     gfield::FieldSet& fields) {
+    if (!std::isfinite(amplitude_v_per_m2)) return false;
+    if (!bakeable(grid)) return false;
+
+    // One pass, no table of potentials: see the declaration for why the field is evaluated rather than differenced.
+    BakedField table{grid.origin_m, grid.spacing_m, grid.nx, grid.ny, grid.nz};
+    for (std::uint32_t i = 0; i < grid.nx; ++i) {
+        for (std::uint32_t j = 0; j < grid.ny; ++j) {
+            for (std::uint32_t k = 0; k < grid.nz; ++k) {
+                const Vec3 point = grid.node_position(i, j, k);
+                table.set_node(i, j, k,
+                               Vec3{-2.0 * amplitude_v_per_m2 * point.y, -2.0 * amplitude_v_per_m2 * point.x, 0.0});
+            }
+        }
+    }
+    const qp::abi::LatticeDesc desc = table.view(volt_per_metre_dimension()).desc;
+    return fields.publish(key, desc, std::move(table.data()));
+}
+
 std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipole;
     dipole.type_name = kDipoleType;
     dipole.label = "Dipole field";
@@ -567,8 +587,48 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     mul_out.required = false;
     mul.outputs.push_back(mul_out);
 
-    return {std::move(dipole),   std::move(uniform), std::move(sum),
-            std::move(electric), std::move(mask),    std::move(mul)};
+    // ---------------- the convection field ----------------
+    graph::NodeDesc convection;
+    convection.type_name = kConvectionType;
+    convection.label = "Convection E field";
+    convection.description = "The Volland-Stern dawn-dusk potential's field, E = (-2Ay, -2Ax, 0) with the "
+                             "amplitude A. Wire it into a pusher's electric socket beside a dipole and the "
+                             "particles convect: sunward on the dayside, antisunward on the nightside.";
+    convection.category = "field";
+    convection.version = 1;
+    convection.allow_in_field_domain = true;
+    convection.allow_in_particle_domain = false;
+    convection.has_compute = true;
+    graph::PortDesc amplitude = parameter(kPortConvectionA, "amplitude", "Amplitude", "V/m^2", 1.0e-13);
+    amplitude.description = "The potential's amplitude A, in volts per metre squared. The field it produces is "
+                            "|E| = 2 A r, so 1.5e-12 is 0.2 mV/m at ten earth radii -- the order of the real "
+                            "cross-polar-cap field mapped to the equatorial plane.";
+    convection.inputs.push_back(amplitude);
+    for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+        const char* names[9] = {"origin_x", "origin_y", "origin_z", "spacing_x", "spacing_y",
+                                "spacing_z", "count_x",  "count_y",   "count_z"};
+        const char* labels[9] = {"Grid origin x", "Grid origin y", "Grid origin z",   "Grid spacing x",
+                                 "Grid spacing y", "Grid spacing z", "Nodes along x", "Nodes along y",
+                                 "Nodes along z"};
+        const char* units[9] = {"m", "m", "m", "m", "m", "m", "", "", ""};
+        const double steps[9] = {kEarthRadiusM, kEarthRadiusM, kEarthRadiusM, 0.1 * kEarthRadiusM,
+                                 0.1 * kEarthRadiusM, 0.1 * kEarthRadiusM, 1.0, 1.0, 1.0};
+        convection.inputs.push_back(parameter(kPortConvectionOrigin0 + offset, names[offset], labels[offset],
+                                              units[offset], steps[offset]));
+    }
+    graph::PortDesc c_out;
+    c_out.number = kPortField;
+    c_out.name = "field";
+    c_out.label = "Electric field";
+    c_out.description = "The baked convection field, as a volume of volt-per-metre vectors.";
+    c_out.type = qp::ports::kVectorField;
+    c_out.connectable = true;
+    c_out.required = false;
+    c_out.unit_symbol = "V/m";
+    convection.outputs.push_back(c_out);
+
+    return {std::move(dipole),     std::move(uniform), std::move(sum), std::move(electric),
+            std::move(mask),       std::move(mul),     std::move(convection)};
 }
 
 gfield::FieldValue DipoleEvaluator::input_field(const graph::NodeId id, const graph::PortNumber port) const noexcept {
@@ -590,6 +650,20 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
     graph::NodeId id, const graph::NodeDesc& desc,
     const std::vector<std::pair<graph::PortNumber, qp::ports::Value>>& inputs) {
     using Outcome = std::vector<std::pair<graph::PortNumber, qp::ports::Value>>;
+    if (desc.type_name == FieldNodes::kConvectionType) {
+        const graph::InputView convection_view{inputs};
+        const double amplitude = real_or(convection_view, FieldNodes::kPortConvectionA,
+                                         FieldNodes::kDefaultConvectionA);
+        const GridSpec convection_grid =
+            FieldNodes::read_from(convection_view, FieldNodes::kPortConvectionOrigin0);
+        const gfield::FieldKey convection_key{id.index, FieldNodes::kPortField};
+        if (!bake_convection(amplitude, convection_grid, convection_key, *fields_)) {
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        Outcome out;
+        out.emplace_back(FieldNodes::kPortField, qp::ports::Value{fields_->view(convection_key).desc});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
     if (desc.type_name == FieldNodes::kMulType) {
         // No grid to read: the product lives on the lattice its inputs share, and a multiplier that asked for one
         // would be offering a way to describe a lattice the data does not have.
