@@ -300,6 +300,18 @@ struct StepPlan final {
 
     /// @brief The binding for one slot. A default-constructed view when it is absent.
     ///
+    /// **This accessor exists because there are two index spaces that both look like "the slot number", and they
+    /// do not agree.** `BatchView::in` is what a *kernel* indexes, and a field sits there at
+    /// `slot_index(name)` -- 4, 5 and 6, after the state's own slots. `fields[]` above is what the *plan builder*
+    /// fills, and it is indexed by the enumerator's own value: 0, 1 and 2, because the array holds exactly
+    /// `kSlotNameCount` entries and nothing else lives in it.
+    ///
+    /// Both original callers are right: `BorisAdvancer` reads `batch.in[slot_index(...)]` and the plan builder
+    /// writes `fields[static_cast<std::size_t>(slot)]`. A **third** caller wrote the first form against the second
+    /// array, and the machine reported it as one would hope -- the value it produced had `data = 0x0b`, an address
+    /// eleven bytes into a three-element array of sixteen-byte structs. That read happened to be visibly wrong; the
+    /// same mistake a few bytes further from the end is a plausible pointer to something else entirely.
+    ///
     /// @param name Which slot.
     ///
     /// @ownership   pure

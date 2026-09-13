@@ -216,7 +216,8 @@ public:
  * @invariant   `ok` is zero and every other code means the plan was left empty rather than half built
  * @errors      noexcept
  * @frozen      no
- * @tests       magnetosphere.plan.a_grid_it_cannot_ask_about_is_refused
+ * @tests       magnetosphere.plan.a_grid_it_cannot_ask_about_is_refused,
+ *              magnetosphere.plan.two_sockets_on_two_lattices_are_refused
  */
 enum class PlanBuildRefusal : std::uint8_t {
     ok = 0,
@@ -232,6 +233,9 @@ enum class PlanBuildRefusal : std::uint8_t {
     /// also the safety property: an unknown grid must never be **defaulted**, because the default is a box in a
     /// different place from the samples.
     grid_unknown = 3,
+    /// Two bound sockets hold fields baked on **different lattices**, and the kernel has one grid to sample them
+    /// with. See the implementation for the measurement that made this a refusal.
+    grid_mismatch = 4,
 };
 
 /// @brief Stable short name of a refusal, for a message or a log line.

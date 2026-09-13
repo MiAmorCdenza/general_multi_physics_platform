@@ -770,6 +770,71 @@ TEST_CASE("magnetosphere.field_nodes.a_wired_field_reports_the_grid_it_was_baked
     REQUIRE_FALSE(resolve_field_origin(empty, graph::NodeId{}, PusherNodes::kPortMagnetic, nothing));
 }
 
+TEST_CASE("magnetosphere.plan.two_sockets_on_two_lattices_are_refused", "[magnetosphere]") {
+    // **The kernel has one grid, and until this check nothing said so.** Its parameter block carries six numbers --
+    // an origin and a spacing -- because that is what a per-sub-step sampler can afford, and the plan fills them
+    // from the **magnetic** slot. Every other bound table is then sampled at those coordinates, so a graph that
+    // wired a drag field baked on a different lattice got a particle dragged by the wrong cell's rate: a plausible
+    // number from the wrong place, which no case of either half could catch.
+    //
+    // The check is new because the possibility is: until this kit could publish a scalar field there was no second
+    // kind of table to wire into a second socket.
+    Scene scene;
+    const graph::NodeId dipole = scene.add(FieldNodes::kDipoleType);
+    scene.set(dipole, FieldNodes::kPortTiltDegrees, 0.0);
+    for (graph::PortNumber axis = 0; axis < 3; ++axis) {
+        scene.set(dipole, FieldNodes::kPortOrigin0 + axis, -8.0 * kEarthRadiusM);
+        scene.set(dipole, FieldNodes::kPortSpacing0 + axis, 0.5 * kEarthRadiusM);
+        scene.set(dipole, FieldNodes::kPortCount0 + axis, 33.0);
+    }
+
+    // A mask as the drag source -- it is a 0/1 rate, which is a crude atmosphere and a legal one -- and the two
+    // lattices **deliberately** differ in one number: a quarter of an earth radius against the dipole's half.
+    const graph::NodeId mask = scene.add(FieldNodes::kMaskType);
+    const auto set_mask_grid = [&scene, mask](double spacing_re) {
+        for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+            const double value = offset < 3 ? -8.0 * kEarthRadiusM
+                                             : (offset < 6 ? spacing_re * kEarthRadiusM : 33.0);
+            scene.set(mask, FieldNodes::kPortMaskOrigin0 + offset, value);
+        }
+    };
+    set_mask_grid(0.25);
+
+    const graph::NodeId pusher = scene.add(PusherNodes::kBorisType);
+    scene.wire(dipole, FieldNodes::kPortField, pusher, PusherNodes::kPortMagnetic);
+    scene.wire(mask, FieldNodes::kPortWeight, pusher, PusherNodes::kPortDrag);
+
+    REQUIRE(scene.bake().has_value());
+    BuiltPlan plan;
+    REQUIRE(build_particle_plan(scene.g, scene.order(), scene.fields, plan) == PlanBuildRefusal::grid_mismatch);
+    // Named, so that a caller can say what to fix rather than "the plan was rejected".
+    REQUIRE(std::string{to_string(PlanBuildRefusal::grid_mismatch)} == "grid_mismatch");
+    REQUIRE(plan.steps.empty());
+
+    // And it is the **lattices** that were refused, not the wiring: the same graph with the mask on the dipole's
+    // own grid plans cleanly, drag slot and all.
+    set_mask_grid(0.5);
+    REQUIRE(scene.bake().has_value());
+    BuiltPlan agreeing;
+    REQUIRE(build_particle_plan(scene.g, scene.order(), scene.fields, agreeing) == PlanBuildRefusal::ok);
+    REQUIRE(agreeing.steps.size() == 1);
+    REQUIRE(agreeing.pushers == 1);
+    // Both slots are bound, so the case above was about a real graph rather than about a socket that was never
+    // wired: the drag slot is what makes the mismatch possible in the first place.
+    const pp::StepPlan& step = agreeing.steps.front();
+    // **Read through the accessor, not through an index.** `fields[]` is indexed by the enumerator's own value
+    // (0, 1, 2) while `BatchView::in` -- what a *kernel* indexes -- puts the same fields at `slot_index(name)`,
+    // which is 4, 5 and 6. This case's first version used the second form against the first array and read eleven
+    // bytes past its end; the accessor exists because of that, and using it here is the point of having it.
+    REQUIRE(gfield::is_readable(step.field(pp::SlotName::magnetic)));
+    REQUIRE(gfield::is_readable(step.field(pp::SlotName::drag)));
+    REQUIRE(step.field(pp::SlotName::magnetic).is_vector());
+    REQUIRE_FALSE(step.field(pp::SlotName::drag).is_vector());
+    // The two index spaces, asserted as the fact that made the accessor necessary rather than only as prose.
+    REQUIRE(pp::slot_index(pp::SlotName::magnetic) != static_cast<std::size_t>(pp::SlotName::magnetic));
+    REQUIRE(static_cast<std::size_t>(pp::SlotName::magnetic) == 0);
+}
+
 TEST_CASE("magnetosphere.field_nodes.the_dipole_is_baked_onto_the_grid_it_declares", "[magnetosphere]") {
     // The bake is the model evaluated at every node, and the two things that can be wrong about it are the
     // **positions** and the **layout**. The positions are checked against the dipole itself -- which is the only

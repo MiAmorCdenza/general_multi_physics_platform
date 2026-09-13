@@ -340,6 +340,18 @@ qp::graph::execution::RunBuildResult MagnetosphereRunProvider::build(const graph
     qp::graph::execution::RunBuildResult out;
     if (refusal != RunRefusal::ok) {
         out.refusal = std::string{to_string(refusal)};
+        // **A code is not a sentence.** `plan_rejected` and `executor_rejected` are two of the nine refusals that
+        // are *not* this layer's -- it carries the refusal it came from, reachable through `plan_build()` and
+        // `executor_refusal()` -- and passing only the code on would tell a user "plan_rejected" about a graph
+        // whose drag field is on a different lattice than its magnetic one. The detail is what names the fix, so it
+        // travels in the sentence the provider was always allowed to write.
+        if (refusal == RunRefusal::plan_rejected) {
+            out.refusal += ": ";
+            out.refusal += to_string(run->plan_build());
+        } else if (refusal == RunRefusal::executor_rejected) {
+            out.refusal += ": ";
+            out.refusal += qp::graph::particles::to_string(run->executor_refusal());
+        }
         return out;
     }
     out.run = std::move(run);

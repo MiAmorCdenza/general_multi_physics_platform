@@ -67,6 +67,7 @@ const char* to_string(PlanBuildRefusal refusal) noexcept {
         case PlanBuildRefusal::stale_order: return "stale_order";
         case PlanBuildRefusal::field_not_baked: return "field_not_baked";
         case PlanBuildRefusal::grid_unknown: return "grid_unknown";
+        case PlanBuildRefusal::grid_mismatch: return "grid_mismatch";
     }
     return "unknown";
 }
@@ -247,6 +248,40 @@ PlanBuildRefusal build_particle_plan(const graph::Graph& graph, const std::vecto
 
         pk::ParamBlock params = PusherNodes::param_block_of(*node);
         pp::StepPlan step;
+
+        // **Every bound slot must sit on one lattice, and until this check there was nothing that said so.** The
+        // kernel has exactly one `GridMetadata` -- six numbers in its parameter block -- because that is what a
+        // per-sub-step sampler can afford; the six are filled from the **magnetic** slot below, and every other
+        // slot's table is then sampled at those coordinates. So a graph that wired a drag field baked on a
+        // different lattice produced a particle dragged by *the wrong cell's* rate: a plausible number from the
+        // wrong place, which is the failure `plan.hpp` warns about at length and which no case of either half
+        // could catch.
+        //
+        // The check is new because the *possibility* is new: until this kit had a second kind of field to wire
+        // into a second socket (`field.mask` publishing a scalar), a mismatch could not be built. Exact equality
+        // rather than a tolerance, and that is the right comparison here: the two grids come from the same
+        // `read_from` applied to the same parameters, so a difference in the last bit means the user described a
+        // different lattice -- a tolerance would hide exactly the mistake this refuses.
+        bool have_grid = false;
+        GridSpec shared;
+        for (const SocketBinding& binding : kSockets) {
+            gfield::FieldValue probe;
+            GridSpec grid;
+            if (resolve_field(graph, id, binding.port, fields, probe, grid) != PlanBuildRefusal::ok) continue;
+            if (!gfield::is_readable(probe)) continue;
+            if (!have_grid) {
+                have_grid = true;
+                shared = grid;
+                continue;
+            }
+            if (grid.origin_m.x != shared.origin_m.x || grid.origin_m.y != shared.origin_m.y ||
+                grid.origin_m.z != shared.origin_m.z || grid.spacing_m.x != shared.spacing_m.x ||
+                grid.spacing_m.y != shared.spacing_m.y || grid.spacing_m.z != shared.spacing_m.z ||
+                grid.nx != shared.nx || grid.ny != shared.ny || grid.nz != shared.nz) {
+                out.clear();
+                return PlanBuildRefusal::grid_mismatch;
+            }
+        }
 
         for (const SocketBinding& binding : kSockets) {
             // **By publisher, not by shape.** See this file's header: a descriptor-keyed lookup would hand the
