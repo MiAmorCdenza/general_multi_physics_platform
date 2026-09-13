@@ -1454,6 +1454,289 @@ TEST_CASE("magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_impl
     REQUIRE(out->unit_symbol == std::string{"T"});
     REQUIRE(types[9].find_port(FieldNodes::kPortSheetOrigin0, false) != nullptr);
     REQUIRE_FALSE(types[9].find_port(FieldNodes::kPortSheetOrigin0, false)->connectable);
+    // The hinge socket, after the grid: connectable, in degrees, and **optional** -- an empty socket is the
+    // unhinged sheet, which is what every graph written before this port has.
+    const graph::PortDesc* hinge = types[9].find_port(FieldNodes::kPortSheetHinge, false);
+    REQUIRE(hinge != nullptr);
+    REQUIRE(hinge->connectable);
+    REQUIRE_FALSE(hinge->required);
+    REQUIRE(hinge->type == qp::ports::kScalarF64);
+    REQUIRE(hinge->unit_symbol == std::string{"deg"});
+    // Numbered after the nine grid ports, so no other type's numbering moved.
+    REQUIRE(FieldNodes::kPortSheetHinge == FieldNodes::kPortSheetOrigin0 + 9);
+}
+
+TEST_CASE("magnetosphere.field_nodes.the_tail_sheet_hinges_with_the_dipole", "[magnetosphere]") {
+    // **The transform `field.blend`'s contract promised would arrive with the tilted tail.** The reference's
+    // `tail.py` carries it as `_z_shift`, the legacy bridge's `_tail_harris` carries the same expression, and
+    // `tail.py`'s own comment states what it is for: near the Earth the sheet follows the dipole, far down the tail
+    // the solar wind flattens it. Until now this kit baked a sheet in `z = 0` beside a dipole that could lean,
+    // which is two models disagreeing about where the equator is -- a caveat recorded in plan-tree 9.37 and in the
+    // demo's own comment, and the reason this case exists.
+    //
+    // Four things are measured, in this order: that no hinge is *bit-for-bit* the old table, that the displacement
+    // is rigid and lands on the closed form, that the two limits the reference's comment names are real (a corner
+    // at ten earth radii and a straight line beyond it), and -- the one that no amount of reading can settle --
+    // that the hinge's sense agrees with the dipole's own equator.
+    const double re = kEarthRadiusM;
+    const double degrees = 3.14159265358979323846 / 180.0;
+    // The tilt the reference's own default date gives, taken from the driver rather than typed: 34.44 degrees at
+    // the June solstice. Taking it from `source.day` is what makes this case a statement about the pair.
+    const double tilt_deg = SourceNodes::tilt_degrees_for_day(SourceNodes::kDefaultDay);
+    REQUIRE(relative_to(tilt_deg, 34.44) < 1.0e-15);
+    const double tan_ps = std::tan(tilt_deg * degrees);
+
+    // One lattice, chosen so that the measurements below have nodes where they need them: `x = -10 R_E` is a node
+    // (the `u = 0` corner of the hinge), `z = 0` is a node, and the range in `z` is deep enough to contain the
+    // dipole's own equator at twenty-four earth radii downtail, which is `24 tan(ps) = 16.5 R_E` below the plane.
+    // Two nodes in `y` rather than one because a bake needs a **lattice**, not a plane: the sheet has no `y`
+    // structure at all, so the second row exists to give the trilinear sampler a cell. (The first version of this
+    // grid had one row and the bake refused it, which is the honest answer -- `bakeable` asks for at least two nodes
+    // an axis, and a one-row field is not a volume.)
+    const GridSpec grid{Vec3{-24.0 * re, 0.0, -20.0 * re}, Vec3{1.0 * re, 1.0 * re, 0.25 * re}, 49, 2, 161};
+    const auto column = [&grid](double x_re) {
+        return static_cast<std::uint64_t>(std::lround((x_re * kEarthRadiusM - grid.origin_m.x) / grid.spacing_m.x));
+    };
+    const auto row = [&grid](double z_re) {
+        return static_cast<std::uint64_t>(std::lround((z_re * kEarthRadiusM - grid.origin_m.z) / grid.spacing_m.z));
+    };
+    /// The reference's closed form, in metres, with its two constants read from the header rather than typed.
+    const auto z_shift_of = [&](double x_m) {
+        const double u = x_m + FieldNodes::kHingeDistanceRe * re;
+        const double a = FieldNodes::kHingeHalfWidthRe * re;
+        return 0.5 * tan_ps * (u - std::sqrt(u * u + a * a));
+    };
+    // The two numbers the bake is given, named once so the measurement lambda below and the bakes cannot drift
+    // apart.
+    const double spec_b0 = 5.0e-9;
+    const double spec_half_thickness = 2.0 * re;
+
+    /// **Where a baked sheet's centre is, read back out of the table.** `B_x = B0 tanh((z - z_shift)/L)` inverts to
+    /// `z_shift = z - L atanh(B_x/B0)` at any node, so this needs no interpolation and no assumption about the
+    /// spacing: the table's own numbers say where the plane went. Asking it at several `z` is also the test that the
+    /// displacement is **rigid** -- a stretch would give a different answer at every height.
+    const auto measured_shift = [&](const gfield::FieldValue& sheet, double x_re, double z_re) {
+        const std::uint64_t at = (column(x_re) * grid.ny + 0) * grid.nz + row(z_re);
+        const double bx = gfield::get_component(sheet, at, 0);
+        const double z = grid.node_position(column(x_re), 0, row(z_re)).z;
+        return z - spec_half_thickness * std::atanh(bx / spec_b0);
+    };
+
+    // ---- 1. No hinge is the old table, bit for bit -----------------------------------------------------------------
+    FieldNodes::SheetSpec upright;
+    upright.b0_tesla = spec_b0;
+    upright.half_thickness_m = spec_half_thickness;
+    gfield::FieldSet fields;
+    const gfield::FieldKey upright_key{71, FieldNodes::kPortField};
+    REQUIRE(bake_current_sheet(upright, grid, upright_key, fields));
+    const gfield::FieldValue upright_sheet = fields.view(upright_key);
+    REQUIRE(gfield::is_readable(upright_sheet));
+    for (std::uint64_t point = 0; point < upright_sheet.point_count(); ++point) {
+        const std::uint64_t k = point % grid.nz;
+        const double z = grid.origin_m.z + static_cast<double>(k) * grid.spacing_m.z;
+        // **`==` and not a tolerance.** The bake skips the transform entirely when the hinge is zero, so this is
+        // literally the expression this node baked before the port existed -- and that is the property a graph
+        // written then depends on. A `0.5 tan(0) (u - sqrt(u^2+a^2))` would be `0 * inf` for large enough `x`,
+        // which is the second reason the skip is written as a branch rather than as arithmetic.
+        REQUIRE(gfield::get_component(upright_sheet, point, 0) == spec_b0 * std::tanh(z / spec_half_thickness));
+        REQUIRE(gfield::get_component(upright_sheet, point, 1) == 0.0);
+        REQUIRE(gfield::get_component(upright_sheet, point, 2) == 0.0);
+    }
+    REQUIRE(measured_shift(upright_sheet, -10.0, 0.0) == 0.0);
+
+    // ---- 2. Hinged: every node on the closed form, and the displacement rigid ---------------------------------------
+    FieldNodes::SheetSpec leaning;
+    leaning.b0_tesla = spec_b0;
+    leaning.half_thickness_m = spec_half_thickness;
+    leaning.hinge_degrees = tilt_deg;
+    const gfield::FieldKey leaning_key{72, FieldNodes::kPortField};
+    REQUIRE(bake_current_sheet(leaning, grid, leaning_key, fields));
+    const gfield::FieldValue leaning_sheet = fields.view(leaning_key);
+    REQUIRE(gfield::is_readable(leaning_sheet));
+    // **Two bounds, because one of them is the wrong question and finding that out was worth the detour.** The
+    // first version of this loop measured the disagreement *relative to the local field*, and it measured 8.3e-14:
+    // near the sheet's centre `z - z_shift` subtracts two numbers of order ten earth radii, so a last-place
+    // difference in the displacement arrives as a large relative difference in a field that is nearly zero. That is
+    // cancellation, not a wrong bake -- and the honest statement is about the quantity the table stores. So the
+    // bound is on the field **in units of the lobe field**, which is what a reader of the table compares against,
+    // plus a relative bound restricted to the nodes where the relative question has an answer (|B| above a tenth of
+    // the lobe value).
+    double worst_absolute = 0.0;
+    double worst_relative = 0.0;
+    for (std::uint64_t point = 0; point < leaning_sheet.point_count(); ++point) {
+        const std::uint64_t k = point % grid.nz;
+        const std::uint64_t i = point / (grid.ny * grid.nz);
+        const Vec3 at = grid.node_position(i, 0, k);
+        const double expected = spec_b0 * std::tanh((at.z - z_shift_of(at.x)) / spec_half_thickness);
+        const double actual = gfield::get_component(leaning_sheet, point, 0);
+        worst_absolute = std::max(worst_absolute, std::abs(actual - expected) / spec_b0);
+        if (std::abs(expected) > 0.1 * spec_b0) {
+            worst_relative = std::max(worst_relative, std::abs(actual - expected) / std::abs(expected));
+        }
+        REQUIRE(gfield::get_component(leaning_sheet, point, 1) == 0.0);
+        REQUIRE(gfield::get_component(leaning_sheet, point, 2) == 0.0);
+    }
+    // **Not `==`, and the reason is a compiler rather than a model**: the bake and this case evaluate the same
+    // expression, but this tree is built for i686 with `FLT_EVAL_METHOD == 2`, where an 80-bit intermediate and an
+    // already-rounded double disagree in the last place. The unhinged loop above *is* exact because it is one
+    // expression with nothing added to it; here a square root, a product and a subtraction stand between the two
+    // evaluations.
+    //
+    // The bounds are the measured disagreement with the factor the arithmetic predicts, not round numbers. The
+    // absolute one is 1.2e-15 of the lobe field: the bake and the case differ by one ulp in `tan(ps)` (the case
+    // writes `deg * (pi/180)` where the bake writes `(deg * pi)/180`) and the displacement scales it. The relative
+    // one is a hundred times larger **because the argument is a difference of two numbers of order ten earth
+    // radii**: at the tenth-of-the-lobe threshold below, `z - z_shift` is `0.2 R_E` while its two terms are `10 R_E`,
+    // so a last-place error arrives amplified by about a hundred -- `(|z| + |z_shift|) / (L |u|)`, which is the
+    // formula's own prediction and comes to ~3e-14 with `tan`'s own amplification on top. A bound of `5e-14` is
+    // therefore fifty times tighter than any real disagreement would be (a wrong hinge constant moves the field by
+    // parts in a thousand) and five times looser than the last-place difference it must tolerate.
+    INFO("worst disagreement: " << worst_absolute << " of the lobe field, " << worst_relative << " relative");
+    REQUIRE(worst_absolute < 2.0e-15);
+    REQUIRE(worst_relative < 5.0e-14);
+
+    // Rigid, and on the closed form, at the hinge's own corner: `u = 0` at `x = -Rc`, where the displacement is
+    // exactly `-a tan(ps) / 2 = -2 tan(ps) R_E`. Read at three heights, because a displacement that depended on `z`
+    // would be a stretch of the sheet rather than a movement of it.
+    for (const double z_re : {-3.0, 0.0, 3.0}) {
+        const double measured = measured_shift(leaning_sheet, -10.0, z_re);
+        REQUIRE(relative_to(measured, -2.0 * tan_ps * re) < 1.0e-12);
+    }
+    REQUIRE(relative_to(z_shift_of(-10.0 * re), -2.0 * tan_ps * re) < 1.0e-15);
+
+    // ---- 3. The two ends of the hinge: nothing sunward, a straight line down the tail ------------------------------
+    // Sunward the hinge does **nothing**: `u - sqrt(u^2 + a^2)` does not vanish on the dayside, it falls off as
+    // `-a^2 / 2u`, so at `x = +20 R_E` the displacement is 0.091 R_E -- against 7.12 R_E at the same distance
+    // downtail, a factor of seventy-eight. The assertion is that comparison rather than a bound, because a bound
+    // would also pass for a transform that moved the dayside by an amount nobody had looked at.
+    REQUIRE(std::abs(z_shift_of(20.0 * re)) < 0.02 * std::abs(z_shift_of(-20.0 * re)));
+    // And the fall-off is the `1/u` the expression implies rather than a constant with a small value: for large `u`
+    // the bracket `u - sqrt(u^2 + a^2)` goes as `-a^2 / 2u`, so the displacement goes as `-a^2 tan(ps) / (4u)`. At
+    // `x = +20 R_E` -- `u = 30 R_E` -- the exact expression is 0.0910 R_E and the asymptote is 0.0914 R_E, half a
+    // percent apart. **Asserted against the asymptote rather than against the digits**: a typed constant is how this
+    // repository has been wrong about a fifth digit twice, and the asymptote is a second expression that has to
+    // agree, which is a statement about the model instead of about my arithmetic.
+    const double u_sunward = 20.0 * re + FieldNodes::kHingeDistanceRe * re;
+    const double a_hinge = FieldNodes::kHingeHalfWidthRe * re;
+    const double asymptote = -a_hinge * a_hinge * tan_ps / (4.0 * u_sunward);
+    REQUIRE(relative_to(z_shift_of(20.0 * re), asymptote) < 0.01);
+    std::vector<double> ratios;
+    for (const double x_re : {-14.0, -20.0, -24.0}) {
+        const double measured = measured_shift(leaning_sheet, x_re, 0.0);
+        REQUIRE(relative_to(measured, z_shift_of(x_re * re)) < 1.0e-12);
+        ratios.push_back(measured / (x_re * re * tan_ps));
+    }
+    // `z_shift / (x tan ps)` is the fraction of the dipole's own tilt the sheet has taken up. Below one everywhere
+    // (the sheet is *hinged*, not simply tilted), rising with distance, and creeping towards one: the reference's
+    // "far down the tail the solar wind flattens it". The numbers are the closed form's, not tuned: at fourteen,
+    // twenty and twenty-four earth radii it is 0.45, 0.52 and 0.60.
+    for (const double ratio : ratios) {
+        REQUIRE(ratio > 0.0);
+        REQUIRE(ratio < 1.0);
+    }
+    REQUIRE(ratios[0] < ratios[1]);
+    REQUIRE(ratios[1] < ratios[2]);
+    // The three figures the closed form gives, to a part in a thousand: 0.345, 0.519, 0.595. Written out so that a
+    // reader can check the shape without re-deriving it, and so that a change to either hinge constant shows up as
+    // a number that moved rather than as a comment that stopped being true.
+    REQUIRE(relative_to(ratios[0], 0.3449) < 1.0e-3);
+    REQUIRE(relative_to(ratios[1], 0.5193) < 1.0e-3);
+    REQUIRE(relative_to(ratios[2], 0.5950) < 1.0e-3);
+
+    // ---- 4. The cross-node convention: the hinge leans the way the dipole does -------------------------------------
+    //
+    // **This is the measurement no amount of reading settles.** `field.dipole`'s positive tilt puts its magnetic
+    // equator on `z = x tan(ps)` -- *below* the plane in the tail -- because the bake rotates the **point** into the
+    // dipole's frame about `+y` (`rotate_y` in `dipole.cpp`). The reference's `z_shift` is negative there too. Two
+    // nodes that each look right and disagree about which way is up produce a picture of a magnetosphere whose
+    // sheet leans away from its own dipole, and nothing in either node's own case can see it.
+    //
+    // So the dipole's equator is measured from the **field** rather than from the rotation: on the equator the field
+    // is antiparallel to the moment, so `B x m` vanishes, and its `y` component is `B_z sin(ps) + B_x cos(ps)`. That
+    // scalar is bisected along `z` in the far tail, and the answer is compared with `x tan(ps)`.
+    const gfield::FieldKey dipole_key{73, FieldNodes::kPortField};
+    REQUIRE(bake_dipole(tilt_deg, kDipoleMomentAm2, grid, dipole_key, fields));
+    const gfield::FieldValue dipole = fields.view(dipole_key);
+    REQUIRE(gfield::is_readable(dipole));
+    const auto field_at = [&](double x_re, double z_re) {
+        return sample_baked(dipole, grid.origin_m, grid.spacing_m, Vec3{x_re * re, 0.0, z_re * re});
+    };
+    const auto equator_crossing = [&](double x_re) {
+        // `f(z) = (B x mhat)_y`, and `mhat = (sin ps, 0, -cos ps)`.
+        const auto f = [&](double z_re) {
+            const Vec3 b = field_at(x_re, z_re);
+            return b.z * std::sin(tilt_deg * degrees) + b.x * std::cos(tilt_deg * degrees);
+        };
+        double lo = -20.0;
+        double hi = 20.0;
+        bool bracketed = false;
+        double f_lo = f(lo);
+        for (double step = 1.0; step <= 40.0; step += 1.0) {   // a sign change first, so the bisection has a bracket
+            const double at = -20.0 + step;
+            if (f_lo * f(at) < 0.0) {
+                lo = at - 1.0;
+                hi = at;
+                bracketed = true;
+                break;
+            }
+            f_lo = f(at);
+        }
+        // Stated rather than assumed: a bisection over a range with no crossing converges to whatever the two ends
+        // happen to be, and would report a number that looks like an equator.
+        REQUIRE(bracketed);
+        for (int iteration = 0; iteration < 60; ++iteration) {
+            const double mid = 0.5 * (lo + hi);
+            if (f(lo) * f(mid) <= 0.0) {
+                hi = mid;
+            } else {
+                lo = mid;
+            }
+        }
+        return 0.5 * (lo + hi) * re;
+    };
+    for (const double x_re : {-14.0, -20.0, -24.0}) {
+        const double equator = equator_crossing(x_re);
+        const double closed_form = x_re * re * tan_ps;
+        INFO("dipole equator at x = " << x_re << " R_E: measured " << equator / re << " R_E, rotation says "
+                                      << closed_form / re << " R_E");
+        // A part in a thousand of the displacement. The crossing is found on the **sampled** table, so what limits
+        // this is the trilinear blend of a field that curves across a quarter-earth-radius cell -- not the
+        // bisection, which is run to sixty halvings. The measured agreement is 2.1e-4 at its worst, i.e. three
+        // millimetres of a thirteen-earth-radius displacement, and the bound is set an order below the smallest
+        // thing this comparison is for: telling which side of the plane the equator is on.
+        REQUIRE(relative_to(equator, closed_form) < 1.0e-3);
+        const double sheet_shift = measured_shift(leaning_sheet, x_re, 0.0);
+        // Same side of the plane...
+        REQUIRE(sheet_shift * equator > 0.0);
+        // ... and not past it: the hinge is a partial lean, so the sheet sits between the geographic plane and the
+        // dipole's own equator, which is what "hinged" means and what a sign error would break.
+        REQUIRE(std::abs(sheet_shift) < std::abs(equator));
+    }
+
+    // ---- 5. The socket is what carries it, and the node's own parameters cannot -------------------------------------
+    //
+    // `read_sheet` sees parameters; `read_sheet_from` sees what arrived on the wires. Only the second can carry a
+    // hinge, and saying so here is what keeps a caller from expecting a tilt to survive a round trip through a node.
+    graph::PortValues wired;
+    wired.emplace_back(FieldNodes::kPortSheetB0, qp::ports::Value{spec_b0});
+    wired.emplace_back(FieldNodes::kPortSheetThickness, qp::ports::Value{spec_half_thickness});
+    wired.emplace_back(FieldNodes::kPortSheetHinge, qp::ports::Value{tilt_deg});
+    const FieldNodes::SheetSpec from_wires = FieldNodes::read_sheet_from(graph::InputView{wired});
+    REQUIRE(from_wires.hinge_degrees == tilt_deg);
+    const FieldNodes::SheetSpec from_a_node = FieldNodes::read_sheet(graph::Node{});
+    REQUIRE(from_a_node.hinge_degrees == 0.0);
+
+    // A hinge at or past vertical is **refused**, not clamped: `tan` has a pole at ninety degrees, and baking the
+    // clamp would put a wall of infinities in a table and call it the model.
+    FieldNodes::SheetSpec vertical = leaning;
+    vertical.hinge_degrees = 90.0;
+    REQUIRE_FALSE(bake_current_sheet(vertical, grid, gfield::FieldKey{74, FieldNodes::kPortField}, fields));
+    vertical.hinge_degrees = 91.0;
+    REQUIRE_FALSE(bake_current_sheet(vertical, grid, gfield::FieldKey{74, FieldNodes::kPortField}, fields));
+    vertical.hinge_degrees = std::nan("");
+    REQUIRE_FALSE(bake_current_sheet(vertical, grid, gfield::FieldKey{74, FieldNodes::kPortField}, fields));
+    // And the store is unchanged by those refusals, so a failed bake cannot leave a half-table behind.
+    REQUIRE_FALSE(gfield::is_readable(fields.view(gfield::FieldKey{74, FieldNodes::kPortField})));
 }
 
 TEST_CASE("magnetosphere.field_nodes.a_resample_moves_the_samples_and_adds_no_information",

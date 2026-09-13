@@ -325,17 +325,18 @@ int main(int argc, char** argv) {
         const std::size_t driver = node(SourceNodes::kKpType, "Kp");
         set(driver, SourceNodes::kPortKp, qp::ports::Value{4.0});
 
-        // The second driver, wired to the dipole's optional tilt socket. **The December solstice, deliberately, and
-        // not a tilt typed in degrees**: one date index becomes 11 - 23.44 = -12.44 degrees of dipole tilt, which is
-        // the reference's own `day_source` doing its job. The dipole keeps `tilt_degrees = 0` as its parameter, so
-        // deleting this wire visibly untilts the dipole instead of silently reproducing it.
+        // The second driver: **the June solstice**, the reference's own default date, and now the composition can
+        // honestly show it. One date index becomes 11 + 23.44 = 34.44 degrees of dipole tilt, and the same wire
+        // feeds the tail sheet's hinge below -- which is what makes it defensible. Until this round the sheet lay in
+        // the z = 0 plane whatever the dipole did, so the largest tilt the demo could show without the two models
+        // contradicting each other was about twelve degrees; the hinge is the piece that was missing, and it is why
+        // this line used to say December.
         //
-        // A tilt of twelve degrees is also the largest one this composition can honestly show: the reference tilts
-        // the tail's current sheet with the dipole (`hinged_z`, driven by the same date) and that hinge is not
-        // ported yet, so the sheet below stays in the z = 0 plane. The June solstice would be 34.44 degrees and the
-        // flat sheet would stop being a defensible approximation.
+        // One index, two consumers, and neither of them is told how to convert it: the tilt arrives in degrees
+        // because both ports say `deg`. The dipole and the sheet keep their own zero parameters, so deleting either
+        // wire visibly changes the picture instead of silently reproducing it.
         const std::size_t date = node(SourceNodes::kDayType, "solstice");
-        set(date, SourceNodes::kPortDay, qp::ports::Value{355.0});
+        set(date, SourceNodes::kPortDay, qp::ports::Value{SourceNodes::kDefaultDay});
 
         const std::size_t mix = node(FieldNodes::kMixType, "inside + outside");
         set(mix, FieldNodes::kPortMixCorrection, qp::ports::Value{1.0});
@@ -392,6 +393,9 @@ int main(int argc, char** argv) {
         // The tilt socket, which is optional by construction: `field.dipole` bakes its table from
         // `tilt_degrees` when nothing is wired there and from the socket when something is.
         wire(date, SourceNodes::kPortDayOut, dipole, FieldNodes::kPortTiltDriver);
+        // ... and the same date into the sheet's hinge, which is the pair the reference's `tail.py` wires: one
+        // driver, two nodes that must agree about which way is up.
+        wire(date, SourceNodes::kPortDayOut, sheet, FieldNodes::kPortSheetHinge);
         wire(mix, FieldNodes::kPortMixOut, emitter, EmitterNodes::kPortMagnetic);
         wire(convection, FieldNodes::kPortField, shielded, FieldNodes::kPortMulField);
         wire(shield, FieldNodes::kPortShieldOut, shielded, FieldNodes::kPortMulWeight);

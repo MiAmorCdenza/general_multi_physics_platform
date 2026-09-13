@@ -531,6 +531,69 @@ public:
     static constexpr qp::graph::PortNumber kPortSheetThickness = 2;
     /// @brief Where the **sheet** node's grid starts: after the two parameters.
     static constexpr qp::graph::PortNumber kPortSheetOrigin0 = 3;
+    /// @brief The hinge socket: the tilt the tail's equatorial plane is hinged by, in degrees. Optional.
+    ///
+    /// ## What a hinge is, and why the sheet needs one
+    ///
+    /// A current sheet lying in `z = 0` is the right model only while the dipole is upright: the real tail's
+    /// plasma sheet follows the dipole near the Earth and the solar wind far down it, so at the solstices the
+    /// whole nightside configuration leans. A flat sheet beside a leaning dipole is two models disagreeing about
+    /// where the equator is -- which is what this kit shipped until now, deliberately, with the caveat written in
+    /// plan-tree 9.37 and in the demo's own comment. This port is what closes it.
+    ///
+    /// The transform is the reference's, `_z_shift` in `nodes/tail.py` and `_tail_harris` in the legacy bridge --
+    /// the two carry the same expression:
+    ///
+    ///     z_shift(x) = 0.5 tan(ps) [ (x + Rc) - sqrt( (x + Rc)^2 + a^2 ) ],    Rc = 10 R_E,  a = 4 R_E
+    ///     B          = ( B0 tanh( (z - z_shift(x)) / L ), 0, 0 )
+    ///
+    /// ## Three properties, which are what make it a hinge rather than a shear
+    ///
+    /// 1. **Sunward it does nothing.** With `u = x + Rc`, the bracket is `u - sqrt(u^2 + a^2)`, whose magnitude
+    ///    falls off as `a^2 / 2u`; so `z_shift -> 0` for `x -> +inf` and the dayside is untouched. That is not a
+    ///    convenience: the dayside is where the dipole's own field dominates, and a transform that moved the sheet
+    ///    there would be moving it where the model it belongs to is not.
+    /// 2. **At `x = -Rc` it is exactly `-2 tan(ps) R_E`** -- the `u = 0` case, where the bracket is `-a`. Ten earth
+    ///    radii downtail is where the hinge has grown to an earth radius or two, which is measurable on a lattice
+    ///    and asserted.
+    /// 3. **Down the tail it becomes a straight line of slope `tan(ps)` through `x = -Rc`**: for `u -> -inf`,
+    ///    `u - sqrt(u^2 + a^2) -> 2u`. That is the reference's "far down the tail the solar wind flattens it", and
+    ///    it says `z_shift / (x tan ps) -> 1`: far enough down, the sheet is as tilted as the dipole's equator.
+    ///
+    /// ## The sign is a cross-node convention, and it is measured rather than argued
+    ///
+    /// `field.dipole`'s `tilt_degrees` rotates the **point** into the dipole's frame about `+y` (`rotate_y` in
+    /// `dipole.cpp`), so a positive tilt puts that dipole's magnetic equator on `z = x tan(ps)` -- **below** the
+    /// plane in the tail, where `x < 0`. The reference's hinge has the same sense: its `z_shift` is negative for
+    /// `x < -Rc` and `ps > 0`. This is exactly the kind of agreement that two individually-correct nodes can get
+    /// wrong, and its failure mode is a picture that looks like a magnetosphere with the sheet leaning away from
+    /// its own dipole. So the case asserts the **agreement**, not only the formula: in the tail the sheet's
+    /// displacement is on the dipole's side of the plane and smaller than the dipole's own equator --
+    /// `0 < -z_shift < -x tan(ps)`.
+    ///
+    /// ## Degrees here, radians inside, and where the conversion lives
+    ///
+    /// The reference carries `ps` in radians and its engine wants radians. This kit's driving socket is
+    /// `field.dipole`'s `tilt_from`, which is in degrees -- one date has to feed both nodes without a conversion
+    /// node between them -- so this port is in degrees too, and the radians conversion happens here, inside the one
+    /// model that has an opinion about radians. The port's unit symbol says `deg`, which is the same way the date
+    /// driver states its own output.
+    ///
+    /// An empty socket is **zero degrees**, which is the unhinged sheet: a graph written before this port existed
+    /// keeps its field **bit for bit**, and the bake says so by skipping the transform entirely rather than by
+    /// multiplying by `tan(0)`.
+    static constexpr qp::graph::PortNumber kPortSheetHinge = 12;
+
+    /// @brief The hinge distance, in earth radii: how far downtail the sheet stops following the dipole.
+    static constexpr double kHingeDistanceRe = 10.0;
+    /// @brief The hinge's rounding length, in earth radii.
+    ///
+    /// The reference writes `16` inside the square root, which is `4^2` in earth radii -- a length, not a number.
+    /// Writing it as `4 R_E` here is what keeps the expression dimensionally checkable: a bake that added
+    /// `16 m^2` to a metre-squared quantity would be wrong by twelve orders of magnitude and would still produce a
+    /// smooth, plausible sheet (the `16` only rounds the corner at `x = -Rc`; the slope far down the tail does not
+    /// depend on it at all, which is why the case asserts the slope separately from the corner).
+    static constexpr double kHingeHalfWidthRe = 4.0;
 
     /// @brief The default lobe field, in tesla: five nanotesla, the quiet-time tail's order.
     static constexpr double kDefaultSheetB0 = 5.0e-9;
@@ -552,6 +615,15 @@ public:
         double b0_tesla = kDefaultSheetB0;
         /// The half-thickness, in metres.
         double half_thickness_m = kDefaultSheetThicknessM;
+        /// The hinge tilt, in degrees, from `kPortSheetHinge`. Zero when nothing is wired, which is the
+        /// unhinged sheet and is what a graph written before that port existed carries.
+        ///
+        /// In the spec rather than passed alongside the bake because it **is** part of what the model says:
+        /// the two numbers above describe a sheet in a plane, and this one says which plane. The Kp socket on
+        /// `field.magnetopause` is the other arrangement (an override applied in the evaluator) and the
+        /// difference is real: there the socket *replaces* a parameter, here it supplies something no
+        /// parameter could express -- a tilt that belongs to the dipole the date driver also feeds.
+        double hinge_degrees = 0.0;
     };
 
     /// @brief A current-sheet node's parameters, read from the node itself.
@@ -561,7 +633,8 @@ public:
     /// @ownership   pure
     /// @thread      main
     /// @pre         none
-    /// @post        The two numbers the node carries, or the defaults for the ones it does not
+    /// @post        The three numbers the node carries, or the defaults for the ones it does not -- including a
+    ///              hinge of zero, because a socket is not a parameter and a node read on its own has no wire
     /// @invariant   One reader, two sources, as every other parameter reader in this kit
     /// @errors      noexcept
     /// @complexity  O(1)
@@ -572,12 +645,16 @@ public:
 
     /// @brief The same reader for an evaluator's own inputs.
     ///
+    /// The difference from the reader above is the hinge: an `InputView` carries the values that arrived on
+    /// wires as well as the node's own parameters, so this is the reader through which a wired tilt reaches the
+    /// bake. `read_sheet` cannot see one, which is the honest limitation of reading a node instead of inputs.
+    ///
     /// @param inputs The evaluator's inputs. Borrowed for the call.
     ///
     /// @ownership   pure
     /// @thread      main
     /// @pre         none
-    /// @post        The same values `read_sheet` gives for the same ports
+    /// @post        The same values `read_sheet` gives for the same ports, plus the hinge when one is wired
     /// @invariant   One reader, two sources
     /// @errors      noexcept
     /// @complexity  O(1)
@@ -1538,15 +1615,32 @@ public:
                                    qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
 
 /**
- * @brief Bakes a Harris current sheet `B = (B0 tanh(z/L), 0, 0)` onto `grid`.
+ * @brief Bakes a Harris current sheet `B = (B0 tanh((z - z_shift(x))/L), 0, 0)` onto `grid`.
  *
- * The model, its parameters and the current it implies are argued on `kCurrentSheetType`. What belongs here is the
- * one decision the arithmetic makes: `tanh` is evaluated per node from the node's own `z`, and the other two
- * components are written as **exact zeros** rather than as expressions that happen to be small. A sheet is
- * one-dimensional; a `B_y` computed from a formula that ought to vanish would leave a number in the table that is
- * not the model, and the case that checks `B_z = 0` at every node is what keeps that honest.
+ * The model, its parameters and the current it implies are argued on `kCurrentSheetType`; the hinge and its three
+ * properties are argued on `kPortSheetHinge`. What belongs here is what the arithmetic decides:
  *
- * @param spec  The lobe field and the half-thickness, in SI.
+ *   - `tanh` is evaluated per node from the node's own `z` **displaced by the hinge**, and the displacement is a
+ *     function of that node's `x` alone -- the sheet stays one-dimensional in the hinged coordinate, which is why
+ *     it still carries a current in `y` and nothing else.
+ *   - The other two components are written as **exact zeros** rather than as expressions that happen to be small.
+ *     A sheet is one-dimensional; a `B_y` computed from a formula that ought to vanish would leave a number in the
+ *     table that is not the model, and the case that checks them at every node is what keeps that honest.
+ *   - A hinge of exactly zero **skips the transform** rather than evaluating `0.5 tan(0) (u - sqrt(u^2 + a^2))`.
+ *     Two reasons, and the second is the one that made it a decision: the product is `0 * inf` -- a NaN -- for
+ *     coordinates large enough that `u^2` overflows, and "no hinge" has to be bit-for-bit the same table as the
+ *     unhinged sheet rather than merely equal to within a rounding.
+ *
+ * The displacement is computed in metres from `kHingeDistanceRe` and `kHingeHalfWidthRe` times the earth radius,
+ * so the reference's `16` -- four earth radii squared, with `x` in earth radii -- becomes a length here. The
+ * quantity inside the square root is a length squared in both readings, which is the check that catches the one
+ * wrong way to write it: `+ 16.0` on a metre-scale `u` is twelve orders of magnitude too small and leaves a sheet
+ * that still looks smooth, because the constant only rounds the corner and never touches the far-tail slope.
+ *
+ * @param spec  The lobe field, the half-thickness and the hinge, in SI and degrees. A hinge outside the **open**
+ *              interval `(-90, 90)` degrees is refused: `tan` has its pole at ninety, so the endpoints themselves
+ *              are already a sheet on edge, and a model that accepted them would bake a table of saturated lobe
+ *              field out of a number that is really an infinity.
  * @param grid  Where to bake. At least two nodes an axis and a positive spacing.
  * @param key   Who is publishing it.
  * @param fields The store. Borrowed; the samples are moved into it on success.
@@ -1555,14 +1649,16 @@ public:
  * @thread      main
  * @pre         none
  * @post        On true, `fields.view(key)` is a readable vector volume in tesla whose `x` component is
- *              `B0 tanh(z/L)` at every node and whose other two are zero
+ *              `B0 tanh((z - z_shift(x))/L)` at every node and whose other two are zero
  * @invariant   On false the store is unchanged
  * @errors      Returns false -- never throws -- for a non-finite lobe field, a non-positive or non-finite
- *              half-thickness, or a grid that cannot be baked
+ *              half-thickness, a non-finite hinge or one outside `(-90, 90)` degrees, or a grid that cannot be
+ *              baked
  * @complexity  O(points)
  * @nondet      none
  * @frozen      no
- * @tests       magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_implies
+ * @tests       magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_implies,
+ *              magnetosphere.field_nodes.the_tail_sheet_hinges_with_the_dipole
  */
 [[nodiscard]] bool bake_current_sheet(const FieldNodes::SheetSpec& spec, const GridSpec& grid,
                                       qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);

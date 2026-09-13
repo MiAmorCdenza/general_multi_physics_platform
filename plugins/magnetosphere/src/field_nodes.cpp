@@ -35,6 +35,13 @@ namespace {
 namespace graph = qp::graph;
 namespace gfield = qp::graph::field;
 
+/// @brief Pi, for the degrees a port carries and the radians a model wants.
+///
+/// The same literal `emitter.cpp` uses, and the same value; there is no shared constant because there is no
+/// shared header for arithmetic -- the kit's `units.hpp` holds physical constants, and a mathematical one that
+/// every user already has is not a decision this kit should own.
+constexpr double kPi = 3.14159265358979323846;
+
 /// @brief A parameter's value, or `fallback` when the node does not carry one.
 [[nodiscard]] double real_or(const graph::InputView& inputs, graph::PortNumber port, double fallback) noexcept {
     const qp::ports::Value value = inputs.get(port);
@@ -520,6 +527,9 @@ FieldNodes::SheetSpec FieldNodes::read_sheet_from(const graph::InputView& inputs
     SheetSpec spec;
     spec.b0_tesla = real_or(inputs, kPortSheetB0, kDefaultSheetB0);
     spec.half_thickness_m = real_or(inputs, kPortSheetThickness, kDefaultSheetThicknessM);
+    // The hinge, and the one place an `InputView` is needed rather than a node: a wired tilt exists only in the
+    // inputs. Zero when nothing is wired, which is the unhinged sheet.
+    spec.hinge_degrees = real_or(inputs, kPortSheetHinge, 0.0);
     return spec;
 }
 
@@ -566,12 +576,35 @@ bool bake_current_sheet(const FieldNodes::SheetSpec& spec, const GridSpec& grid,
     if (!bakeable(grid)) return false;
     if (!std::isfinite(spec.b0_tesla)) return false;
     if (!std::isfinite(spec.half_thickness_m) || !(spec.half_thickness_m > 0.0)) return false;
+    if (!std::isfinite(spec.hinge_degrees)) return false;
+    // The range is **open**: `tan` has its pole at ninety degrees, so a hinge of exactly ninety is already a sheet
+    // standing on edge -- `tan(pi/2)` in floating point is 1.6e16, a finite number that would displace the sheet
+    // past every node of any grid and bake a table of saturated lobe field that looks like a model. Refused rather
+    // than clamped for the same reason: a clamp would bake a vertical sheet and call it the answer.
+    if (!(spec.hinge_degrees > -90.0) || !(spec.hinge_degrees < 90.0)) return false;
+
+    // The hinge, in the units the arithmetic wants. `ps` is radians because `tan` is; the **port** is degrees
+    // because the date driver is, and this line is the whole conversion -- see `kPortSheetHinge`.
+    const double tan_ps = std::tan(spec.hinge_degrees * kPi / 180.0);
+    const bool hinged = tan_ps != 0.0;
+    const double hinge_distance_m = FieldNodes::kHingeDistanceRe * kEarthRadiusM;
+    const double hinge_half_width_m = FieldNodes::kHingeHalfWidthRe * kEarthRadiusM;
 
     BakedField table{grid.origin_m, grid.spacing_m, grid.nx, grid.ny, grid.nz};
     for (std::uint32_t i = 0; i < grid.nx; ++i) {
         for (std::uint32_t j = 0; j < grid.ny; ++j) {
+            // **The displacement depends on `x` alone**, so it is hoisted out of the `z` loop: the sheet is
+            // one-dimensional in the hinged coordinate, and computing the same square root `nz` times per column
+            // would be the kind of cost nobody notices until a fine grid is baked. It is also the statement that
+            // the hinge is a coordinate transform and not a modulation of the field.
+            const double x = grid.node_position(i, j, 0).x;
+            double z_shift = 0.0;
+            if (hinged) {
+                const double u = x + hinge_distance_m;
+                z_shift = 0.5 * tan_ps * (u - std::sqrt(u * u + hinge_half_width_m * hinge_half_width_m));
+            }
             for (std::uint32_t k = 0; k < grid.nz; ++k) {
-                const double z = grid.node_position(i, j, k).z;
+                const double z = grid.node_position(i, j, k).z - z_shift;
                 // **Exact zeros in the two other components**, not expressions that ought to vanish: a sheet is
                 // one-dimensional, and a `B_y` that came out as 1e-30 would be a number in the table that is not
                 // the model. The case asserts the zeros at every node, which is what keeps this honest.
@@ -1576,10 +1609,11 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     graph::NodeDesc sheet;
     sheet.type_name = kCurrentSheetType;
     sheet.label = "Tail current sheet";
-    sheet.description = "A Harris current sheet, B = (B0 tanh(z/L), 0, 0): the analytic model of the stretched "
-                        "nightside. Add it to a dipole for the classic magnetosphere cross-section -- closed lines "
-                        "on the dayside and stretched ones on the nightside -- or use it alone to study the "
-                        "neutral sheet, where the field is exactly zero.";
+    sheet.description = "A Harris current sheet, B = (B0 tanh((z - z_shift(x))/L), 0, 0): the analytic model of "
+                        "the stretched nightside. Add it to a dipole for the classic magnetosphere cross-section "
+                        "-- closed lines on the dayside and stretched ones on the nightside -- or use it alone to "
+                        "study the neutral sheet, where the field is exactly zero. Wire a `source.day` into the "
+                        "hinge and the sheet leans with the dipole, which is the reference's `tail.py`.";
     sheet.category = "field";
     sheet.version = 1;
     sheet.allow_in_field_domain = true;
@@ -1607,6 +1641,22 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
         sheet.inputs.push_back(parameter(kPortSheetOrigin0 + offset, names[offset], labels[offset], units[offset],
                                          steps[offset]));
     }
+    // The hinge socket, after the grid ports. No parameter beside it, and that is the reference's own shape
+    // rather than an omission: `tail.py` declares `ps` as an input with a default of zero and no parameter, because
+    // a tilt typed into the sheet would be a second opinion about an angle that belongs to the dipole -- the
+    // quantity a date driver publishes once and both nodes read. See `kPortSheetHinge`.
+    graph::PortDesc sheet_hinge;
+    sheet_hinge.number = kPortSheetHinge;
+    sheet_hinge.name = "hinge";
+    sheet_hinge.label = "Hinge (optional)";
+    sheet_hinge.description = "Wire a `source.day` here and the sheet's plane leans with the dipole that day "
+                              "implies, in degrees -- the reference's hinged tail. Left empty the sheet lies in "
+                              "z = 0, bit for bit, which is what a graph written before this port carries.";
+    sheet_hinge.type = qp::ports::kScalarF64;
+    sheet_hinge.connectable = true;
+    sheet_hinge.required = false;
+    sheet_hinge.unit_symbol = "deg";
+    sheet.inputs.push_back(sheet_hinge);
     graph::PortDesc s_out;
     s_out.number = kPortField;
     s_out.name = "field";
