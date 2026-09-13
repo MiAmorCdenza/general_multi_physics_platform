@@ -111,6 +111,15 @@ namespace {
     return is_finite(grid.origin_m);
 }
 
+/// @brief Whether two dimensions say the same thing, field by field.
+///
+/// `abi::FieldDim` carries no operators, and that is the same division of labour that keeps `LatticeDesc` free of
+/// positions: the ABI answers "what is this value", and "these two are the same quantity" is a model question one
+/// layer up. Written once here rather than remembered differently by each caller that has two fields in hand.
+[[nodiscard]] bool same_dimension(const qp::abi::FieldDim& a, const qp::abi::FieldDim& b) noexcept {
+    return a.L == b.L && a.M == b.M && a.T == b.T && a.I == b.I && a.Th == b.Th && a.N == b.N && a.J == b.J;
+}
+
 /// @brief The port a field type's grid starts at, or false for a type that has no grid of its own.
 ///
 /// One table, and it is deliberately here rather than in each caller: these are the same numbers each type's
@@ -146,9 +155,9 @@ namespace {
         out = FieldNodes::kPortSheetOrigin0;
         return true;
     }
-    // `field.mul` is the one type that declares no grid at all: a product is defined on the lattice its inputs
-    // share, so it forwards. A caller reaching here with `mul` has failed to follow the wire, which is what the
-    // walk below exists to do.
+    // `field.mul` and `field.blend` are the types that declare no grid at all: a product and a blend are both
+    // defined on the lattice their inputs share, so they forward. A caller reaching here with one of them has
+    // failed to follow the wire, which is what the walk below exists to do.
     return false;
 }
 
@@ -177,6 +186,15 @@ bool resolve_field_origin(const graph::Graph& graph, graph::NodeId consumer, gra
         if (source->type_name == FieldNodes::kMulType) {
             current = source_id;
             port = FieldNodes::kPortMulField;
+            continue;
+        }
+        // The blend has no grid either, and its first socket is the one that carries it: both inputs must be on
+        // the same lattice for a blend to be built at all, so either would do and the first is the one a reader
+        // is looking at when they ask. A second type added here rather than a rule invented for it -- the rule is
+        // the one in the paragraph above: a node either declares a grid or forwards to whoever fed it.
+        if (source->type_name == FieldNodes::kBlendType) {
+            current = source_id;
+            port = FieldNodes::kPortBlendInner;
             continue;
         }
         return false;   // a type this build does not know how to ask
@@ -461,6 +479,21 @@ FieldNodes::SheetSpec FieldNodes::read_sheet(const graph::Node& node) noexcept {
     return read_sheet_from(graph::InputView{values});
 }
 
+FieldNodes::BlendSpec FieldNodes::read_blend_from(const graph::InputView& inputs) noexcept {
+    BlendSpec spec;
+    spec.transition_m = real_or(inputs, kPortBlendTransition, kDefaultBlendTransitionM);
+    spec.width_m = real_or(inputs, kPortBlendWidth, kDefaultBlendWidthM);
+    spec.correction = real_or(inputs, kPortBlendCorrection, kDefaultBlendCorrection);
+    return spec;
+}
+
+FieldNodes::BlendSpec FieldNodes::read_blend(const graph::Node& node) noexcept {
+    graph::PortValues values;
+    values.reserve(node.params.size());
+    for (const graph::ParamValue& p : node.params) values.emplace_back(p.number, p.value);
+    return read_blend_from(graph::InputView{values});
+}
+
 bool bake_current_sheet(const FieldNodes::SheetSpec& spec, const GridSpec& grid, gfield::FieldKey key,
                         gfield::FieldSet& fields) {
     if (!bakeable(grid)) return false;
@@ -480,6 +513,80 @@ bool bake_current_sheet(const FieldNodes::SheetSpec& spec, const GridSpec& grid,
         }
     }
     const qp::abi::LatticeDesc desc = table.view(tesla_dimension()).desc;
+    return fields.publish(key, desc, std::move(table.data()));
+}
+
+bool bake_blend(const gfield::FieldValue& inner, const gfield::FieldValue& outer, const GridSpec& grid,
+                const FieldNodes::BlendSpec& spec, gfield::FieldKey key, gfield::FieldSet& fields) {
+    if (!gfield::is_readable(inner) || !gfield::is_readable(outer)) return false;
+    if (inner.kind() != gfield::Kind::Volume || outer.kind() != gfield::Kind::Volume) return false;
+    if (!inner.is_vector() || !outer.is_vector()) return false;
+    if (inner.desc.element != qp::abi::ElementType::f64 || outer.desc.element != qp::abi::ElementType::f64) {
+        return false;
+    }
+    // Two answers to "where are the samples" is one answer too many: the tables must agree with each other *and*
+    // with the geometry the caller resolved, which is the only place positions exist at all.
+    if (inner.desc.count[0] != outer.desc.count[0] || inner.desc.count[1] != outer.desc.count[1] ||
+        inner.desc.count[2] != outer.desc.count[2]) {
+        return false;
+    }
+    if (inner.desc.count[0] != grid.nx || inner.desc.count[1] != grid.ny || inner.desc.count[2] != grid.nz) {
+        return false;
+    }
+    // A blend of tesla with volts per metre is refused here rather than caught by the port types, which cannot
+    // see the difference: both are vector fields and both are legal on these sockets.
+    if (!same_dimension(inner.desc.dimension, outer.desc.dimension)) return false;
+    if (!bakeable(grid)) return false;
+    if (!std::isfinite(spec.transition_m) || !std::isfinite(spec.width_m) || !std::isfinite(spec.correction)) {
+        return false;
+    }
+    // Refused rather than clamped, for the reason the atmosphere node's rate is: a zero width makes the weight a
+    // step and the correction a spike no table can carry, and a correction outside `[0, 1]` would be a blend that
+    // adds divergence instead of removing it.
+    if (!(spec.width_m > 0.0)) return false;
+    if (spec.correction < 0.0 || spec.correction > 1.0) return false;
+
+    const auto* a = static_cast<const double*>(inner.data);
+    const auto* c = static_cast<const double*>(outer.data);
+    if (a == nullptr || c == nullptr) return false;
+
+    const std::uint32_t nx = grid.nx;
+    const std::uint32_t ny = grid.ny;
+    const std::uint32_t nz = grid.nz;
+    const double dz = grid.spacing_m.z;
+    BakedField table{grid.origin_m, grid.spacing_m, nx, ny, nz};
+
+    for (std::uint32_t i = 0; i < nx; ++i) {
+        const double x = grid.origin_m.x + static_cast<double>(i) * grid.spacing_m.x;
+        const double weight = 1.0 / (1.0 + std::exp((x - spec.transition_m) / spec.width_m));
+        const double keep_inner = 1.0 - weight;
+        // The weight's derivative, taken from the weight: see the declaration for why it is not differenced.
+        const double correction = -weight * keep_inner / spec.width_m * spec.correction;
+        for (std::uint32_t j = 0; j < ny; ++j) {
+            // `psi_outer - psi_inner` for this column of nodes, integrated upward in `z`. **The two fields are
+            // differenced inside the recurrence**, so the anchor's constant -- a function of `x` and `y` that
+            // neither table determines -- cancels before it can be chosen twice, and the only thing this loop
+            // carries is the difference the correction actually needs.
+            double dpsi = 0.0;
+            const std::size_t column = (static_cast<std::size_t>(i) * ny + j) * nz;
+            for (std::uint32_t k = 0; k < nz; ++k) {
+                const std::size_t point = column + k;
+                if (k > 0) {
+                    const std::size_t before = point - 1;
+                    const double now = c[point * 3 + 0] - a[point * 3 + 0];
+                    const double earlier = c[before * 3 + 0] - a[before * 3 + 0];
+                    dpsi -= 0.5 * (now + earlier) * dz;
+                }
+                table.set_node(i, j, k,
+                               Vec3{keep_inner * a[point * 3 + 0] + weight * c[point * 3 + 0],
+                                    keep_inner * a[point * 3 + 1] + weight * c[point * 3 + 1],
+                                    keep_inner * a[point * 3 + 2] + weight * c[point * 3 + 2] + correction * dpsi});
+            }
+        }
+    }
+    // The lattice is the caller's, the dimension is the inner field's: the blend of two tesla tables is a tesla
+    // table, and describing it as anything else would be a second answer to what this field is.
+    const qp::abi::LatticeDesc desc = table.view(inner.desc.dimension).desc;
     return fields.publish(key, desc, std::move(table.data()));
 }
 
@@ -764,6 +871,72 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     mul_out.required = false;
     mul.outputs.push_back(mul_out);
 
+    // ---------------- the blend ----------------
+    graph::NodeDesc blend;
+    blend.type_name = kBlendType;
+    blend.label = "Blend fields";
+    blend.description = "Mixes the two fields on its sockets along x while keeping the result divergence-free. "
+                        "Wire a dipole or an inner model into the sunward socket and the tail's current sheet "
+                        "into the other, and the transition is a surface rather than a seam of monopoles: the "
+                        "correction is the term the product rule contributes, and without it the blended field "
+                        "has field lines that end in mid-air. No grid of its own: both inputs must already "
+                        "share one.";
+    blend.category = "field";
+    blend.version = 1;
+    blend.allow_in_field_domain = true;
+    blend.allow_in_particle_domain = false;
+    blend.has_compute = true;
+    graph::PortDesc blend_inner;
+    blend_inner.number = kPortBlendInner;
+    blend_inner.name = "inner";
+    blend_inner.label = "Inner field";
+    blend_inner.description = "The field that keeps its meaning sunward of the transition (+x). It carries the "
+                              "lattice and the dimension the blend is built and described in.";
+    blend_inner.type = qp::ports::kVectorField;
+    blend_inner.connectable = true;
+    blend_inner.required = true;
+    blend.inputs.push_back(blend_inner);
+    graph::PortDesc blend_outer;
+    blend_outer.number = kPortBlendOuter;
+    blend_outer.name = "outer";
+    blend_outer.label = "Outer field";
+    blend_outer.description = "The field that takes over downwind of the transition (-x). It must sit on the same "
+                              "lattice as the inner field and carry the same dimension: two lattices are refused "
+                              "rather than fitted, and tesla blended with volts per metre is refused rather than "
+                              "added.";
+    blend_outer.type = qp::ports::kVectorField;
+    blend_outer.connectable = true;
+    blend_outer.required = true;
+    blend.inputs.push_back(blend_outer);
+    graph::PortDesc blend_transition =
+        parameter(kPortBlendTransition, "transition_x", "Transition x", "m", kDefaultBlendTransitionM);
+    blend_transition.description = "Where the weight is one half, in metres along x. The default, twenty earth "
+                                   "radii downwind, is where the reference implementation puts it: the near-Earth "
+                                   "field reaches that far and the tail's sheet model is meaningful beyond it.";
+    blend.inputs.push_back(blend_transition);
+    graph::PortDesc blend_width = parameter(kPortBlendWidth, "width", "Width", "m", kDefaultBlendWidthM);
+    blend_width.description = "The scale over which the weight moves, in metres. It is the thickness of the "
+                              "transition and the length the correction is proportional to: the source layer a "
+                              "straight blend would leave behind is as thick as this number.";
+    blend.inputs.push_back(blend_width);
+    graph::PortDesc blend_correction =
+        parameter(kPortBlendCorrection, "correction", "Correction", "1", kDefaultBlendCorrection);
+    blend_correction.description = "How much of the divergence-free term to apply: 1 is all of it, 0 is the "
+                                   "straight blend, and 0.1 is what the reference implementation applies -- kept "
+                                   "as a value rather than a history note, because reproducing its fields is then "
+                                   "one number away.";
+    blend.inputs.push_back(blend_correction);
+    graph::PortDesc blend_out;
+    blend_out.number = kPortBlendOut;
+    blend_out.name = "field";
+    blend_out.label = "Field";
+    blend_out.description = "The blended field, described exactly as the inner field is.";
+    blend_out.type = qp::ports::kVectorField;
+    blend_out.connectable = true;
+    blend_out.required = false;
+    blend_out.unit_symbol = "T";
+    blend.outputs.push_back(blend_out);
+
     // ---------------- the convection field ----------------
     graph::NodeDesc convection;
     convection.type_name = kConvectionType;
@@ -938,7 +1111,7 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
 
     return {std::move(dipole),      std::move(uniform),    std::move(sum),        std::move(electric),
             std::move(mask),        std::move(mul),        std::move(convection), std::move(corotation),
-            std::move(atmosphere),  std::move(sheet)};
+            std::move(atmosphere),  std::move(sheet),      std::move(blend)};
 }
 
 gfield::FieldValue DipoleEvaluator::input_field(const graph::NodeId id, const graph::PortNumber port) const noexcept {
@@ -1031,6 +1204,29 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
         }
         Outcome out;
         out.emplace_back(FieldNodes::kPortMulOut, qp::ports::Value{fields_->view(mul_key).desc});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
+    if (desc.type_name == FieldNodes::kBlendType) {
+        // No grid to read, and positions it cannot do without: the weight is a function of `x` and the flux is
+        // integrated in `z`, so the geometry comes from `resolve_field_origin` -- the same walk the plan builder
+        // uses -- rather than from the tables, which carry counts and not places.
+        const graph::InputView blend_view{inputs};
+        const FieldNodes::BlendSpec blend_spec = FieldNodes::read_blend_from(blend_view);
+        GridSpec blend_grid;
+        if (graph_ == nullptr ||
+            !resolve_field_origin(*graph_, id, FieldNodes::kPortBlendInner, blend_grid)) {
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        const gfield::FieldKey blend_key{id.index, FieldNodes::kPortBlendOut};
+        const gfield::FieldValue inner = input_field(id, FieldNodes::kPortBlendInner);
+        const gfield::FieldValue outer = input_field(id, FieldNodes::kPortBlendOuter);
+        if (!bake_blend(inner, outer, blend_grid, blend_spec, blend_key, *fields_)) {
+            // Either socket missing, two lattices that disagree, two dimensions that disagree, or a spec the
+            // arithmetic cannot be built on: all of them are refusals rather than approximations.
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        Outcome out;
+        out.emplace_back(FieldNodes::kPortBlendOut, qp::ports::Value{fields_->view(blend_key).desc});
         return qp::diag::Result<Outcome>{std::move(out)};
     }
     if (desc.type_name == FieldNodes::kMaskType) {

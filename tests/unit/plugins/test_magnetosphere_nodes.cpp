@@ -63,6 +63,47 @@ namespace pp = qp::graph::particles;
     return std::abs(a - b) / scale;
 }
 
+/// @brief `div B` at one node of a table, by central differences in all three axes.
+///
+/// Interior nodes only: a one-sided difference at the boundary is a different operator with a first-order error,
+/// and mixing the two would make it impossible to say which one a number came from. The fields the blend's case
+/// uses are independent of `y`, so the middle term is exactly zero -- which is a fact about those fields rather
+/// than about this operator, and the case asserts it instead of skipping it.
+[[nodiscard]] double divergence_at(const gfield::FieldValue& table, const Vec3& spacing_m, std::uint32_t i,
+                                   std::uint32_t j, std::uint32_t k) {
+    const std::uint32_t ny = static_cast<std::uint32_t>(table.desc.count[1]);
+    const std::uint32_t nz = static_cast<std::uint32_t>(table.desc.count[2]);
+    const auto at = [&](std::uint32_t a, std::uint32_t b, std::uint32_t c) {
+        return (static_cast<std::uint64_t>(a) * ny + b) * nz + c;
+    };
+    const double dx = (gfield::get_component(table, at(i + 1, j, k), 0) -
+                       gfield::get_component(table, at(i - 1, j, k), 0)) /
+                      (2.0 * spacing_m.x);
+    const double dy = (gfield::get_component(table, at(i, j + 1, k), 1) -
+                       gfield::get_component(table, at(i, j - 1, k), 1)) /
+                      (2.0 * spacing_m.y);
+    const double dz = (gfield::get_component(table, at(i, j, k + 1), 2) -
+                       gfield::get_component(table, at(i, j, k - 1), 2)) /
+                      (2.0 * spacing_m.z);
+    return dx + dy + dz;
+}
+
+/// @brief The largest `|div B|` over the interior of a table, in tesla per metre.
+[[nodiscard]] double worst_divergence(const gfield::FieldValue& table, const Vec3& spacing_m) {
+    const std::uint32_t nx = static_cast<std::uint32_t>(table.desc.count[0]);
+    const std::uint32_t ny = static_cast<std::uint32_t>(table.desc.count[1]);
+    const std::uint32_t nz = static_cast<std::uint32_t>(table.desc.count[2]);
+    const std::uint32_t j = ny / 2;
+    double worst = 0.0;
+    for (std::uint32_t i = 1; i + 1 < nx; ++i) {
+        for (std::uint32_t k = 1; k + 1 < nz; ++k) {
+            const double value = std::abs(divergence_at(table, spacing_m, i, j, k));
+            if (value > worst) worst = value;
+        }
+    }
+    return worst;
+}
+
 /// @brief A graph, the catalog that describes its types, and the store its bake publishes into.
 ///
 /// Members are declared in the order they depend on each other: the store outlives the evaluator that borrows it,
@@ -78,11 +119,12 @@ struct Scene final {
     graph::EvalResult result{};
 
     Scene() {
-        // Seven field models now: the dipole, the uniform field, the sum, the uniform electric field, the region
-        // mask, the multiplier and the convection field. Each is a **type of its own** with its own port numbers,
-        // which is the composition principle -- a shielding field is `mul(convection, shield)`, not a switch
-        // inside a node.
-        REQUIRE(FieldNodes::mount(host) == 10);
+        // Eleven field models now: the dipole, the uniform field, the sum, the uniform electric field, the region
+        // mask, the multiplier, the convection field, the corotation field, the atmosphere, the current sheet and
+        // the blend. Each is a **type of its own** with its own port numbers, which is the composition principle --
+        // a shielding field is `mul(convection, shield)` -- and the blend is the one that could not be composed
+        // out of the others: no wiring of sums and products keeps a field divergence-free.
+        REQUIRE(FieldNodes::mount(host) == 11);
         REQUIRE(PusherNodes::mount(host) == 1);
     }
 
@@ -177,7 +219,7 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // mask, the multiplier and the convection field. Each is a **type of its own** with its own port numbers,
     // which is the composition principle -- a shielding field is `mul(convection, shield)`, not a switch inside a
     // node.
-    REQUIRE(types.size() == 10);
+    REQUIRE(types.size() == 11);
     REQUIRE(types[0].type_name == FieldNodes::kDipoleType);
     REQUIRE(types[1].type_name == FieldNodes::kUniformType);
     REQUIRE(types[2].type_name == FieldNodes::kSumType);
@@ -244,9 +286,9 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // Mounting is what makes the type reachable from a running program rather than only from a test fixture. The
     // second mount registers nothing, because a name that is taken is left alone rather than duplicated.
     qp::host::PluginHost host{qp::plugin::Capability::node_types};
-    // Ten field models now, and the count is asserted rather than assumed: it is the one place a new type
+    // Eleven field models now, and the count is asserted rather than assumed: it is the one place a new type
     // announces itself in the test suite, so a type that silently failed to register is a failure here.
-    REQUIRE(FieldNodes::mount(host) == 10);
+    REQUIRE(FieldNodes::mount(host) == 11);
     REQUIRE(host.node_types().find(FieldNodes::kDipoleType) != nullptr);
     REQUIRE(FieldNodes::mount(host) == 0);
 }
@@ -440,7 +482,7 @@ TEST_CASE("magnetosphere.field_nodes.a_field_scales_by_its_weight", "[magnetosph
     // where the weight belongs are both refused by `check_connection`, so the multiplier's own check is the second
     // line of defence rather than the only one.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 10);
+    REQUIRE(types.size() == 11);
     REQUIRE(types[5].type_name == FieldNodes::kMulType);
     REQUIRE(types[5].has_compute);
     const graph::PortDesc* mul_field = types[5].find_port(FieldNodes::kPortMulField, false);
@@ -464,6 +506,242 @@ TEST_CASE("magnetosphere.field_nodes.a_field_scales_by_its_weight", "[magnetosph
     REQUIRE(qp::ports::check_connection(*vector_type, qp::ports::PortDirection::output, *vector_type,
                                         qp::ports::PortDirection::input)
                 .acceptable());
+}
+
+TEST_CASE("magnetosphere.field_nodes.a_blend_does_not_open_a_divergence", "[magnetosphere]") {
+    // **The reference's `tail_blend` and `internal_blend` are one operation**, and the operation is not the
+    // average: `(1 - w) A + w C` can be wired out of `field.mul` and `field.sum` the moment something publishes
+    // `1 - w`, so the arithmetic is not why this type exists. What makes it a node is the term the product rule
+    // contributes -- `w'(x) (psi_outer - psi_inner)` on `B_z` -- without which a blend of two divergence-free
+    // fields has a source layer as thick as the transition. Field lines end in mid-air, the picture still looks
+    // like a magnetosphere, and nothing else in this kit would say a word.
+    //
+    // The pair of fields here is chosen so that the *failure* has a closed form: the inner side is a uniform
+    // field along `z`, so its `B_x` is zero and its flux vanishes under the lattice's own anchor, and the outer
+    // side is a Harris sheet. A straight blend's divergence is then `w'(x) B0 tanh(z/L)` and nothing else, which
+    // is a prediction this case checks **before** it checks that the correction removes it.
+    const double inner_field_t = 1.0e-8;
+    const double b0_tesla = 1.0e-8;
+    const double half_thickness_m = 2.0 * kEarthRadiusM;
+    const Vec3 spacing{0.5 * kEarthRadiusM, 0.5 * kEarthRadiusM, 0.1 * kEarthRadiusM};
+    const GridSpec grid{Vec3{-30.0 * kEarthRadiusM, -0.5 * kEarthRadiusM, -6.0 * kEarthRadiusM}, spacing, 81, 3,
+                        121};
+
+    gfield::FieldSet fields;
+    const gfield::FieldKey inner_key{21, FieldNodes::kPortField};
+    const gfield::FieldKey outer_key{22, FieldNodes::kPortField};
+    REQUIRE(bake_uniform(Vec3{0.0, 0.0, inner_field_t}, grid, inner_key, fields, tesla_dimension()));
+    FieldNodes::SheetSpec sheet;
+    sheet.b0_tesla = b0_tesla;
+    sheet.half_thickness_m = half_thickness_m;
+    REQUIRE(bake_current_sheet(sheet, grid, outer_key, fields));
+    const gfield::FieldValue inner = fields.view(inner_key);
+    const gfield::FieldValue outer = fields.view(outer_key);
+
+    // The premise, measured rather than assumed: **both inputs are divergence-free**, so whatever the blend's own
+    // table shows is the blend's doing. The sheet's divergence is zero because it varies in `z` alone and its only
+    // component is `x`; the uniform field's because it is constant.
+    REQUIRE(worst_divergence(inner, spacing) == 0.0);
+    REQUIRE(worst_divergence(outer, spacing) == 0.0);
+
+    FieldNodes::BlendSpec blend;
+    blend.transition_m = -20.0 * kEarthRadiusM;
+    blend.width_m = 2.5 * kEarthRadiusM;
+    const gfield::FieldKey naive_key{23, FieldNodes::kPortBlendOut};
+    const gfield::FieldKey corrected_key{24, FieldNodes::kPortBlendOut};
+    const gfield::FieldKey reference_key{25, FieldNodes::kPortBlendOut};
+    blend.correction = 0.0;
+    REQUIRE(bake_blend(inner, outer, grid, blend, naive_key, fields));
+    blend.correction = 1.0;
+    REQUIRE(bake_blend(inner, outer, grid, blend, corrected_key, fields));
+    blend.correction = FieldNodes::kReferenceBlendCorrection;
+    REQUIRE(bake_blend(inner, outer, grid, blend, reference_key, fields));
+
+    const gfield::FieldValue straight = fields.view(naive_key);
+    const gfield::FieldValue corrected = fields.view(corrected_key);
+    const gfield::FieldValue reference = fields.view(reference_key);
+    REQUIRE(gfield::is_readable(straight));
+    REQUIRE(gfield::is_readable(corrected));
+    REQUIRE(gfield::is_readable(reference));
+    REQUIRE(corrected.is_vector());
+    // Tesla, described from the inner field: a blend of two tesla tables is a tesla table.
+    REQUIRE(corrected.desc.dimension.M == 1);
+    REQUIRE(corrected.desc.dimension.T == -2);
+    REQUIRE(corrected.point_count() == inner.point_count());
+
+    // Every node of both tables. The `x` and `y` components are the convex combination **exactly** -- the inner
+    // field's `x` is zero, so the product that survives is one multiplication -- and the `z` rows are compared
+    // with a tolerance rather than an equality, because `A + C dpsi` is a multiply-add a compiler may contract
+    // into one operation: the last bit is not part of the model and asserting it would be asserting the code
+    // generator. The two tables differ **only** in `z`, which is the structural statement: the correction is a
+    // term of one component, not a reshaping of the field.
+    const std::uint32_t nx = grid.nx;
+    const std::uint32_t ny = grid.ny;
+    const std::uint32_t nz = grid.nz;
+    const double dz = spacing.z;
+    for (std::uint32_t i = 0; i < nx; ++i) {
+        const double x = grid.origin_m.x + static_cast<double>(i) * spacing.x;
+        const double w = 1.0 / (1.0 + std::exp((x - blend.transition_m) / blend.width_m));
+        const double slope = -w * (1.0 - w) / blend.width_m;
+        for (std::uint32_t j = 0; j < ny; ++j) {
+            double dpsi = 0.0;
+            for (std::uint32_t k = 0; k < nz; ++k) {
+                const std::uint64_t point = (static_cast<std::uint64_t>(i) * ny + j) * nz + k;
+                const double sheet_x = gfield::get_component(outer, point, 0);
+                if (k > 0) {
+                    // `psi_outer - psi_inner`, trapezoid in `z` from the box's lowest node, anchored at zero --
+                    // the same recurrence the bake runs, rebuilt here from the *table* rather than from the model.
+                    dpsi -= 0.5 * (sheet_x + gfield::get_component(outer, point - 1, 0)) * dz;
+                }
+                REQUIRE(gfield::get_component(corrected, point, 0) == w * sheet_x);
+                REQUIRE(gfield::get_component(straight, point, 0) == w * sheet_x);
+                REQUIRE(gfield::get_component(corrected, point, 1) == 0.0);
+                REQUIRE(gfield::get_component(straight, point, 1) == 0.0);
+                REQUIRE(relative_to(gfield::get_component(straight, point, 2), (1.0 - w) * inner_field_t) <
+                        1.0e-15);
+                REQUIRE(relative_to(gfield::get_component(corrected, point, 2),
+                                    (1.0 - w) * inner_field_t + slope * dpsi) < 1.0e-15);
+            }
+        }
+    }
+
+    // The same term against the **model's** flux, not the table's: `psi = -B0 L ln cosh(z/L)`, anchored at the
+    // box's lower `z` so the two agree by construction at the first node. The trapezoid sum and this closed form
+    // differ by the quadrature's truncation error, `O(dz^2 f')`, which is the gap this measures -- and a gap much
+    // larger than that would mean the recurrence had drifted rather than rounded.
+    double worst_model_gap = 0.0;
+    for (std::uint32_t i = 0; i < nx; ++i) {
+        const double x = grid.origin_m.x + static_cast<double>(i) * spacing.x;
+        const double w = 1.0 / (1.0 + std::exp((x - blend.transition_m) / blend.width_m));
+        const double slope = -w * (1.0 - w) / blend.width_m;
+        for (std::uint32_t k = 0; k < nz; ++k) {
+            const double z = grid.origin_m.z + static_cast<double>(k) * spacing.z;
+            const double psi_model = -b0_tesla * half_thickness_m *
+                                     (std::log(std::cosh(z / half_thickness_m)) -
+                                      std::log(std::cosh(grid.origin_m.z / half_thickness_m)));
+            const std::uint64_t point = (static_cast<std::uint64_t>(i) * ny + ny / 2) * nz + k;
+            const double gap = std::abs(gfield::get_component(corrected, point, 2) -
+                                        ((1.0 - w) * inner_field_t + slope * psi_model));
+            if (gap > worst_model_gap) worst_model_gap = gap;
+        }
+    }
+
+    // **The measurement the node exists for.** The straight blend's divergence is the closed form below; the
+    // corrected blend's is the quadrature's own floor. Three numbers, three different statements:
+    //   - the closed form is right (the failure is understood, not merely observed);
+    //   - the correction removes it (and by how much: the ratio is asserted, not asserted *away*);
+    //   - the reference's factor is **linear** in the residual -- `(1 - c)` of the layer -- which is what makes
+    //     `0.1` a tenth of the correction rather than a different model.
+    const double worst_straight = worst_divergence(straight, spacing);
+    const double worst_corrected = worst_divergence(corrected, spacing);
+    const double worst_reference = worst_divergence(reference, spacing);
+    double worst_predicted = 0.0;
+    for (std::uint32_t i = 1; i + 1 < nx; ++i) {
+        const double x = grid.origin_m.x + static_cast<double>(i) * spacing.x;
+        const double w = 1.0 / (1.0 + std::exp((x - blend.transition_m) / blend.width_m));
+        const double slope = -w * (1.0 - w) / blend.width_m;
+        for (std::uint32_t k = 1; k + 1 < nz; ++k) {
+            const double z = grid.origin_m.z + static_cast<double>(k) * spacing.z;
+            const double predicted = std::abs(slope * b0_tesla * std::tanh(z / half_thickness_m));
+            if (predicted > worst_predicted) worst_predicted = predicted;
+        }
+    }
+    CAPTURE(worst_straight, worst_corrected, worst_reference, worst_predicted, worst_model_gap);
+    REQUIRE(worst_predicted > 0.0);
+    REQUIRE(worst_straight > 0.0);
+    // The failure is understood rather than merely observed: the straight blend's worst divergence is the closed
+    // form `w'(x) B0 tanh(z/L)` to within the two percent a central difference over half an earth radius is
+    // allowed to be wrong by. Measured 1.6e-16 T/m at the middle of the transition, which is `B0 / (4 * width)`.
+    REQUIRE(relative_to(worst_straight, worst_predicted) < 0.02);
+    // The correction removes it -- all but a **three-hundredth** of it. What is left is not zero because the flux
+    // is integrated by the trapezoid rule, whose truncation error is `(dz^2/12) f'`: the residual is the
+    // quadrature's floor rather than the model's, and it is asserted as that ratio so that a correction which
+    // stopped working (a sign flip, a factor dropped) cannot hide inside a small absolute number.
+    REQUIRE(worst_corrected * 100.0 < worst_straight);
+    REQUIRE(relative_to(worst_corrected / worst_straight, 3.3e-3) < 0.3);
+    // And the reference's factor is **linear** in what is left: `(1 - c)` of the layer, so `0.1` is a tenth of
+    // the correction rather than a different model. That is the whole content of keeping it as a value.
+    REQUIRE(relative_to(worst_reference, 0.9 * worst_straight) < 0.001);
+    // The table's trapezoid and the model's closed-form flux agree to four parts in a hundred thousand of `B0`
+    // (measured 4.1e-13 T against a lobe field of 1e-8), which is the same quadrature error seen from the other
+    // side: a recurrence that had drifted rather than rounded would be orders of magnitude past this. The constant
+    // here is the measured one -- the analytic bound `(dz^2/12) f'` had predicted four times it, and the machine
+    // was right.
+    REQUIRE(relative_to(worst_model_gap, 4.1e-5 * b0_tesla) < 0.3);
+
+    // Refusals. Two lattices are refused rather than fitted -- the rule `field.sum` follows and for the same
+    // reason -- and so is a grid that disagrees with the tables it was resolved for, which is the only place
+    // positions exist at all.
+    const GridSpec coarse{Vec3{-30.0 * kEarthRadiusM, -0.5 * kEarthRadiusM, -6.0 * kEarthRadiusM},
+                          Vec3{1.0 * kEarthRadiusM, 1.0 * kEarthRadiusM, 0.2 * kEarthRadiusM}, 41, 3, 61};
+    const gfield::FieldKey coarse_key{26, FieldNodes::kPortField};
+    REQUIRE(bake_current_sheet(sheet, coarse, coarse_key, fields));
+    REQUIRE_FALSE(bake_blend(inner, fields.view(coarse_key), coarse, blend, naive_key, fields));
+    REQUIRE_FALSE(bake_blend(inner, outer, coarse, blend, naive_key, fields));
+    // Tesla blended with volts per metre: both are vector fields, so the port types cannot catch this and the
+    // bake does -- a blend of two different quantities is not a quantity.
+    const gfield::FieldKey volts_key{27, FieldNodes::kPortField};
+    REQUIRE(bake_uniform(Vec3{0.0, 0.0, 1.0}, grid, volts_key, fields, volt_per_metre_dimension()));
+    REQUIRE_FALSE(bake_blend(inner, fields.view(volts_key), grid, blend, naive_key, fields));
+    // A scalar where a vector belongs, and specs whose arithmetic does not exist: a zero width would make the
+    // weight a step and the correction a spike, and a factor outside `[0, 1]` would be a blend that adds the
+    // divergence it is supposed to remove.
+    const gfield::FieldKey weight_key{28, FieldNodes::kPortWeight};
+    FieldNodes::MaskSpec mask;
+    REQUIRE(bake_mask(mask, grid, weight_key, fields));
+    REQUIRE_FALSE(bake_blend(inner, fields.view(weight_key), grid, blend, naive_key, fields));
+    FieldNodes::BlendSpec zero_width = blend;
+    zero_width.width_m = 0.0;
+    REQUIRE_FALSE(bake_blend(inner, outer, grid, zero_width, naive_key, fields));
+    FieldNodes::BlendSpec too_much = blend;
+    too_much.correction = 1.5;
+    REQUIRE_FALSE(bake_blend(inner, outer, grid, too_much, naive_key, fields));
+    FieldNodes::BlendSpec negative = blend;
+    negative.correction = -0.1;
+    REQUIRE_FALSE(bake_blend(inner, outer, grid, negative, naive_key, fields));
+    FieldNodes::BlendSpec not_a_number = blend;
+    not_a_number.transition_m = std::nan("");
+    REQUIRE_FALSE(bake_blend(inner, outer, grid, not_a_number, naive_key, fields));
+
+    // The reader is the one the evaluator uses, so "which port is the width" has one answer in the file: a node
+    // carrying only that parameter gets the defaults for the rest, which is the state a freshly placed node is in.
+    qp::graph::Node node;
+    node.type_name = FieldNodes::kBlendType;
+    node.set_param(FieldNodes::kPortBlendWidth, qp::ports::Value{1234.0});
+    const FieldNodes::BlendSpec read = FieldNodes::read_blend(node);
+    REQUIRE(read.width_m == 1234.0);
+    REQUIRE(read.transition_m == FieldNodes::kDefaultBlendTransitionM);
+    REQUIRE(read.correction == FieldNodes::kDefaultBlendCorrection);
+    // **All of the correction is the default**, and the reference's number has a name rather than a comment.
+    REQUIRE(FieldNodes::kDefaultBlendCorrection == 1.0);
+    REQUIRE(FieldNodes::kReferenceBlendCorrection == 0.1);
+
+    // The declaration: the type's own port numbers, both sockets vector fields, and three parameters that are
+    // typed into a panel rather than wired from a node.
+    const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
+    REQUIRE(types.size() == 11);
+    REQUIRE(types[10].type_name == FieldNodes::kBlendType);
+    REQUIRE(types[10].has_compute);
+    REQUIRE(types[10].allow_in_field_domain);
+    REQUIRE_FALSE(types[10].allow_in_particle_domain);
+    const graph::PortDesc* inner_port = types[10].find_port(FieldNodes::kPortBlendInner, false);
+    const graph::PortDesc* outer_port = types[10].find_port(FieldNodes::kPortBlendOuter, false);
+    REQUIRE(inner_port != nullptr);
+    REQUIRE(outer_port != nullptr);
+    REQUIRE(inner_port->type == qp::ports::kVectorField);
+    REQUIRE(outer_port->type == qp::ports::kVectorField);
+    REQUIRE(inner_port->required);
+    REQUIRE(outer_port->required);
+    const graph::PortDesc* blend_out = types[10].find_port(FieldNodes::kPortBlendOut, true);
+    REQUIRE(blend_out != nullptr);
+    REQUIRE(blend_out->type == qp::ports::kVectorField);
+    REQUIRE(blend_out->unit_symbol == std::string{"T"});
+    for (graph::PortNumber number : {FieldNodes::kPortBlendTransition, FieldNodes::kPortBlendWidth,
+                                     FieldNodes::kPortBlendCorrection}) {
+        const graph::PortDesc* port = types[10].find_port(number, false);
+        REQUIRE(port != nullptr);
+        REQUIRE_FALSE(port->connectable);
+    }
 }
 
 TEST_CASE("magnetosphere.field_nodes.the_convection_field_is_the_potentials_gradient", "[magnetosphere]") {
@@ -566,7 +844,7 @@ TEST_CASE("magnetosphere.field_nodes.the_convection_field_is_the_potentials_grad
 
     // The type is declared like the others and allowed only where a bake is.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 10);
+    REQUIRE(types.size() == 11);
     REQUIRE(types[6].type_name == FieldNodes::kConvectionType);
     REQUIRE(types[6].has_compute);
     REQUIRE(types[6].allow_in_field_domain);
@@ -695,7 +973,7 @@ TEST_CASE("magnetosphere.field_nodes.corotation_is_the_rotation_the_field_allows
     // The type declares one socket and no grid parameters, which is the decision this node makes: it bakes on the
     // lattice of the field it reads, so there is no second grid to disagree with the first.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 10);
+    REQUIRE(types.size() == 11);
     REQUIRE(types[7].type_name == FieldNodes::kCorotationType);
     REQUIRE(types[7].has_compute);
     REQUIRE(types[7].inputs.size() == 1);
@@ -760,6 +1038,35 @@ TEST_CASE("magnetosphere.field_nodes.a_wired_field_reports_the_grid_it_was_baked
     REQUIRE(resolve_field_origin(scene.g, second_pusher, PusherNodes::kPortMagnetic, through_mul));
     REQUIRE(through_mul.nx == 41);
     REQUIRE(through_mul.origin_m.x == -5.0 * kEarthRadiusM);
+
+    // **And through the other node that has no grid of its own.** The blend forwards on its *first* socket for
+    // the same reason the multiplier does: both inputs must sit on one lattice for the node to be buildable at
+    // all, so either socket answers, and the one a reader is looking at is the one the walk follows. The two
+    // types were added to the walk one at a time rather than by inventing a rule for each.
+    const graph::NodeId sheet = scene.add(FieldNodes::kCurrentSheetType);
+    for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+        const double value = offset < 3 ? -5.0 * kEarthRadiusM : (offset < 6 ? 0.25 * kEarthRadiusM : 41.0);
+        scene.set(sheet, FieldNodes::kPortSheetOrigin0 + offset, value);
+    }
+    const graph::NodeId blend = scene.add(FieldNodes::kBlendType);
+    scene.wire(uniform, FieldNodes::kPortField, blend, FieldNodes::kPortBlendInner);
+    scene.wire(sheet, FieldNodes::kPortField, blend, FieldNodes::kPortBlendOuter);
+    const graph::NodeId third_pusher = scene.add(PusherNodes::kBorisType);
+    scene.wire(blend, FieldNodes::kPortBlendOut, third_pusher, PusherNodes::kPortMagnetic);
+    GridSpec through_blend;
+    REQUIRE(resolve_field_origin(scene.g, third_pusher, PusherNodes::kPortMagnetic, through_blend));
+    REQUIRE(through_blend.nx == 41);
+    REQUIRE(through_blend.origin_m.x == -5.0 * kEarthRadiusM);
+    // The evaluator path is the third caller and the one that has to build the table: the same graph bakes, and
+    // the blend's own output is in the store described as the inner field is. Both nodes declare the same box,
+    // which is what the one-lattice rule asks of a blend and what this wiring was arranged to satisfy.
+    REQUIRE(scene.bake().has_value());
+    const gfield::FieldValue blended = scene.fields.view(gfield::FieldKey{blend.index, FieldNodes::kPortBlendOut});
+    REQUIRE(gfield::is_readable(blended));
+    REQUIRE(blended.is_vector());
+    REQUIRE(blended.desc.count[0] == 41);
+    REQUIRE(blended.desc.dimension.M == 1);
+    REQUIRE(blended.desc.dimension.T == -2);
 
     // A socket with nothing wired is not a grid, and neither is a wire to a node that is gone: the resolver
     // answers false so that the caller can make its own refusal rather than sampling a box it invented.
@@ -936,7 +1243,7 @@ TEST_CASE("magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_
 
     // And the type is declared with its own grid ports, three parameters first -- the same shape the mask has.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 10);
+    REQUIRE(types.size() == 11);
     REQUIRE(types[8].type_name == FieldNodes::kAtmosphereType);
     REQUIRE(types[8].has_compute);
     REQUIRE(types[8].allow_in_field_domain);
@@ -1102,7 +1409,7 @@ TEST_CASE("magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_impl
 
     // The type declares its own grid ports after its two parameters, and publishes tesla.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 10);
+    REQUIRE(types.size() == 11);
     REQUIRE(types[9].type_name == FieldNodes::kCurrentSheetType);
     REQUIRE(types[9].has_compute);
     REQUIRE(types[9].allow_in_field_domain);

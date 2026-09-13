@@ -530,6 +530,137 @@ public:
     /// @tests       magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_implies
     [[nodiscard]] static SheetSpec read_sheet_from(const graph::InputView& inputs) noexcept;
 
+    /// @brief Mixes two fields along `x` **without opening a divergence**: the port of the reference's
+    /// `tail_blend` and `internal_blend` nodes, which differ in one number.
+    ///
+    /// ## Why this is a type rather than two wires
+    ///
+    /// `(1 - w) A + w B` with `w = w(x)` can be built from `field.mul` and `field.sum` the moment something
+    /// publishes `1 - w`, so the arithmetic is not the reason this node exists. The reason is that a straight
+    /// blend of two divergence-free fields **is not divergence-free**:
+    ///
+    ///     B = (1 - w) A + w C,  w = w(x)   =>   div B = (1 - w) div A + w div C + w'(x) (C_x - A_x),
+    ///
+    /// and the last term is a source layer as thick as the transition. On a lattice it is a monopole sheet across
+    /// the blend: the picture still looks like a magnetosphere, the field lines end in mid-air, and a traced line
+    /// that stops for no reason is exactly the failure this kit exists to make loud.
+    ///
+    /// ## The fix: blend the flux function, not the field
+    ///
+    /// Where nothing depends on `y`, a divergence-free field is the curl of a single component, `B = curl(psi
+    /// y_hat)`: `B_x = -dpsi/dz`, `B_z = dpsi/dx`. Blending `psi = (1 - w) psi_a + w psi_c` and taking the curl of
+    /// the result gives
+    ///
+    ///     B_x = (1 - w) A_x + w C_x,        B_y = (1 - w) A_y + w C_y,
+    ///     B_z = (1 - w) A_z + w C_z + w'(x) (psi_c - psi_a),
+    ///
+    /// which is **exactly** the curl of the blended `psi`, so its divergence is zero wherever the inputs' is. The
+    /// extra term is not a repair bolted on: it is what the product rule contributes, and it is the whole content
+    /// of this type.
+    ///
+    /// `psi` is read back from each input by integrating `-B_x` in `z` from the lattice's lowest `z` -- the
+    /// **same anchor for both inputs**, so the integration constant, a function of `x` that no table determines,
+    /// cancels in the difference `psi_c - psi_a` instead of being chosen twice. That is also why the correction
+    /// needs no model parameters: `B0` and `L` of a Harris sheet are the sheet node's, not the blend's.
+    ///
+    /// ## What the reference writes, and why the default here is not its number
+    ///
+    /// The reference computes the same correction from the tail model's own constants, `B0 L ln cosh(z/L) - z
+    /// B_x`, which is `-(psi_tail - psi_base)` with the tail's flux in closed form and the base's flux frozen at
+    /// `-z B_x`. That is this term. What differs is the factor in front: the reference multiplies it by `0.1`,
+    /// which leaves ninety percent of the source layer in place. The factor is a parameter, the reference's value
+    /// has a name (`kReferenceBlendCorrection`), and the case measures the residual against it rather than
+    /// asserting that either number is right.
+    ///
+    /// ## One node instead of two
+    ///
+    /// The reference's two blend nodes differ in the transition's width (`2.5` and `3.0`) and in whether the
+    /// tail coordinate is hinged by the dipole tilt. The width is a parameter here; the hinge is **not**, because
+    /// it is a coordinate transform belonging to the model that bakes the tail, not to the operation that mixes
+    /// two tables -- a node that hinged its inputs would be describing a field it was not given. It arrives with
+    /// the tilted tail, as its own node.
+    ///
+    /// ## What it does not do
+    ///
+    /// The correction is defined for **poloidal** inputs: the construction is the two-dimensional one, and a
+    /// field with a `y` structure has a vector potential this node does not solve for. It is also not a
+    /// resampler: both inputs must already share one lattice, and a blend of two lattices is refused for the same
+    /// reason `field.sum` refuses it.
+    static constexpr const char* kBlendType = "field.blend";
+    /// @brief The field that keeps its meaning sunward of the transition (`+x`).
+    static constexpr qp::graph::PortNumber kPortBlendInner = 1;
+    /// @brief The field that takes over tailward of the transition (`-x`).
+    static constexpr qp::graph::PortNumber kPortBlendOuter = 2;
+    /// @brief The transition's `x`, in metres: the weight is one half there.
+    static constexpr qp::graph::PortNumber kPortBlendTransition = 3;
+    /// @brief The transition's width, in metres: the scale over which the weight moves.
+    static constexpr qp::graph::PortNumber kPortBlendWidth = 4;
+    /// @brief How much of the divergence-free correction to apply: `1` is all of it, `0` is the straight blend.
+    static constexpr qp::graph::PortNumber kPortBlendCorrection = 5;
+    /// @brief The blend's output.
+    static constexpr qp::graph::PortNumber kPortBlendOut = 1;
+
+    /// @brief The default transition, in metres: twenty earth radii downwind, where the reference puts it.
+    static constexpr double kDefaultBlendTransitionM = -20.0 * kEarthRadiusM;
+    /// @brief The default width, in metres: the reference's `tail_blend` value.
+    static constexpr double kDefaultBlendWidthM = 2.5 * kEarthRadiusM;
+    /// @brief The default correction factor: all of the term the product rule gives.
+    static constexpr double kDefaultBlendCorrection = 1.0;
+    /// @brief The reference implementation's factor, kept so that reproducing its fields is one number away.
+    static constexpr double kReferenceBlendCorrection = 0.1;
+
+    /// @brief What a blend node's parameters say.
+    ///
+    /// @ownership   owns
+    /// @thread      main
+    /// @pre         none
+    /// @post        none
+    /// @invariant   `width_m > 0` and `correction` in `[0, 1]` for any spec `read_blend` produces
+    /// @errors      noexcept
+    /// @frozen      no
+    /// @tests       magnetosphere.field_nodes.a_blend_does_not_open_a_divergence
+    struct BlendSpec final {
+        /// Where the weight is one half, in metres.
+        double transition_m = kDefaultBlendTransitionM;
+        /// The scale over which the weight moves, in metres.
+        double width_m = kDefaultBlendWidthM;
+        /// The fraction of the divergence-free correction to apply: `1` is the derived term, `0` the straight
+        /// blend, and `kReferenceBlendCorrection` what the reference implementation applies.
+        double correction = kDefaultBlendCorrection;
+    };
+
+    /// @brief A blend node's parameters, read from the node itself.
+    ///
+    /// @param node The node. Borrowed.
+    ///
+    /// @ownership   pure
+    /// @thread      main
+    /// @pre         none
+    /// @post        The three numbers the node carries, or the defaults for the ones it does not
+    /// @invariant   One reader, two sources, as every other parameter reader in this kit
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.field_nodes.a_blend_does_not_open_a_divergence
+    [[nodiscard]] static BlendSpec read_blend(const graph::Node& node) noexcept;
+
+    /// @brief The same reader for an evaluator's own inputs.
+    ///
+    /// @param inputs The evaluator's inputs. Borrowed for the call.
+    ///
+    /// @ownership   pure
+    /// @thread      main
+    /// @pre         none
+    /// @post        The same values `read_blend` gives for the same ports
+    /// @invariant   One reader, two sources
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.field_nodes.a_blend_does_not_open_a_divergence
+    [[nodiscard]] static BlendSpec read_blend_from(const graph::InputView& inputs) noexcept;
+
     /// @brief The default drag rate at the surface, in per second. Zero: no atmosphere until a course asks for one.
     static constexpr double kDefaultAtmosphereNu0 = 0.0;
     /// @brief The default scale height, in metres: 100 km, the thermosphere's order at low altitude.
@@ -1098,6 +1229,69 @@ public:
  */
 [[nodiscard]] bool bake_current_sheet(const FieldNodes::SheetSpec& spec, const GridSpec& grid,
                                       qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
+
+/**
+ * @brief Blends two fields along `x` with the correction that keeps the result divergence-free.
+ *
+ * The model, the derivation and the reference's `0.1` are argued on `kBlendType`. What belongs here is how the
+ * term is computed and what the caller must already have checked.
+ *
+ * ## The flux is integrated from the tables, not from the models
+ *
+ * `psi_outer - psi_inner` is built by integrating `-B_x` in `z` on the lattice, **the two inputs differenced
+ * before the integral**: the recurrence is `dpsi_k = dpsi_{k-1} - dz (bx_k + bx_{k-1}) / 2` with `dpsi_0 = 0`, so
+ * the anchor's constant never enters. Integrating the two inputs separately and subtracting afterwards would work
+ * as well and would invite the question of what each `psi` is anchored to; here the question cannot be asked.
+ *
+ * That is also why this node takes **no model parameters**: the reference evaluates `B0 L ln cosh(z/L)`, the
+ * Harris sheet's flux in closed form, so its blend node had to be told the sheet's two constants. In this kit
+ * those belong to the sheet node, and the blend reads whatever was baked.
+ *
+ * ## The weight's derivative is analytic because the weight is
+ *
+ * `w = 1 / (1 + exp((x - transition) / width))` and `w' = -w (1 - w) / width`, evaluated from the node's own
+ * coordinate rather than differenced from a weight table. This is the decision `bake_convection` records about its
+ * potential: a finite difference of a function known in closed form is a second approximation stacked on the
+ * interpolation, and it would make the exactness this case rests on impossible to state. A blend that took an
+ * arbitrary weight *table* would have to differentiate it numerically, and the reopening condition for that is a
+ * weight that arrives with its derivative -- a pair, or a model -- rather than a table alone.
+ *
+ * ## The restriction, said where a caller will read it
+ *
+ * The correction is the two-dimensional poloidal one. It is exact for fields with no `y` structure; for a field
+ * with one it is a term of the right shape and the wrong value. That cannot be detected from a table, so it is
+ * documented rather than checked -- and everything the tables *can* answer is checked.
+ *
+ * @param inner  The field that keeps its meaning sunward of the transition. A readable f64 volume of vectors.
+ * @param outer  The field that takes over downwind of it. Same lattice **and same dimension**: a blend of tesla
+ *               with volts per metre is refused rather than added, and the port types cannot catch that because
+ *               both are vector fields.
+ * @param grid   The geometry the tables were baked on: origin, spacing and counts, because `abi::LatticeDesc`
+ *               carries counts and not positions. Counts that disagree with `inner`'s description are refused --
+ *               two answers to "where are the samples" is one answer too many.
+ * @param spec   The transition, the width and the correction factor. A non-positive width, a correction outside
+ *               `[0, 1]`, or a non-finite number in any of the three is refused rather than clamped: a blend that
+ *               quietly became a straight one would look like a field and be a bug.
+ * @param key    Who is publishing, for the store's key.
+ * @param fields The store. Mutated on success.
+ *
+ * @ownership   owns the samples it publishes on success
+ * @thread      main
+ * @pre         none
+ * @post        On true, `fields.view(key)` is the convex combination in `x` and `y`, plus `w' * dpsi * correction`
+ *              in `z`, described exactly as `inner` is
+ * @invariant   On false the store is unchanged
+ * @errors      Returns false -- never throws -- for an unreadable or non-volume input, a scalar or f32 input,
+ *              lattices whose counts disagree, a grid that disagrees with them, dimensions that differ, and the
+ *              spec refusals above
+ * @complexity  O(points)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.a_blend_does_not_open_a_divergence
+ */
+[[nodiscard]] bool bake_blend(const qp::graph::field::FieldValue& inner, const qp::graph::field::FieldValue& outer,
+                              const GridSpec& grid, const FieldNodes::BlendSpec& spec,
+                              qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
 
 /**
  * @brief The node evaluator that bakes this kit's field types into a store.
