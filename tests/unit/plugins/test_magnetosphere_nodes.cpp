@@ -37,6 +37,7 @@
 #include <qp/plugins/magnetosphere/source_nodes.hpp>
 #include <qp/plugins/magnetosphere/units.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -127,7 +128,7 @@ struct Scene final {
         // of them could not be composed out of the others: no wiring of sums and products keeps a field
         // divergence-free (the two blends), and none of them moves a field onto another lattice (the resampler).
         REQUIRE(FieldNodes::mount(host) == 15);
-        REQUIRE(SourceNodes::mount(host) == 1);
+        REQUIRE(SourceNodes::mount(host) == 2);
         REQUIRE(PusherNodes::mount(host) == 2);
     }
 
@@ -2008,6 +2009,115 @@ TEST_CASE("magnetosphere.field_nodes.a_mix_blends_the_potentials_not_the_fields"
     REQUIRE(mixed_out->unit_symbol == std::string{"T"});
 }
 
+TEST_CASE("magnetosphere.source.the_date_sets_the_dipole_tilt", "[magnetosphere]") {
+    // **The second driver, and the second consumer of the optional-socket shape.** The reference's `day_source`
+    // publishes the magnetic tilt a date implies: the axis leans 23.44 degrees and the magnetic axis is offset from
+    // it, so the angle the dipole makes with the Sun runs from minus twelve to plus thirty-four degrees over a year.
+    // Three days are exact, and they are what the case asserts first.
+    REQUIRE(relative_to(SourceNodes::tilt_degrees_for_day(172.0), 23.44 + 11.0) < 1.0e-15);
+    REQUIRE(relative_to(SourceNodes::tilt_degrees_for_day(172.0 + 182.625), 11.0 - 23.44) < 1.0e-12);
+    REQUIRE(relative_to(SourceNodes::tilt_degrees_for_day(172.0 - 91.3125), 11.0) < 1.0e-12);
+    // The range, and its direction: the solstices are the extremes and everything between them is monotone.
+    double previous = 1000.0;
+    for (double day = 172.0; day <= 172.0 + 180.0; day += 5.0) {
+        const double tilt = SourceNodes::tilt_degrees_for_day(day);
+        REQUIRE(tilt < previous);
+        previous = tilt;
+    }
+    REQUIRE(SourceNodes::tilt_degrees_for_day(0.0) <= 11.0 + 23.44 + 1.0e-12);
+    REQUIRE(SourceNodes::tilt_degrees_for_day(365.0) >= 11.0 - 23.44 - 1.0e-12);
+
+    // Out of range is clamped, not wrapped: a node showing day 400 keeps showing it, and the tilt stays finite.
+    REQUIRE(SourceNodes::tilt_degrees_for_day(400.0) == SourceNodes::tilt_degrees_for_day(365.0));
+    REQUIRE(SourceNodes::tilt_degrees_for_day(-10.0) == SourceNodes::tilt_degrees_for_day(0.0));
+    qp::graph::Node fresh;
+    fresh.type_name = SourceNodes::kDayType;
+    REQUIRE(SourceNodes::read_day(fresh) == SourceNodes::kDefaultDay);
+    fresh.set_param(SourceNodes::kPortDay, qp::ports::Value{200.0});
+    REQUIRE(SourceNodes::read_day(fresh) == 200.0);
+    fresh.set_param(SourceNodes::kPortDay, qp::ports::Value{400.0});
+    REQUIRE(SourceNodes::read_day(fresh) == SourceNodes::kMaxDay);
+    fresh.set_param(SourceNodes::kPortDay, qp::ports::Value{std::nan("")});
+    REQUIRE(SourceNodes::read_day(fresh) == SourceNodes::kDefaultDay);
+
+    // **The graph path, asserted as an equality rather than as a similarity.** A dipole whose tilt is driven by the
+    // June solstice must bake the **same table** as a dipole whose tilt parameter says 34.44 degrees, bit for bit:
+    // the wire and the parameter are two ways to say one number, and a driver that arrived with a rounding of its
+    // own would be a second answer to "what does this day mean".
+    const double re = kEarthRadiusM;
+    const double solstice_tilt = SourceNodes::tilt_degrees_for_day(SourceNodes::kDefaultDay);
+    const auto tile = [&](Scene& target, const graph::NodeId dipole) {
+        for (graph::PortNumber axis = 0; axis < 3; ++axis) {
+            target.set(dipole, FieldNodes::kPortOrigin0 + axis, -6.0 * re);
+            target.set(dipole, FieldNodes::kPortSpacing0 + axis, 0.5 * re);
+            target.set(dipole, FieldNodes::kPortCount0 + axis, 25.0);
+        }
+    };
+
+    Scene driven;
+    const graph::NodeId date = driven.add(SourceNodes::kDayType);
+    driven.set(date, SourceNodes::kPortDay, SourceNodes::kDefaultDay);
+    const graph::NodeId leaning = driven.add(FieldNodes::kDipoleType);
+    driven.set(leaning, FieldNodes::kPortTiltDegrees, 0.0);
+    driven.set(leaning, FieldNodes::kPortMomentAm2, kDipoleMomentAm2);
+    tile(driven, leaning);
+    driven.wire(date, SourceNodes::kPortDayOut, leaning, FieldNodes::kPortTiltDriver);
+    REQUIRE(driven.bake().has_value());
+    const gfield::FieldValue from_a_date =
+        driven.fields.view(gfield::FieldKey{leaning.index, FieldNodes::kPortField});
+    REQUIRE(gfield::is_readable(from_a_date));
+
+    // The same dipole with the tilt typed in, and the two tables compared node by node.
+    Scene typed;
+    const graph::NodeId typed_dipole = typed.add(FieldNodes::kDipoleType);
+    typed.set(typed_dipole, FieldNodes::kPortTiltDegrees, solstice_tilt);
+    typed.set(typed_dipole, FieldNodes::kPortMomentAm2, kDipoleMomentAm2);
+    tile(typed, typed_dipole);
+    REQUIRE(typed.bake().has_value());
+    const gfield::FieldValue from_a_parameter =
+        typed.fields.view(gfield::FieldKey{typed_dipole.index, FieldNodes::kPortField});
+    REQUIRE(gfield::is_readable(from_a_parameter));
+    REQUIRE(from_a_date.point_count() == from_a_parameter.point_count());
+    for (std::uint64_t point = 0; point < from_a_date.point_count(); ++point) {
+        for (std::uint64_t component = 0; component < 3; ++component) {
+            REQUIRE(gfield::get_component(from_a_date, point, component) ==
+                    gfield::get_component(from_a_parameter, point, component));
+        }
+    }
+
+    // And with the socket **empty** the parameter is the lean, so a graph written before this socket existed keeps
+    // its field -- and the untilted dipole is *not* the solstice dipole, which is the measurement that says the wire
+    // did something rather than nothing.
+    Scene alone;
+    const graph::NodeId upright = alone.add(FieldNodes::kDipoleType);
+    alone.set(upright, FieldNodes::kPortTiltDegrees, 0.0);
+    alone.set(upright, FieldNodes::kPortMomentAm2, kDipoleMomentAm2);
+    tile(alone, upright);
+    REQUIRE(alone.bake().has_value());
+    const gfield::FieldValue no_driver = alone.fields.view(gfield::FieldKey{upright.index, FieldNodes::kPortField});
+    bool differs = false;
+    for (std::uint64_t point = 0; point < no_driver.point_count() && !differs; ++point) {
+        for (std::uint64_t component = 0; component < 3; ++component) {
+            if (gfield::get_component(no_driver, point, component) !=
+                gfield::get_component(from_a_date, point, component)) {
+                differs = true;
+            }
+        }
+    }
+    REQUIRE(differs);
+
+    // The declaration: two drivers now, and the tilt arrives in **degrees** -- the unit this kit's dipole socket is
+    // written in, not the radians the reference's engine works in.
+    const std::vector<graph::NodeDesc> drivers = SourceNodes::node_types();
+    REQUIRE(drivers.size() == 2);
+    REQUIRE(drivers[1].type_name == SourceNodes::kDayType);
+    const graph::PortDesc* published = drivers[1].find_port(SourceNodes::kPortDayOut, true);
+    REQUIRE(published != nullptr);
+    REQUIRE(published->type == qp::ports::kScalarF64);
+    REQUIRE(published->unit_symbol == std::string{"deg"});
+    REQUIRE_FALSE(drivers[1].find_port(SourceNodes::kPortDay, false)->connectable);
+}
+
 TEST_CASE("magnetosphere.field_nodes.the_shield_suppresses_convection_inside_its_radius", "[magnetosphere]") {
     // **The third of `efield.py`'s three, and the one that is a coefficient rather than a field.** The reference's
     // own header states the family's composition and then shows it: `E = add(corotation(B), mul(convection,
@@ -2208,19 +2318,23 @@ TEST_CASE("magnetosphere.source.the_kp_index_moves_the_magnetopause", "[magnetos
     fresh.set_param(SourceNodes::kPortKp, qp::ports::Value{std::nan("")});
     REQUIRE(SourceNodes::read_kp(fresh) == SourceNodes::kDefaultKp);
 
-    // The declaration: one type, one numeric output, and the index itself typed in rather than wired.
+    // The declaration: one type, one numeric output, and the index itself typed in rather than wired. The table is
+    // searched **by name** rather than indexed: how many drivers exist is the date case's business, and this case
+    // must not fail merely because a second driver was added beside this one.
     const std::vector<graph::NodeDesc> drivers = SourceNodes::node_types();
-    REQUIRE(drivers.size() == 1);
-    REQUIRE(drivers.front().type_name == SourceNodes::kKpType);
-    REQUIRE(drivers.front().has_compute);
-    REQUIRE(drivers.front().allow_in_field_domain);
-    REQUIRE_FALSE(drivers.front().allow_in_particle_domain);
-    const graph::PortDesc* published = drivers.front().find_port(SourceNodes::kPortKpOut, true);
+    const auto kp_type = std::find_if(drivers.begin(), drivers.end(), [](const graph::NodeDesc& desc) {
+        return desc.type_name == SourceNodes::kKpType;
+    });
+    REQUIRE(kp_type != drivers.end());
+    REQUIRE(kp_type->has_compute);
+    REQUIRE(kp_type->allow_in_field_domain);
+    REQUIRE_FALSE(kp_type->allow_in_particle_domain);
+    const graph::PortDesc* published = kp_type->find_port(SourceNodes::kPortKpOut, true);
     REQUIRE(published != nullptr);
     REQUIRE(published->type == qp::ports::kScalarF64);
     // A scalar **value**, not a scalar field: a table would need a lattice, and a number has none.
     REQUIRE(published->type != qp::ports::kScalarField);
-    REQUIRE_FALSE(drivers.front().find_port(SourceNodes::kPortKp, false)->connectable);
+    REQUIRE_FALSE(kp_type->find_port(SourceNodes::kPortKp, false)->connectable);
 
     // **The surface follows the wire.** A driver at Kp = 6 into a magnetopause whose own parameter says ten earth
     // radii: the index must win, and the nose must stand where the Kp model puts it. The weight is baked on a fine

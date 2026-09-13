@@ -30,7 +30,25 @@ namespace graph = qp::graph;
     return std::isfinite(kp) ? kp : SourceNodes::kDefaultKp;
 }
 
+/// @brief The day a node carries, before clamping: the parameter, or the default when it has none.
+[[nodiscard]] double raw_day(const graph::Node& node) noexcept {
+    const qp::ports::Value value = node.param(SourceNodes::kPortDay);
+    if (!value.valid()) return SourceNodes::kDefaultDay;
+    const double day = value.to_double();
+    return std::isfinite(day) ? day : SourceNodes::kDefaultDay;
+}
+
 }  // namespace
+
+double SourceNodes::tilt_degrees_for_day(double day) noexcept {
+    const double clamped = std::clamp(day, kMinDay, kMaxDay);
+    const double phase = 2.0 * 3.14159265358979323846 * (clamped - kDefaultDay) / kDaysPerYear;
+    return kDayTiltOffsetDegrees + kObliquityDegrees * std::cos(phase);
+}
+
+double SourceNodes::read_day(const graph::Node& node) noexcept {
+    return std::clamp(raw_day(node), kMinDay, kMaxDay);
+}
 
 double SourceNodes::standoff_re_for_kp(double kp) noexcept {
     const double clamped = std::clamp(kp, kMinKp, kMaxKp);
@@ -88,7 +106,46 @@ std::vector<graph::NodeDesc> SourceNodes::node_types() {
     out.unit_symbol = "1";
     kp.outputs.push_back(out);
 
-    return {std::move(kp)};
+    graph::NodeDesc day;
+    day.type_name = kDayType;
+    day.label = "Date";
+    day.description = "The day of the year, as the dipole tilt it implies. The Earth's axis leans by 23.44 degrees "
+                      "and the magnetic axis is offset from it, so a magnetosphere at the June solstice is not the "
+                      "one at the December solstice -- wire this into a dipole and the picture has a season.";
+    day.category = "source";
+    day.version = 1;
+    day.allow_in_field_domain = true;
+    day.allow_in_particle_domain = false;
+    day.has_compute = true;
+
+    graph::PortDesc day_of_year;
+    day_of_year.number = kPortDay;
+    day_of_year.name = "day";
+    day_of_year.label = "Day of year";
+    day_of_year.description = "Zero is 1 January and 172 is the June solstice, which is where the formula's cosine "
+                              "is anchored. The value is clamped into the year rather than wrapped, so a node "
+                              "showing 400 keeps showing it.";
+    day_of_year.type = qp::ports::kScalarF64;
+    day_of_year.connectable = false;
+    day_of_year.required = true;
+    day_of_year.unit_symbol = "d";
+    day_of_year.step = 1.0;
+    day.inputs.push_back(day_of_year);
+
+    graph::PortDesc tilt;
+    tilt.number = kPortDayOut;
+    tilt.name = "tilt";
+    tilt.label = "Dipole tilt";
+    tilt.description = "The tilt the date implies, in **degrees**: the unit this kit's dipole socket is written in. "
+                       "The reference implementation computes radians, which is a factor of fifty-seven away and "
+                       "would still look like a tilt.";
+    tilt.type = qp::ports::kScalarF64;
+    tilt.connectable = true;
+    tilt.required = false;
+    tilt.unit_symbol = "deg";
+    day.outputs.push_back(tilt);
+
+    return {std::move(kp), std::move(day)};
 }
 
 std::size_t SourceNodes::mount(qp::host::PluginHost& host) noexcept {

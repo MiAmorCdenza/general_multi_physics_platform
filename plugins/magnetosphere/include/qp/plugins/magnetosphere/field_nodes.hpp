@@ -224,7 +224,15 @@ public:
     static constexpr qp::graph::PortNumber kPortUniformCount2 = 12;
 
     /// @brief The magnetic latitude of the dipole axis, in degrees.
+    /// @brief The dipole's **tilt**, in degrees: the parameter a user types.
     static constexpr qp::graph::PortNumber kPortTiltDegrees = 1;
+    /// @brief The optional **tilt driver**: wire a date here and the dipole leans by what that day implies.
+    ///
+    /// Numbered after the nine grid ports for the reason `kPortMagnetopauseKp` gives: a type's ports are its own and
+    /// a new one goes at the end, so a saved document keeps meaning what it meant. The wired value **wins** over
+    /// `kPortTiltDegrees`, which becomes the fallback -- the same shape the magnetopause's Kp socket established, and
+    /// the second consumer of it, which is what makes the pattern a pattern rather than one node's exception.
+    static constexpr qp::graph::PortNumber kPortTiltDriver = 12;
     /// @brief The dipole moment, in ampere square metres.
     static constexpr qp::graph::PortNumber kPortMomentAm2 = 2;
     /// @brief The grid origin's `x`, `y`, `z`, in metres.

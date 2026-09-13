@@ -155,6 +155,91 @@ public:
      */
     [[nodiscard]] static double read_kp(const qp::graph::Node& node) noexcept;
 
+    /// @brief The date, as a node: the second driver, and the one that makes the dipole tilt seasonal.
+    ///
+    /// The reference's `day_source` publishes the **magnetic tilt** the date implies -- the Earth's rotation axis is
+    /// inclined by 23.44 degrees and its magnetic axis is offset from that by about 11, so the angle between the
+    /// dipole and the Sun's direction runs between roughly minus twelve and plus thirty-four degrees over a year.
+    /// That is why a magnetosphere has seasons, and why a course that measures anything at a fixed tilt is measuring
+    /// one day of it.
+    ///
+    /// ## Degrees, and the one place a unit could have been lost
+    ///
+    /// The reference computes in **radians** (`ps` is what its engine's hinge wants) and this kit's dipole port is
+    /// `tilt_degrees`, unit `deg`. A driver publishing radians into a degrees socket would be wrong by a factor of
+    /// fifty-seven and would still *look* like a tilt, so this node publishes degrees and says so on the port. When
+    /// the tail's hinge arrives it can take degrees and convert inside its own model, which is where a unit
+    /// conversion belongs.
+    static constexpr const char* kDayType = "source.day";
+
+    /// @brief The parameter: the day of the year, 1 January at zero.
+    static constexpr qp::graph::PortNumber kPortDay = 1;
+    /// @brief The tilt it publishes, on a wire.
+    static constexpr qp::graph::PortNumber kPortDayOut = 1;
+
+    /// @brief The day the reference implementation's formula is anchored at: the June solstice, 21 June.
+    static constexpr double kDefaultDay = 172.0;
+    /// @brief The bottom of the day range.
+    static constexpr double kMinDay = 0.0;
+    /// @brief The top of the day range.
+    static constexpr double kMaxDay = 365.0;
+
+    /// @brief The obliquity: how far the rotation axis leans, in degrees.
+    static constexpr double kObliquityDegrees = 23.44;
+    /// @brief The offset of the magnetic axis from the rotation axis, in degrees.
+    ///
+    /// The reference uses eleven and this kit's own dipole constant is 11.5; the two are the same measurement to the
+    /// accuracy anyone has it. The reference's number is kept here so that a run reproducing its fields gets its
+    /// fields, and the difference is stated rather than quietly reconciled.
+    static constexpr double kDayTiltOffsetDegrees = 11.0;
+    /// @brief The length of the year the formula uses, in days: the tropical year, as the reference has it.
+    static constexpr double kDaysPerYear = 365.25;
+
+    /**
+     * @brief The dipole tilt a date implies, in **degrees**: `offset + obliquity cos(2 pi (day - 172) / 365.25)`.
+     *
+     * Three days are exact and the case asserts all three: the June solstice (day 172) is the maximum,
+     * `23.44 + 11 = 34.44`; half a year later it is the minimum, `-23.44 + 11 = -12.44`; and a quarter of a year
+     * either side the cosine vanishes and the tilt is the offset alone, `11`. The range is what makes the node
+     * worth wiring: a magnetosphere at +34 degrees and one at -12 are different experiments.
+     *
+     * @param day The day of the year, clamped into `[kMinDay, kMaxDay]` by the reader rather than here.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        A finite angle in `[offset - obliquity, offset + obliquity]`
+     * @invariant   Periodic in `kDaysPerYear` before clamping, and monotone between the solstices
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.source.the_date_sets_the_dipole_tilt
+     */
+    [[nodiscard]] static double tilt_degrees_for_day(double day) noexcept;
+
+    /**
+     * @brief The day a node carries, clamped into the year.
+     *
+     * Clamped rather than wrapped, and that is a decision worth stating: a wrapped year would make day 400 equal
+     * day 35, which is true of a calendar and false of the graph being edited -- a node showing 400 is a node whose
+     * author meant something the formula cannot say. Clamping keeps the value visible and the tilt finite.
+     *
+     * @param node The node. Borrowed.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        A value in `[kMinDay, kMaxDay]`
+     * @invariant   A node with no parameter, or with a value that is not a number, gets `kDefaultDay`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.source.the_date_sets_the_dipole_tilt
+     */
+    [[nodiscard]] static double read_day(const qp::graph::Node& node) noexcept;
+
     /**
      * @brief The type table: the Kp source, as a node type.
      *

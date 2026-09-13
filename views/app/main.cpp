@@ -250,21 +250,22 @@ int main(int argc, char** argv) {
     // right when it was written and nothing tied it to the kit it was counting, which is the same shape as the
     // stale expectations this repository keeps finding in tests -- a number that describes another module's
     // inventory does not live in this one.
-    if (mounted_field_types != 15 || mounted_pushers != 2 || mounted_emitters != 1 || mounted_drivers != 1) {
+    if (mounted_field_types != 15 || mounted_pushers != 2 || mounted_emitters != 1 || mounted_drivers != 2) {
         qWarning().noquote() << "magnetosphere: mounted" << mounted_field_types << "of 15 field types,"
                              << mounted_pushers << "of 2 pushers," << mounted_emitters << "of 1 emitter and"
-                             << mounted_drivers << "of 1 driver";
+                             << mounted_drivers << "of 2 drivers";
     }
     if (mounted_render_items != 2) {
         qWarning().noquote() << "magnetosphere: mounted" << mounted_render_items << "of 2 render items";
     }
 
-    // **The flagship composition, as a blueprint rather than as window code.** Ten nodes: a dipole, the tail's
-    // current sheet, their sum, a magnetosheath field, the magnetopause weight, and the mix that puts them
-    // together -- then an emitter launched against that field, a Boris push, and the two render declarations the
-    // kit's view items claim. It is the picture the reference exists to draw, and it is expressed in the plugin's
-    // own vocabulary here because this file is the composition root: the window is handed the blueprint and knows
-    // none of these names.
+    // **The flagship composition, as a blueprint rather than as window code.** A dipole, the tail's current
+    // sheet, their sum, a magnetosheath field, the magnetopause weight, and the mix that puts them together; the
+    // two drivers that decide the boundary's standoff and the dipole's tilt; the shielded convection field; then
+    // an emitter launched against that field, a Boris push, and the two render declarations the kit's view items
+    // claim. It is the picture the reference exists to draw, and it is expressed in the plugin's own vocabulary
+    // here because this file is the composition root: the window is handed the blueprint and knows none of these
+    // names.
     //
     // The grid is one earth radius on a forty-one-node box: coarse enough that five field tables cost a few
     // megabytes, fine enough that the dipole's gradient across a cell is visible in the particles.
@@ -324,6 +325,18 @@ int main(int argc, char** argv) {
         const std::size_t driver = node(SourceNodes::kKpType, "Kp");
         set(driver, SourceNodes::kPortKp, qp::ports::Value{4.0});
 
+        // The second driver, wired to the dipole's optional tilt socket. **The December solstice, deliberately, and
+        // not a tilt typed in degrees**: one date index becomes 11 - 23.44 = -12.44 degrees of dipole tilt, which is
+        // the reference's own `day_source` doing its job. The dipole keeps `tilt_degrees = 0` as its parameter, so
+        // deleting this wire visibly untilts the dipole instead of silently reproducing it.
+        //
+        // A tilt of twelve degrees is also the largest one this composition can honestly show: the reference tilts
+        // the tail's current sheet with the dipole (`hinged_z`, driven by the same date) and that hinge is not
+        // ported yet, so the sheet below stays in the z = 0 plane. The June solstice would be 34.44 degrees and the
+        // flat sheet would stop being a defensible approximation.
+        const std::size_t date = node(SourceNodes::kDayType, "solstice");
+        set(date, SourceNodes::kPortDay, qp::ports::Value{355.0});
+
         const std::size_t mix = node(FieldNodes::kMixType, "inside + outside");
         set(mix, FieldNodes::kPortMixCorrection, qp::ports::Value{1.0});
 
@@ -376,6 +389,9 @@ int main(int argc, char** argv) {
         // The driver: one index that decides the boundary's standoff and flaring, rather than two numbers typed into
         // the boundary. This is what source.kp exists for, and the demo shows the wire.
         wire(driver, SourceNodes::kPortKpOut, boundary, FieldNodes::kPortMagnetopauseKp);
+        // The tilt socket, which is optional by construction: `field.dipole` bakes its table from
+        // `tilt_degrees` when nothing is wired there and from the socket when something is.
+        wire(date, SourceNodes::kPortDayOut, dipole, FieldNodes::kPortTiltDriver);
         wire(mix, FieldNodes::kPortMixOut, emitter, EmitterNodes::kPortMagnetic);
         wire(convection, FieldNodes::kPortField, shielded, FieldNodes::kPortMulField);
         wire(shield, FieldNodes::kPortShieldOut, shielded, FieldNodes::kPortMulWeight);

@@ -882,6 +882,19 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     dipole.inputs.push_back(parameter(kPortCount0, "count_x", "Nodes along x", "", 1.0));
     dipole.inputs.push_back(parameter(kPortCount1, "count_y", "Nodes along y", "", 1.0));
     dipole.inputs.push_back(parameter(kPortCount2, "count_z", "Nodes along z", "", 1.0));
+    // The optional tilt driver, after the grid ports: a date on a wire decides the lean.
+    graph::PortDesc tilt_driver;
+    tilt_driver.number = kPortTiltDriver;
+    tilt_driver.name = "tilt_from";
+    tilt_driver.label = "Tilt (optional)";
+    tilt_driver.description = "Wire a `source.day` here and the dipole leans by the tilt that day implies, in "
+                              "degrees. Left empty, the parameter above is the lean -- so a graph written before "
+                              "this socket existed keeps its field.";
+    tilt_driver.type = qp::ports::kScalarF64;
+    tilt_driver.connectable = true;
+    tilt_driver.required = false;
+    tilt_driver.unit_symbol = "deg";
+    dipole.inputs.push_back(tilt_driver);
 
     graph::PortDesc field;
     field.number = kPortField;
@@ -1630,6 +1643,16 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
     graph::NodeId id, const graph::NodeDesc& desc,
     const std::vector<std::pair<graph::PortNumber, qp::ports::Value>>& inputs) {
     using Outcome = std::vector<std::pair<graph::PortNumber, qp::ports::Value>>;
+    if (desc.type_name == SourceNodes::kDayType) {
+        // The date, through the same path as the index: the node's parameter arrives in `inputs`, and the whole of
+        // the conversion -- the clamp and the cosine -- is the driver's own function, so a second consumer of the
+        // tilt cannot disagree with this one about what day 200 means.
+        const graph::InputView day_view{inputs};
+        const double day = real_or(day_view, SourceNodes::kPortDay, SourceNodes::kDefaultDay);
+        Outcome out;
+        out.emplace_back(SourceNodes::kPortDayOut, qp::ports::Value{SourceNodes::tilt_degrees_for_day(day)});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
     if (desc.type_name == SourceNodes::kKpType) {
         // A driver is the shortest clause in this function and the reason there is no second evaluator: it publishes
         // the number it carries, and `EvalContext` allows this plugin exactly one evaluator for every type it
@@ -1895,7 +1918,13 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
 
     const graph::InputView view{inputs};
     const GridSpec grid = FieldNodes::read_from(view);
-    const double tilt = real_or(view, FieldNodes::kPortTiltDegrees, kMagneticTiltDegrees);
+    double tilt = real_or(view, FieldNodes::kPortTiltDegrees, kMagneticTiltDegrees);
+    // **The driver, if one is wired**: a date decides the lean and the parameter becomes the fallback, which is the
+    // optional-socket shape the magnetopause's Kp socket established. The value arrives in degrees because the port
+    // says `deg`, so nothing is converted here -- a conversion in this line would be a second opinion about a unit
+    // the port already states.
+    const qp::ports::Value driven_tilt = view.get(FieldNodes::kPortTiltDriver);
+    if (driven_tilt.valid() && std::isfinite(driven_tilt.to_double())) tilt = driven_tilt.to_double();
     const double moment = real_or(view, FieldNodes::kPortMomentAm2, kDipoleMomentAm2);
     if (!std::isfinite(tilt) || !std::isfinite(moment)) {
         return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
