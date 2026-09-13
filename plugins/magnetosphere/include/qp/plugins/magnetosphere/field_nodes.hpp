@@ -46,7 +46,8 @@
  * @invariant   No physical model other than the dipole is implemented here
  * @errors      See each declaration
  * @frozen      no
- * @tests       magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_reads,
+ * @tests       magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_reads,,
+ *              magnetosphere.field_nodes.the_node_bakes_the_closed_form_dipole
  *              magnetosphere.field_nodes.the_dipole_is_baked_onto_the_grid_it_declares,
  *              magnetosphere.field_nodes.a_handle_names_the_lattice_in_the_store,
  *              magnetosphere.field_nodes.a_node_of_another_domain_produces_nothing

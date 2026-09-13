@@ -74,6 +74,7 @@ add_library(qp_views STATIC
     qt/editor_window.cpp
     qt/editor_window.hpp
     qt/scene_view.cpp
+    qt/scene_view3d.cpp
     qt/scene_view.hpp
     qt/theme.cpp
     qt/theme.hpp
@@ -106,8 +107,11 @@ target_compile_features(qp_views PUBLIC cxx_std_20)
 # into is the host's, and a window that owned its own would be the second answer to "which types exist" that
 # this layer already had to remove once. Linking it into the view library rather than only into the shell is
 # what lets `tests/unit/views/` construct a window at all.
+# `Qt6::OpenGLWidgets` is linked for exactly one class: `QOpenGLWidget`, which is the surface `SceneView3D` needs
+# for a camera and a depth-sorted picture. It is LGPL like the rest of the kit, and `check_qt_modules.py` requires
+# every linked module to be named in THIRD_PARTY_NOTICES.md -- so the notice moved with this line, in the same commit.
 target_link_libraries(qp_views
-    PUBLIC Qt6::Widgets
+    PUBLIC Qt6::Widgets Qt6::OpenGLWidgets
            qp::views_model
            qp::host
            qp::authoring_commands qp::authoring_document qp::authoring_capability

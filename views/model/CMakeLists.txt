@@ -31,6 +31,7 @@ add_library(qp_views_model STATIC
     document_controller.cpp
     export_controller.cpp
     scene_projection.cpp
+    orbit_camera.cpp
 )
 
 add_library(qp::views_model ALIAS qp_views_model)

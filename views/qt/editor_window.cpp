@@ -10,6 +10,7 @@
 #include <QAction>
 #include <QFileDialog>
 #include <QMenu>
+#include <QMessageBox>
 #include <QMenuBar>
 #include <QScreen>
 #include <QSize>
@@ -18,8 +19,10 @@
 #include <qp/views/model/demo_library.hpp>
 #include <qp/views/model/execution_binders.hpp>
 #include <qp/views/model/export_controller.hpp>
+#include <qp/views/model/run_providers.hpp>
 
 #include "scene_view.hpp"
+#include "scene_view3d.hpp"
 #include "confidence_panel.hpp"
 #include "fit_panel.hpp"
 #include "measurement_panel.hpp"
@@ -65,7 +68,14 @@ constexpr int kDockWidth = 420;
 /// than a minimum: a user who drags the splitter keeps what they dragged, and the value only decides what the
 /// window opens with. 260 of a 720-pixel window leaves the canvas about four hundred, which is where a graph of
 /// five nodes is still readable.
-constexpr int kSceneHeight = 260;
+/// The height the picture row opens with.
+///
+/// **Measured, not preferred.** The fit in the scene panels is uniform -- one scale for both screen axes, so equal
+/// distances stay equal -- which means a panel's picture is limited by its shorter side and the *height* is what
+/// makes it bigger. At the 260 this row used before the three-dimensional panel existed, a dipole's shells spanned
+/// about a fifth of the width; the third panel is what justifies asking for more, and 380 is where a standard dipole
+/// fills the panel it is drawn in.
+constexpr int kSceneHeightWithCamera = 380;
 }  // namespace
 
 namespace {
@@ -226,6 +236,7 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, std::vector<qp::views:
     // and the number of panels is the number of items. The reopening condition is a **third** item, at which
     // point three panels across one window is too many and the tabs (or a chooser) become worth the machinery.
     QDockWidget* first_scene_dock = nullptr;
+    QDockWidget* previous_flat = nullptr;
     for (qp::graph::IViewItem* item : qp::graph::view_items()) {
         if (item == nullptr) continue;
         const QString title = QString::fromUtf8(item->name().data(), static_cast<int>(item->name().size()));
@@ -234,15 +245,43 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, std::vector<qp::views:
         dock->setWidget(view);
         dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
         addDockWidget(Qt::BottomDockWidgetArea, dock);
+        // **The flat panels share one slot.** They draw the same field in two fixed planes, and the three-dimensional
+        // panel below draws both at once from an angle the user controls -- so side by side was three panels where
+        // two are redundant, and the row's height is what a uniform fit needs. The first flat panel keeps the slot;
+        // the rest tab behind it, one click away.
+        if (previous_flat != nullptr) tabifyDockWidget(previous_flat, dock);
+        previous_flat = dock;
         if (first_scene_dock == nullptr) first_scene_dock = dock;
         scene_panels_.emplace_back(item, view);
     }
+    if (previous_flat != nullptr) previous_flat->raise();
+    // **The three-dimensional panel, beside the flat ones.** The scene's third coordinate and its view are what this
+    // host exists to use: the two panels above draw a fixed plane, and this one draws the same value through a
+    // camera the user can turn. Embedded by default, and **floatable** -- the only dock in the window with the full
+    // feature set, because a user comparing a 3D picture against the measurement table wants it in its own window
+    // on a second screen, and Qt's dock machinery gives that for nothing.
+    {
+        auto* dock3d = new QDockWidget(tr("3D view"), this);
+        scene_view3d_ = new SceneView3D(tr("nothing to draw yet -- press Run"), dock3d);
+        dock3d->setWidget(scene_view3d_);
+        dock3d->setFeatures(QDockWidget::DockWidgetMovable | QDockWidget::DockWidgetFloatable |
+                            QDockWidget::DockWidgetClosable);
+        addDockWidget(Qt::BottomDockWidgetArea, dock3d);
+        scene_dock3d_ = dock3d;
+        // The same height as the flat panels, asked for once the layout exists: see the note on `resizeDocks`
+        // above -- this decides what the window opens with and a user's drag wins afterwards.
+        QTimer::singleShot(0, this, [this, dock3d] {
+            resizeDocks({dock3d}, {kSceneHeightWithCamera}, Qt::Vertical);
+        });
+    }
+
     // Give the pictures a measured share of the height, once the layout exists. A request to `resizeDocks` rather
     // than a minimum: a user who drags the splitter keeps what they dragged, and this only decides what the window
     // opens with. 260 of 720 leaves the canvas about four hundred, where a five-node graph is still readable.
     if (first_scene_dock != nullptr) {
-        QTimer::singleShot(0, this, [this, first_scene_dock] {
-            resizeDocks({first_scene_dock}, {kSceneHeight}, Qt::Vertical);
+        const int height = kSceneHeightWithCamera;
+        QTimer::singleShot(0, this, [this, first_scene_dock, height] {
+            resizeDocks({first_scene_dock}, {height}, Qt::Vertical);
         });
     }
     splitDockWidget(dock, confidence_dock, Qt::Vertical);
@@ -331,7 +370,14 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, std::vector<qp::views:
                 action->setToolTip(tr("this build cannot offer it: %1")
                                        .arg(QString::fromStdString(offered.refusal)));
             }
-            connect(action, &QAction::triggered, this, [this, blueprint] { seed_blueprint(blueprint); });
+            connect(action, &QAction::triggered, this, [this, blueprint] {
+            if (!confirm_replacing_document(QString::fromStdString(blueprint.label))) return;
+            seed_blueprint(blueprint);
+            // The hint the status line carries is the answer to the report that started this: a demo that was
+            // *added* to a document holding a runnable operator produced an oscillator's numbers and an empty
+            // picture, with nothing on screen saying why. Now the demo replaces the document, and the line says what
+            // to do next.
+        });
         }
     }
 
@@ -830,14 +876,55 @@ bool EditorWindow::export_readings_document(const std::string& path) {
     return report.ok;
 }
 
+bool EditorWindow::confirm_replacing_document(const QString& what) {
+    // A demo **opens** a document, so it replaces what is there -- and a document with unsaved work is not thrown
+    // away silently. `File -> New` asks the same question; the wording differs because the user's intent does.
+    if (!document_controller_.is_dirty()) return true;
+    const QMessageBox::StandardButton answer = QMessageBox::question(
+        this, tr("Open this demo?"),
+        tr("\"%1\" replaces the document that is open, and it has unsaved changes. Open it anyway?").arg(what),
+        QMessageBox::Ok | QMessageBox::Cancel, QMessageBox::Cancel);
+    if (answer == QMessageBox::Ok) return true;
+    status_->setText(tr("the current document was kept"));
+    return false;
+}
+
 void EditorWindow::seed_blueprint(const qp::views::model::GraphBlueprint& blueprint) {
+    // **A demo replaces the document.** It used to be *added* to whatever was open, and the window opens on the
+    // spring-damper demonstrator -- so `Demos -> magnetosphere` produced a nineteen-node document holding both the
+    // oscillator and the kit. The run controller asks the operator path first (deliberately, and for a good reason:
+    // a graph both paths could run must keep the answer it had before providers existed), the oscillator therefore
+    // claimed the run, and the kit's picture panels stayed empty with nothing on screen saying why. A user reported
+    // exactly that, and the report was right: choosing a demo means opening it.
+    //
+    // **Validate before clearing anything.** The first version of this cleared the document and applied the
+    // blueprint second, so a demo naming a type this build does not have -- the case a build with plugins switched
+    // off produces, and the one `blueprint.a_blueprint_this_build_cannot_offer_is_refused_before_anything_is_added`
+    // covers -- wiped the user's graph on its way to being refused. The case caught it; the order is now the order
+    // the rest of this kit uses: ask first, then do.
+    const qp::views::model::BlueprintCheck offered =
+        qp::views::model::check_blueprint(catalog(), qp::ports::builtin_registry(), blueprint);
+    if (!offered.ok) {
+        on_mutation_failed(QString::fromStdString(offered.refusal));
+        return;
+    }
+
+    // **No dialog here.** This function is the work, not the asking: a case calls it directly, and the first version
+    // of this put a `QMessageBox` in it -- which a test binary then opened and waited on, and a user saw. The ask
+    // belongs to the demo action, which is what a user clicked.
+    const qp::views::model::DocumentReport cleared = document_controller_.new_document();
+    if (!cleared.ok) {
+        on_mutation_failed(QString::fromStdString(cleared.message));
+        return;
+    }
+
     const qp::views::model::BlueprintReport report = qp::views::model::apply_blueprint(session_, catalog(), blueprint);
     if (!report.ok) {
         on_mutation_failed(QString::fromStdString(report.refusal));
         return;
     }
     refresh_state();
-    status_->setText(QStringLiteral("%1: %2 nodes, %3 wires")
+    status_->setText(QStringLiteral("%1: %2 nodes, %3 wires -- press Run")
                          .arg(QString::fromStdString(blueprint.label))
                          .arg(report.nodes.size())
                          .arg(report.wires_connected));
@@ -1103,6 +1190,38 @@ void EditorWindow::seed_demo_measurement() {
 }
 
 
+namespace {
+
+/// @brief Merges one item's scene into the picture the three-dimensional panel is building.
+///
+/// The bounds are the **union**, because two items draw two things and the camera has to fit both; the body radius
+/// is the maximum, because a planet is a planet whichever item asked for it; and the view is set by the caller, not
+/// taken from the items -- see the call site for why no single item's direction is right for a combination.
+void merge_scene(qp::graph::ViewScene& into, const qp::graph::ViewScene& from) {
+    into.points.insert(into.points.end(), from.points.begin(), from.points.end());
+    into.polylines.insert(into.polylines.end(), from.polylines.begin(), from.polylines.end());
+    if (from.body_radius > into.body_radius) into.body_radius = from.body_radius;
+    if (!from.has_bounds) return;
+    if (!into.has_bounds) {
+        into.x_min = from.x_min;
+        into.x_max = from.x_max;
+        into.y_min = from.y_min;
+        into.y_max = from.y_max;
+        into.z_min = from.z_min;
+        into.z_max = from.z_max;
+        into.has_bounds = true;
+        return;
+    }
+    into.x_min = std::min(into.x_min, from.x_min);
+    into.x_max = std::max(into.x_max, from.x_max);
+    into.y_min = std::min(into.y_min, from.y_min);
+    into.y_max = std::max(into.y_max, from.y_max);
+    into.z_min = std::min(into.z_min, from.z_min);
+    into.z_max = std::max(into.z_max, from.z_max);
+}
+
+}  // namespace
+
 void EditorWindow::run_once() {
     if (run_controller_ == nullptr) return;
 
@@ -1110,7 +1229,37 @@ void EditorWindow::run_once() {
 
     // The status line speaks first: it is where every other message in this window goes, and a user who
     // pressed a button is looking for a response in one consistent place.
-    status_->setText(QString::fromStdString(result.report.message));
+    //
+    // **And it says what did not run.** A graph can hold both an operator the binder can drive and a kit a mounted
+    // provider claims, and the precedence is deliberate -- the operator path is asked first, so a graph both could
+    // run keeps the answer it had before providers existed. What was missing is the sentence: a user who takes the
+    // magnetosphere demo onto a document that still holds the spring-damper demonstrator gets the oscillator's
+    // numbers, an empty picture, and a report about validation problems rather than about the run that did not
+    // happen. The finding below is the one they can act on.
+    QString message = QString::fromStdString(result.report.message);
+    if (result.report.ok) {
+        bool kit_claims = false;
+        for (qp::graph::execution::IGraphRunProvider* provider : qp::views::model::run_providers()) {
+            if (provider != nullptr && provider->claims(session_.graph())) {
+                kit_claims = true;
+                break;
+            }
+        }
+        // The provider path sets `operator_name` to the provider's own name, so a claim that was *not* taken shows
+        // up as a claim whose name is not what ran.
+        const std::string ran = result.report.operator_name;
+        const bool provider_ran = std::any_of(
+            qp::views::model::run_providers().begin(), qp::views::model::run_providers().end(),
+            [&ran](qp::graph::execution::IGraphRunProvider* provider) {
+                return provider != nullptr && provider->name() == ran;
+            });
+        if (kit_claims && !provider_ran) {
+            message += QStringLiteral(
+                " -- the content nodes in this graph were not run: their run path is used only when the graph has "
+                "no operator, and this one has one. File -> New, then open the demo, to run them.");
+        }
+    }
+    status_->setText(message);
 
     // What the graph asked to have **drawn**, handed to whichever view item claims a declaration. This comes
     // before the failure branch on purpose: the declarations are filled whether or not the run succeeded --
@@ -1120,6 +1269,7 @@ void EditorWindow::run_once() {
     // Every declaration is offered to **every** item, and each item that claims it draws into its own panel. That
     // loop is what the second item changed: the `break` after the first claim was right while there was one item
     // and one panel, and with two it would silently give the field-line declaration to the particle item and stop.
+    qp::graph::ViewScene merged3d;
     for (const qp::graph::DeclaredOutput& declaration : result.render_declared) {
         const qp::graph::Node* node = session_.graph().find_node(declaration.node);
         if (node == nullptr) continue;
@@ -1131,8 +1281,26 @@ void EditorWindow::run_once() {
                                                  &result.particle_positions, result.report.steps,
                                                  &result.fields};
             if (!request.valid()) continue;
-            panel->set_scene(item->scene(request));
+            // Asked **once** per item and given to both hosts: an item's `scene` is where the tracing happens, and
+            // computing it twice would be two answers to one question.
+            const qp::graph::ViewScene scene = item->scene(request);
+            panel->set_scene(scene);
+            merge_scene(merged3d, scene);
         }
+    }
+    if (scene_view3d_ != nullptr) {
+        // **A three-quarter view for the combination.** Each item states the direction its own picture wants, and
+        // for one picture holding both, neither is right: the particle item looks down the equatorial plane, where
+        // a family of meridional field lines collapses to a line. So the merged scene opens at azimuth 35 and
+        // elevation 25 -- far enough off both planes that a ring reads as a ring and shells read as shells -- and
+        // the user turns it from there. This is a **host** decision about a **combination**, which is why it is
+        // here and not in either item.
+        if (merged3d.has_bounds) {
+            merged3d.view.azimuth_deg = 35.0;
+            merged3d.view.elevation_deg = 25.0;
+            merged3d.view.distance = 0.0;
+        }
+        scene_view3d_->set_scene(std::move(merged3d));
     }
 
     if (!result.report.ok) {

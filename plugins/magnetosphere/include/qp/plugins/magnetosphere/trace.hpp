@@ -186,7 +186,8 @@ struct TraceSpec final {
  * @invariant   `points_re` holds no non-finite point; consecutive points are at most `step_max_re` apart
  * @errors      noexcept
  * @frozen      no
- * @tests       magnetosphere.trace.a_dipole_line_returns_to_its_seed
+ * @tests       magnetosphere.trace.a_dipole_line_returns_to_its_seed,
+ *              magnetosphere.trace.every_point_of_a_dipole_line_is_the_closed_form
  */
 struct FieldLine final {
     /// The curve, in earth radii, in the order it was walked. The seed is in the middle when both ways ran.

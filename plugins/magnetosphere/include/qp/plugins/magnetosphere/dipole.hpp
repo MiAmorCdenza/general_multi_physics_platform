@@ -129,7 +129,9 @@ struct DipoleField final {
      * @complexity  O(1)
      * @nondet      none
      * @frozen      no
-     * @tests       magnetosphere.dipole.the_normalized_form_agrees_with_the_si_form
+     * @tests       magnetosphere.dipole.the_normalized_form_agrees_with_the_si_form,
+ *              magnetosphere.trace.every_point_of_a_dipole_line_is_the_closed_form,
+ *              magnetosphere.field_nodes.the_node_bakes_the_closed_form_dipole
      */
     [[nodiscard]] Vec3 at_normalized(const Vec3& point) const noexcept;
 };

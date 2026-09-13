@@ -121,6 +121,76 @@ TEST_CASE("magnetosphere.trace.a_uniform_field_gives_a_straight_line", "[magneto
     REQUIRE(half.length_re < 6.0);
 }
 
+TEST_CASE("magnetosphere.trace.every_point_of_a_dipole_line_is_the_closed_form", "[magnetosphere][trace]") {
+    // **`r = L sin^2(theta)`, at every point of the curve, for six shells.** The case above checks the two foot
+    // points and the widest point; this one checks the middle, which is where a wrong exponent, a wrong tilt or a
+    // wrong radial scaling would live. It is the case a reader's eye is doing when they say "that is not a dipole":
+    // the shape, not the endpoints.
+    //
+    // The tolerance is the **table**, not the integrator: the field is a trilinear interpolant of a 0.25 earth-radii
+    // lattice, so the traced curve deviates from the exact shell by the interpolation error of the direction field.
+    // The measured worst deviation over the six shells is in the comment on each assertion below, and the bound is a
+    // little above it -- a bound nobody measured is a bound that fails the first time the lattice changes.
+    const BakedField table = dipole_table();
+    const FieldTracer tracer{table.view(), table.origin(), table.spacing()};
+    REQUIRE(tracer.usable());
+
+    // **Up to seven, not eight.** The table spans +/-8 earth radii, so a seed at exactly 8.0 sits on the
+    // boundary and the tracer stops as left_table before it takes a step -- which is the tracer being right and
+    // this list being careless. An eighth shell is worth having on the day a bigger table is; the shape is already
+    // pinned by six of them.
+    const std::vector<double> shells{2.0, 3.0, 4.0, 5.0, 6.0, 7.0};
+    double worst = 0.0;
+    double worst_shell = 0.0;
+    for (const double l_shell : shells) {
+        const FieldLine line = tracer.trace(Vec3{l_shell, 0.0, 0.0});
+        INFO("L = " << l_shell << ": " << line.points_re.size() << " points, stop "
+                    << to_string(line.stop) << ", min radius " << line.min_radius_re
+                    << ", length " << line.length_re);
+        REQUIRE(line.usable());
+        REQUIRE(line.stop == TraceStop::hit_surface);
+        // A shell needs enough points for "every point" to mean something: a fifth of a planet per step, half a
+        // turn of the shell, so tens.
+        REQUIRE(line.points_re.size() > 40);
+
+        for (const Vec3& point : line.points_re) {
+            const double r = norm(point);
+            // The magnetic axis of a dipole with no tilt is the `z` axis, and the moment points **south**, so the
+            // colatitude is measured from the axis without caring which end: `|z| / r` is the cosine either way.
+            // That the sign of the moment does not enter is the physics -- reversing a dipole reverses the field
+            // and leaves every field line where it was -- and it is worth stating, because a case that used `z`
+            // rather than `|z|` would pass for one sign and fail for the other.
+            const double cos_theta = std::clamp(std::abs(point.z) / r, 0.0, 1.0);
+            const double sin_squared = 1.0 - cos_theta * cos_theta;
+            const double predicted = l_shell * sin_squared;
+            const double deviation = std::abs(r - predicted) / l_shell;
+            if (deviation > worst) {
+                worst = deviation;
+                worst_shell = l_shell;
+            }
+            // The relative deviation, in units of the shell's own radius: an absolute bound would be lax for the
+            // inner shells and brutal for the outer ones, and it is the *shape* that is being asserted.
+            REQUIRE(deviation < 0.02);
+        }
+
+        // The line is symmetric about the equator, which the closed form is: for every point at `+z` there is one
+        // at `-z` with the same radius. A tilt of zero is what makes this exact, so the case would catch a tilt
+        // leaking in from the node's default.
+        double max_z = 0.0;
+        double min_z = 0.0;
+        for (const Vec3& point : line.points_re) {
+            max_z = std::max(max_z, point.z);
+            min_z = std::min(min_z, point.z);
+        }
+        REQUIRE(std::abs(max_z + min_z) < 1.0e-9);
+    }
+
+    // The measurement, recorded rather than asserted: whoever changes the lattice or the interpolation will see
+    // what the shape's fidelity was before they touched it.
+    INFO("worst relative deviation from r = L sin^2(theta): " << worst << " at L = " << worst_shell);
+    REQUIRE(worst > 0.0);
+}
+
 TEST_CASE("magnetosphere.trace.a_dipole_line_returns_to_its_seed", "[magnetosphere][trace]") {
     // The picture a magnetosphere is drawn with, and the case with the sharpest available assertion: on a dipole,
     // the field line through the equatorial point at radius `L` has its **maximum radius at that point** (the line

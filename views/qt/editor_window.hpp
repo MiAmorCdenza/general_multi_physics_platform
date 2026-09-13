@@ -55,6 +55,11 @@
 #include <qp/views/model/run_controller.hpp>
 #include <qp/views/model/measurement_model.hpp>
 
+// The three-dimensional panel: one `SceneView3D` per window, fed the merged scene of every declaration. Included
+// here rather than forward-declared because the member is a `SceneView3D*` whose class the window *constructs* in
+// its own constructor, and a forward declaration would move the include to the .cpp without changing anything.
+#include "scene_view3d.hpp"
+
 #include <memory>
 #include <utility>
 #include <vector>
@@ -220,6 +225,14 @@ public:
      * @frozen      no
      * @tests       qt.views.editor_window.a_supplied_blueprint_becomes_a_graph
      */
+    /// @brief Asks before a demo replaces a document that has unsaved work. True when the caller may proceed.
+    ///
+    /// **Separate from `seed_blueprint` on purpose**: that function is the work and a case calls it directly, so a
+    /// modal dialog inside it made the path untestable -- the test binary opened the dialog and waited. The ask is a
+    /// UI action's business; the seeding is the window's.
+    [[nodiscard]] bool confirm_replacing_document(const QString& what);
+
+    /// @brief Replaces the document with `blueprint`, after validating it. **Does not ask**: see above.
     void seed_blueprint(const qp::views::model::GraphBlueprint& blueprint);
 
     /// @brief Seeds the window with a small graph and a matching measurement session.
@@ -429,6 +442,11 @@ private:
     // and keeping it is what lets two items coexist without either of them drawing over the other. A panel is
     // owned by its dock through Qt parentage; the pointer here is a view of that ownership, not a second owner.
     std::vector<std::pair<qp::graph::IViewItem*, SceneView*>> scene_panels_{};
+
+    /// The three-dimensional panel: one camera over every declaration, embedded in the window and floatable.
+    SceneView3D* scene_view3d_ = nullptr;
+    /// Its dock, kept so a later layout call cannot undo a user's float or dock choice unawares.
+    QDockWidget* scene_dock3d_ = nullptr;
 
     // One fit session per window, over the same trace, for the same borrowing reason. The **fit** is not
     // performed here or in `views/model`: it is a plugin, and this layer is built where no plugin exists. The

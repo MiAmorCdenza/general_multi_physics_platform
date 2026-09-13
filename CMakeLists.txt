@@ -236,7 +236,11 @@ if(QP_BUILD_VIEWS)
     # Only Core, Gui and Widgets. Qt Charts is deliberately absent: it is GPL-3.0
     # rather than LGPL, and scripts/check_qt_modules.py fails the build if it ever
     # appears on a link line.
-    find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets)
+    # `OpenGLWidgets` is requested for one class -- `QOpenGLWidget`, the surface of the three-dimensional scene panel.
+# Asking for it in the link line alone fails at configure time with "the target was not found", which is the right
+# error: a component has to be requested before it can be linked, and the notice in THIRD_PARTY_NOTICES.md is what
+# `check_qt_modules.py` reads to allow it.
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core Gui Widgets OpenGLWidgets)
 endif()
 
 # -- Directories --------------------------------------------------------------

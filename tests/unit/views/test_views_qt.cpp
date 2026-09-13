@@ -80,6 +80,10 @@
 #include <QStringList>
 
 #include "scene_view.hpp"
+#include "scene_view3d.hpp"
+
+#include <QDockWidget>
+#include <QMenu>
 #include "confidence_panel.hpp"
 #include "fit_panel.hpp"
 #include "measurement_panel.hpp"
@@ -115,6 +119,118 @@ void connect_nodes(qp::authoring::Session& session, qp::graph::NodeId from,
 }
 
 }  // namespace
+
+TEST_CASE("qt.views.scene3d.a_scene_can_be_turned", "[views][qt][scene3d]") {
+    // **The camera belongs to the panel, and the scene's view is where it starts.** A scene states the direction its
+    // item wants to be seen from; the panel opens there, and the user turns it from that point. The assertion that
+    // matters is the *reset*: a new scene puts the camera back on the direction the new item asked for, so a graph
+    // whose picture wants the equatorial plane is not drawn from wherever the previous one was left.
+    qp::views::SceneView3D panel{QStringLiteral("nothing to draw yet")};
+    REQUIRE(panel.empty_text() == QStringLiteral("nothing to draw yet"));
+
+    qp::graph::ViewScene ring;
+    ring.view.azimuth_deg = 0.0;
+    ring.view.elevation_deg = 90.0;
+    ring.x_min = -2.0;
+    ring.x_max = 2.0;
+    ring.y_min = -2.0;
+    ring.y_max = 2.0;
+    ring.z_min = -2.0;
+    ring.z_max = 2.0;
+    ring.has_bounds = true;
+    ring.body_radius = 1.0;
+    for (int i = 0; i < 16; ++i) {
+        const double angle = 2.0 * 3.14159265358979323846 * static_cast<double>(i) / 16.0;
+        ring.points.push_back(qp::graph::ViewScene::Point{2.0 * std::cos(angle), 2.0 * std::sin(angle), 0.0});
+    }
+    panel.set_scene(ring);
+    REQUIRE(panel.camera().view().azimuth_deg == 0.0);
+    // **89, not the 90 the scene asked for**, and that is the camera's contract rather than a defect: elevation is
+    // clamped one degree inside the poles, because the screen's basis is discontinuous exactly at them -- the
+    // fallback that keeps the basis finite at `90` points the screen a different way from the limit approaching it,
+    // so a user orbiting across the pole would see the picture flip. A degree of difference is invisible; a flip is
+    // not. The item's own `elevation 90` is its way of saying "the equatorial plane", and the camera lands as close
+    // to it as a continuous basis allows.
+    REQUIRE(panel.camera().view().elevation_deg == 89.0);
+    // The fit is the scene's own box, so the camera sits at the default multiple of it rather than at a fixed
+    // distance: the same panel shows a ring of two earth radii and a magnetosphere of twenty at their own scales.
+    // **Exactly the box's half-extent here**, because this view looks straight down at a face -- the corner-on
+    // direction is what grows it, by up to sqrt(3), which the projection's own case measured.
+    REQUIRE(panel.camera().half_width() == 2.0);
+    REQUIRE(std::abs(panel.camera().distance() -
+                     qp::views::model::kDefaultCameraDistanceFactor * 2.0) < 1.0e-12);
+
+    // Turning it: the panel's camera moves, and the *scene* does not -- the view in the value is the item's request,
+    // not the user's current angle, which is what keeps a repaint deterministic.
+    panel.camera().orbit(35.0, -20.0);
+    REQUIRE(std::abs(panel.camera().view().azimuth_deg - 35.0) < 1.0e-12);
+    // **69, not 70**: the reset landed on the clamp (89) rather than on the 90 the scene asked for, and the orbit is
+    // relative to where the camera actually is. An assertion that forgot the clamp would be off by exactly the degree
+    // the clamp costs, which is the kind of slip this comment exists to prevent next time.
+    REQUIRE(std::abs(panel.camera().view().elevation_deg - 69.0) < 1.0e-12);
+    REQUIRE(panel.scene().view.azimuth_deg == 0.0);
+    REQUIRE(panel.scene().view.elevation_deg == 90.0);
+
+    // A field-line scene asks for the meridional plane, and setting it puts the camera there: the reset is the
+    // behaviour a user sees when they switch demos.
+    qp::graph::ViewScene shells = ring;
+    shells.view.azimuth_deg = -90.0;
+    shells.view.elevation_deg = 0.0;
+    shells.points.clear();
+    shells.polylines.push_back({qp::graph::ViewScene::Point{1.0, 0.0, 0.0}, qp::graph::ViewScene::Point{0.0, 0.0, 1.0}});
+    panel.set_scene(shells);
+    // **270, which is the camera's spelling of the scene's -90.** The scene states the direction it wants in whatever
+    // angles describe it -- a meridional view is -90 as naturally as 270 -- and the camera **wraps** azimuth into
+    // [0, 360) because that is the range an orbit control stays sane in. The two are the same direction, and the scene
+    // keeps its own wording: the value in the scene is the item's request, not the camera's state.
+    REQUIRE(panel.scene().view.azimuth_deg == -90.0);
+    REQUIRE(panel.camera().view().azimuth_deg == 270.0);
+    REQUIRE(panel.camera().view().elevation_deg == 0.0);
+
+    // An empty scene says so rather than drawing nothing: the panel keeps its message.
+    panel.set_scene(qp::graph::ViewScene{});
+    REQUIRE(panel.scene().empty());
+}
+
+TEST_CASE("qt.views.scene3d.the_panel_is_dockable_and_floatable", "[views][qt][scene3d]") {
+    // **"Embedded by default, standalone on request", asserted rather than described.** The panel is a dock in the
+    // window's bottom area -- so it is embedded, beside the two flat pictures -- and it carries the full dock feature
+    // set, which is what lets Qt turn it into a top-level window with one click on its title bar. The two flat panels
+    // deliberately have no features, so this case also pins the *difference*: a user can only pop out the one that
+    // has something to gain from a second screen.
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
+
+    QDockWidget* view3d = nullptr;
+    for (QDockWidget* dock : window.findChildren<QDockWidget*>()) {
+        if (dock->windowTitle() == QStringLiteral("3D view")) view3d = dock;
+    }
+    REQUIRE(view3d != nullptr);
+    REQUIRE(view3d->widget() != nullptr);
+    REQUIRE(dynamic_cast<qp::views::SceneView3D*>(view3d->widget()) != nullptr);
+
+    // Embedded: a dock that is not floating is a panel in the window, which is what "default" means here.
+    REQUIRE_FALSE(view3d->isFloating());
+    REQUIRE(window.dockWidgetArea(view3d) == Qt::BottomDockWidgetArea);
+
+    // Standalone: the features are what make it possible, and `setFloating` is what a user's click does.
+    REQUIRE((view3d->features() & QDockWidget::DockWidgetFloatable) != 0);
+    REQUIRE((view3d->features() & QDockWidget::DockWidgetMovable) != 0);
+    view3d->setFloating(true);
+    REQUIRE(view3d->isFloating());
+    view3d->setFloating(false);
+    REQUIRE_FALSE(view3d->isFloating());
+
+    // The flat panels are the contrast: no features, so they stay where they are put. Asserted because the difference
+    // is a decision -- a two-dimensional picture has no reason to float, and a three-dimensional one does.
+    // **The flat panels are deliberately not compared here, and the reason is this binary.** They are built one per
+    // *mounted* view item, and mounting happens in the application's composition root: `qp::graph::view_items()` is
+    // empty in a test binary, so this window has no flat docks to contrast against. The contrast is real -- the flat
+    // panels carry `NoDockWidgetFeatures` because a picture in a fixed plane has no reason to float -- and it is
+    // visible in the window itself; asserting it here would make this case pass or fail according to whether some
+    // other binary's composition had leaked into the process, which is worse than not asserting it.
+    REQUIRE(qp::graph::view_items().empty());
+}
 
 TEST_CASE("qt.views.nodegraph.items_match_graph", "[views][qt]") {
     qp::authoring::Session session;

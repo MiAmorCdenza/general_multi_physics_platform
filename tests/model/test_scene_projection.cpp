@@ -9,6 +9,7 @@
  */
 #include <catch2/catch_test_macros.hpp>
 
+#include <qp/views/model/orbit_camera.hpp>
 #include <qp/views/model/scene_projection.hpp>
 
 #include <cmath>
@@ -20,6 +21,7 @@ using qp::graph::ViewScene;
 using qp::views::model::fitted_half_width;
 using qp::views::model::project_orthographic;
 using qp::views::model::screen_basis;
+using qp::views::model::OrbitCamera;
 
 constexpr double kTolerance = 1.0e-12;
 
@@ -41,6 +43,105 @@ constexpr double kTolerance = 1.0e-12;
 }
 
 }  // namespace
+
+TEST_CASE("views.camera.a_point_in_the_target_plane_projects_like_the_flat_view", "[views][camera]") {
+    // **The convention that makes a perspective camera testable**: the projection is scaled by the distance to the
+    // target plane, so a point lying in the plane through the origin perpendicular to the camera projects exactly
+    // where the orthographic projection puts it. Two consequences the rest of the window depends on -- a scene does
+    // not jump when a camera arrives, and the fit computed from the scene's box stays valid at the target distance.
+    for (const ViewScene::View& start : {ViewScene::View{0.0, 90.0, 0.0}, ViewScene::View{-90.0, 0.0, 0.0},
+                                         ViewScene::View{35.0, 25.0, 0.0}}) {
+        const qp::views::model::OrbitCamera camera{start, 5.0};
+        const qp::views::model::ScreenBasis basis = camera.basis();
+        // A point in the target plane: its component along the camera direction is zero by construction.
+        const double along = 0.0;
+        const ViewScene::Point point{2.0 * basis.right_x + 1.0 * basis.up_x + along * basis.cam_x,
+                                     2.0 * basis.right_y + 1.0 * basis.up_y + along * basis.cam_y,
+                                     2.0 * basis.right_z + 1.0 * basis.up_z + along * basis.cam_z};
+        const std::pair<double, double> flat = project_orthographic(basis, point);
+        const std::pair<double, double> deep = camera.project(point);
+        REQUIRE(std::abs(deep.first - flat.first) < 1.0e-12);
+        REQUIRE(std::abs(deep.second - flat.second) < 1.0e-12);
+
+        // **In front projects larger, behind is not projected at all.** A point halfway to the camera is magnified by
+        // exactly two, because the scale is `distance / depth` and the depth is half the distance.
+        const ViewScene::Point nearer{point.x + 0.5 * camera.distance() * basis.cam_x,
+                                      point.y + 0.5 * camera.distance() * basis.cam_y,
+                                      point.z + 0.5 * camera.distance() * basis.cam_z};
+        const std::pair<double, double> close = camera.project(nearer);
+        REQUIRE(std::abs(close.first - 2.0 * flat.first) < 1.0e-9);
+        REQUIRE(std::abs(close.second - 2.0 * flat.second) < 1.0e-9);
+        REQUIRE(camera.depth(nearer) < camera.depth(point));
+
+        // **Beyond the camera, not merely on the far side of the origin.** The first version of this put the point
+        // at `-2 * distance` along the camera axis, which is a point the camera is still looking at -- further away
+        // than the origin, and visible. "Behind" means the depth is negative, and the depth is
+        // `distance - dot(cam, p)`, so the point has to be more than one distance *towards* the camera.
+        const ViewScene::Point behind{2.0 * camera.distance() * basis.cam_x,
+                                      2.0 * camera.distance() * basis.cam_y,
+                                      2.0 * camera.distance() * basis.cam_z};
+        REQUIRE_FALSE(camera.visible(behind));
+        REQUIRE(camera.depth(behind) < 0.0);
+        // The position of an unprojectable point is the origin rather than a mirrored coordinate: a caller that
+        // needs to know asks `visible`, because a *position* is the wrong place to encode "there is none".
+        const std::pair<double, double> none = camera.project(behind);
+        REQUIRE(none.first == 0.0);
+        REQUIRE(none.second == 0.0);
+    }
+}
+
+TEST_CASE("views.camera.orbiting_wraps_and_zooming_clamps", "[views][camera]") {
+    // A camera is three numbers and three rules, and each rule is here because the alternative is a user stuck:
+    // azimuth **wraps** (an orbit is a circle, and a drag past 360 must not hit a wall), elevation **clamps** one
+    // degree inside the poles (the basis's fallback there points the screen the other way, so a picture that flipped
+    // would be worse than one that stopped), and distance is **clamped** at both ends of a plausible range.
+    const qp::views::model::OrbitCamera start{ViewScene::View{10.0, 20.0, 0.0}, 4.0};
+    REQUIRE(start.view().azimuth_deg == 10.0);
+    REQUIRE(start.view().elevation_deg == 20.0);
+    // A view with no distance gets the default multiple of the scene's half-width: zero means "the host decides",
+    // which is what the scene's own contract says a zero distance means.
+    REQUIRE(std::abs(start.distance() - qp::views::model::kDefaultCameraDistanceFactor * 4.0) < 1.0e-12);
+
+    qp::views::model::OrbitCamera camera = start;
+    camera.orbit(350.0, 0.0);
+    REQUIRE(std::abs(camera.view().azimuth_deg - 0.0) < 1.0e-12);   // wrapped, not 360
+    camera.orbit(-20.0, 0.0);
+    REQUIRE(std::abs(camera.view().azimuth_deg - 340.0) < 1.0e-12); // and from the other side
+    camera.orbit(0.0, 1000.0);
+    REQUIRE(camera.view().elevation_deg < 90.0);
+    REQUIRE(camera.view().elevation_deg == 89.0);
+    camera.orbit(0.0, -1000.0);
+    REQUIRE(camera.view().elevation_deg == -89.0);
+    // The basis stays orthonormal at the clamp, which is the reason the clamp exists.
+    const qp::views::model::ScreenBasis basis = camera.basis();
+    REQUIRE(std::isfinite(basis.up_z));
+    REQUIRE(std::abs(basis.up_z - 1.0) > 0.0);
+
+    // Zooming: in and out by a factor, and the two clamps.
+    camera.set_distance(4.0);
+    camera.zoom(2.0);
+    REQUIRE(std::abs(camera.distance() - 8.0) < 1.0e-12);
+    camera.zoom(0.5);
+    REQUIRE(std::abs(camera.distance() - 4.0) < 1.0e-12);
+    camera.zoom(1000.0);
+    REQUIRE(std::abs(camera.distance() - qp::views::model::kMaxCameraDistanceFactor * 4.0) < 1.0e-12);
+    camera.zoom(1.0 / 100000.0);
+    REQUIRE(std::abs(camera.distance() - qp::views::model::kMinCameraDistanceFactor * 4.0) < 1.0e-12);
+    // A factor that is not a positive number is ignored rather than applied: a wheel event of zero notches, or a
+    // NaN from a caller, must not leave the camera at an unusable distance.
+    const double before = camera.distance();
+    camera.zoom(0.0);
+    camera.zoom(-1.0);
+    camera.zoom(std::nan(""));
+    REQUIRE(camera.distance() == before);
+    camera.set_distance(std::nan(""));
+    REQUIRE(camera.distance() > 0.0);
+
+    // A half-width of zero or a non-finite one falls back to one, so a scene with no bounds still has a camera.
+    const qp::views::model::OrbitCamera degenerate{ViewScene::View{0.0, 90.0, 0.0}, 0.0};
+    REQUIRE(degenerate.half_width() == 1.0);
+    REQUIRE(degenerate.distance() > 0.0);
+}
 
 TEST_CASE("views.scene.the_basis_is_orthonormal_and_survives_the_poles", "[views][scene]") {
     // The basis is the whole convention: everything a user sees is `dot(point, right)` and `dot(point, up)`. It has

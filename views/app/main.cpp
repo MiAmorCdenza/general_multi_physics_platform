@@ -446,7 +446,61 @@ int main(int argc, char** argv) {
         if (!offered.ok) {
             qWarning().noquote() << "magnetosphere demo cannot be offered:" << offered.refusal.c_str();
         }
-        demos.push_back(std::move(flagship));
+        // **The standard dipole, beside the flagship.** The question that produced this preset was whether the
+    // magnetosphere picture is a dipole -- and it is not, by construction: the flagship adds a tail current sheet, a
+    // magnetopause shield, a draping layer and a mix, so its lines are compressed on the day side and swept back on
+    // the night side. Those are the right physics for a magnetosphere and the wrong thing to compare a dipole
+    // against. This is the comparison: one centred dipole at zero tilt, and the field-line declaration that draws
+    // it -- `r = L sin^2(theta)`, the closed form
+    // `magnetosphere.trace.every_point_of_a_dipole_line_is_the_closed_form` asserts point by point (worst relative
+    // deviation 0.0097 over six shells, which is the 0.25 R_E lattice and not the model).
+    {
+        using qp::plugins::magnetosphere::FieldNodes;
+        using qp::plugins::magnetosphere::RenderNodes;
+        qp::views::model::GraphBlueprint standard;
+        standard.label = "dipole (standard)";
+        const auto node = [&standard](const char* type, const char* name) {
+            qp::views::model::BlueprintNode n;
+            n.type_name = type;
+            n.name = name;
+            standard.nodes.push_back(std::move(n));
+            return standard.nodes.size() - 1;
+        };
+        const auto set = [&standard](std::size_t index, qp::graph::PortNumber port, qp::ports::Value value) {
+            standard.nodes[index].params.emplace_back(port, std::move(value));
+        };
+        const auto wire = [&standard](std::size_t from, qp::graph::PortNumber from_port, std::size_t to,
+                                      qp::graph::PortNumber to_port) {
+            qp::views::model::BlueprintWire w;
+            w.from = from;
+            w.from_port = from_port;
+            w.to = to;
+            w.to_port = to_port;
+            standard.wires.push_back(w);
+        };
+
+        const std::size_t field = node(FieldNodes::kDipoleType, "dipole");
+        set(field, FieldNodes::kPortTiltDegrees, qp::ports::Value{0.0});
+        set(field, FieldNodes::kPortMomentAm2, qp::ports::Value{qp::plugins::magnetosphere::kDipoleMomentAm2});
+        // The flagship's own lattice, so the two pictures differ in the *field* and not in the sampling.
+        for (qp::graph::PortNumber axis = 0; axis < 3; ++axis) {
+            set(field, static_cast<qp::graph::PortNumber>(FieldNodes::kPortOrigin0 + axis),
+                qp::ports::Value{-8.0 * re});
+            set(field, static_cast<qp::graph::PortNumber>(FieldNodes::kPortSpacing0 + axis),
+                qp::ports::Value{0.25 * re});
+            set(field, static_cast<qp::graph::PortNumber>(FieldNodes::kPortCount0 + axis),
+                qp::ports::Value{65.0});
+        }
+
+        const std::size_t lines = node(RenderNodes::kFieldLinesType, "lines");
+        set(lines, RenderNodes::kPortLineCount, qp::ports::Value{std::int64_t{7}});
+        set(lines, RenderNodes::kPortSeedStart, qp::ports::Value{2.0});
+        set(lines, RenderNodes::kPortSeedEnd, qp::ports::Value{8.0});
+        wire(field, FieldNodes::kPortField, lines, RenderNodes::kPortField);
+        demos.push_back(std::move(standard));
+    }
+
+    demos.push_back(std::move(flagship));
     }
 #endif
 

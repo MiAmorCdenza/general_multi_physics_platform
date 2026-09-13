@@ -32,6 +32,8 @@
 #include <qp/plugins/magnetosphere/boris.hpp>
 #include <qp/plugins/magnetosphere/dipole.hpp>
 #include <qp/plugins/magnetosphere/field_nodes.hpp>
+#include <qp/plugins/magnetosphere/render_nodes.hpp>
+#include <qp/plugins/magnetosphere/trace.hpp>
 #include <qp/plugins/magnetosphere/geomagnetic.hpp>
 #include <qp/plugins/magnetosphere/plan.hpp>
 #include <qp/plugins/magnetosphere/source_nodes.hpp>
@@ -1917,6 +1919,92 @@ TEST_CASE("magnetosphere.field_nodes.the_boundary_publishes_its_own_radius", "[m
     const std::uint64_t tail_column = static_cast<std::uint64_t>(
         std::lround((-12.0 * re - grid.origin_m.x) / grid.spacing_m.x));
     REQUIRE(gfield::get_component(radius, (tail_column * grid.ny + 0) * grid.nz + nose_row, 0) > 4.0 * standoff);
+}
+
+TEST_CASE("magnetosphere.field_nodes.the_node_bakes_the_closed_form_dipole", "[magnetosphere]") {
+    // **The application's own path, measured.** `test_magnetosphere_trace.cpp` traces a table the test built; the
+    // window traces a table the *node* baked. Two paths, one field, and only one of them was ever checked against
+    // the closed form -- so a node that read a port wrong, defaulted the moment, or ignored a grid parameter would
+    // leave every case green and draw something else.
+    Scene scene;
+    const graph::NodeId dipole = scene.add(FieldNodes::kDipoleType);
+    scene.set(dipole, FieldNodes::kPortTiltDegrees, 0.0);
+    scene.set(dipole, FieldNodes::kPortMomentAm2, kDipoleMomentAm2);
+    const double re = kEarthRadiusM;
+    for (graph::PortNumber axis = 0; axis < 3; ++axis) {
+        scene.set(dipole, static_cast<graph::PortNumber>(FieldNodes::kPortOrigin0 + axis), -8.0 * re);
+        scene.set(dipole, static_cast<graph::PortNumber>(FieldNodes::kPortSpacing0 + axis), 0.25 * re);
+        scene.set(dipole, static_cast<graph::PortNumber>(FieldNodes::kPortCount0 + axis), 65.0);
+    }
+    // **No render declaration**, and that is deliberate: a render node is a declaration that contributes nothing to
+    // the field, the tracer takes its seeds directly, and this fixture mounts the field, source and pusher types
+    // rather than the render ones -- so a declaration here would only make the plan refuse an unregistered type. The
+    // item's own seed logic has its cases; this one is about the table.
+    REQUIRE(scene.bake().has_value());
+    const gfield::FieldValue table =
+        scene.fields.view(gfield::FieldKey{dipole.index, FieldNodes::kPortField});
+    REQUIRE(gfield::is_readable(table));
+    // Per axis, the way every other dimension assertion in this file is written: `FieldDim` has no `operator==`,
+    // which is a deliberate part of the ABI -- a dimension is compared component by component so that a change to
+    // the tags cannot silently make two different dimensions equal.
+    const qp::abi::FieldDim tesla = tesla_dimension();
+    REQUIRE(table.desc.dimension.M == tesla.M);
+    REQUIRE(table.desc.dimension.T == tesla.T);
+    REQUIRE(table.desc.dimension.I == tesla.I);
+
+    // The lattice the node actually baked: read back from the table's own descriptor rather than assumed, because a
+    // case that assumed the grid would be testing its own arithmetic instead of the node's.
+    REQUIRE(table.desc.count[0] == 65);
+    REQUIRE(table.desc.count[1] == 65);
+    REQUIRE(table.desc.count[2] == 65);
+
+    const FieldTracer tracer{table, Vec3{-8.0 * re, -8.0 * re, -8.0 * re}, Vec3{0.25 * re, 0.25 * re, 0.25 * re}};
+    REQUIRE(tracer.usable());
+
+    // The same seeds the field-line item uses by default (2 to 8 earth radii, seven of them), so this traces what
+    // the window would trace; eight is left out because the lattice ends there and a seed on the boundary is
+    // reported as `left_table` before the first step.
+    const std::vector<double> shells{2.0, 2.5, 3.5, 4.5, 5.5, 6.5, 7.0};
+    for (const double l_shell : shells) {
+        const FieldLine line = tracer.trace(Vec3{l_shell, 0.0, 0.0});
+        INFO("L = " << l_shell << ": " << line.points_re.size() << " points, stop " << to_string(line.stop));
+        REQUIRE(line.usable());
+        REQUIRE(line.stop == TraceStop::hit_surface);
+        // The whole curve against `r = L sin^2(theta)`, with the same bound the fixture case uses: 0.02 relative,
+        // against a measured worst of 0.0097. If the node baked a different field, this is where it shows.
+        for (const Vec3& point : line.points_re) {
+            const double r = norm(point);
+            const double cos_theta = std::clamp(std::abs(point.z) / r, 0.0, 1.0);
+            const double predicted = l_shell * (1.0 - cos_theta * cos_theta);
+            REQUIRE(std::abs(r - predicted) / l_shell < 0.02);
+        }
+        // The apogee is the seed: the widest point of the shell is its equatorial crossing, and a node that
+        // defaulted the moment to zero would give a straight line instead, which this catches.
+        double widest = 0.0;
+        for (const Vec3& point : line.points_re) widest = std::max(widest, norm(point));
+        REQUIRE(std::abs(widest - l_shell) < 0.02 * l_shell);
+    }
+
+    // ... and the **magnitude**, which the shape cannot see: a dipole scaled by any constant has exactly the same
+    // field lines, so a node that baked the right shape at the wrong scale would pass every assertion above. The
+    // lattice has a node exactly on the equator at one earth radius -- `-8 + 0.25 * 36 = +1`, `y = z = 0` -- and
+    // the field there is the published equatorial surface field by definition of that constant.
+    const std::size_t i = 36;
+    const std::size_t j = 32;
+    const std::size_t k = 32;
+    REQUIRE(-8.0 + 0.25 * static_cast<double>(i) == 1.0);
+    REQUIRE(table.desc.count[0] == 65);
+    const std::size_t at = (i * static_cast<std::size_t>(table.desc.count[1]) + j) *
+                               static_cast<std::size_t>(table.desc.count[2]) +
+                           k;
+    const double bx = gfield::get_component(table, at, 0);
+    const double by = gfield::get_component(table, at, 1);
+    const double bz = gfield::get_component(table, at, 2);
+    REQUIRE(std::abs(std::hypot(bx, std::hypot(by, bz)) - kEquatorialSurfaceFieldT) < 1.0e-12);
+    // The direction is the other half of the same statement: at the equator the field is **along the axis**, so the
+    // two in-plane components vanish. A moment rotated into the equatorial plane would keep the magnitude and lose
+    // this -- which is the failure a tilt leaking in from the node's default would produce.
+    REQUIRE(std::abs(by) < 1.0e-12);
 }
 
 TEST_CASE("magnetosphere.field_nodes.the_layered_atmosphere_has_no_jump", "[magnetosphere]") {
