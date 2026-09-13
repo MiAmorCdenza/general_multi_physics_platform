@@ -566,6 +566,127 @@ public:
     /// @brief The drag table, a scalar lattice in per second.
     static constexpr qp::graph::PortNumber kPortAtmosphereOut = 1;
 
+    /// @brief The dayside draping: the external field wrapped around the boundary, as its own node.
+    ///
+    /// ## What it is, and which of the reference's four modes it is
+    ///
+    /// The reference's `envelope.py` has an `mp_model` parameter with four settings, and one of them -- `mp_model = 2`
+    /// -- adds a **draped** field on the dayside rather than passing the IMF through. The construction is an image
+    /// dipole: a moment `M = -B_ext r_mp^3 / 2` is placed at the origin, its field is added to the external one, and
+    /// the sum is scaled by a compression factor that grows towards the nose:
+    ///
+    ///     compress = clip( 3.5 (r_mp / r)^2, 1, 5 )
+    ///     B_image  = ( 3 (M . rhat) rhat - M ) / r^3
+    ///     B_draped = compress ( B_ext + B_image ),  faded in towards the dayside
+    ///
+    /// The dipole is antiparallel to the external field, so on the sunward axis the two **cancel**: the radial
+    /// component vanishes at the nose and the tangential component is amplified -- the field wraps around the
+    /// obstacle instead of piling up on it. That is the physics, and it is exact in closed form on the `+x` axis:
+    ///
+    ///     B_x = B_ext,x compress ( 1 - (r_mp/r)^3 )
+    ///     B_y = B_ext,y compress ( 1 + (r_mp/r)^3 / 2 )
+    ///
+    /// gated by the boundary's own weight and faded in from the tail side -- see `kPortDrapeWeight` for the gate and
+    /// the size of the number it removes.
+    ///
+    /// so the case compares the baked table against those two expressions at every node of that axis, including the
+    /// **clipped** region inside `0.837 r_mp` where `compress` has saturated at five.
+    ///
+    /// ## Why it is a node and not a fifth setting
+    ///
+    /// `mp_model` is a switch inside one node that chooses between four compositions, and this kit's answer to that
+    /// shape is the one written on `field.sum`: each node publishes one field and **the composition is the wiring**.
+    /// Mode 1 is the external field wired into `field.mix`; mode 2 is this node between them; the tail-side mode is
+    /// a different third input. A parameter that changed what the node *is* would make every graph that used it
+    /// unreadable without opening the node.
+    ///
+    /// ## Two things this implementation adds, and neither is decoration
+    ///
+    /// The image term is a **far-field** representation of the currents on the boundary, so the radius it is built
+    /// from is capped at the observation distance: with `r < r_mp` the expansion is being used inside its own source
+    /// region, where it grows without bound -- the reference's own parameters put `(r_mp/r)^3` at `1.6e7` at
+    /// `x = -10 R_E`, and `1.7e6` at the origin of a lattice whose surface stands twelve earth radii away. The cap
+    /// says what the expansion can mean: the image may cancel the external field at the boundary and never grow
+    /// past that. Outside the boundary, where this construction is a model at all, `r >= r_mp` and the cap does
+    /// nothing. It applies to the **moment** as much as to the compression -- a first version capped only the
+    /// latter and left the image at `512 B` an earth radius from the origin, which the gate then leaked into the
+    /// table as one and a half times the field it wraps.
+    ///
+    /// A consequence worth writing down: with the ratio capped at one the compression cannot exceed `3.5`, so the
+    /// reference's ceiling of five is **unreachable** here and is kept as a guard rather than as a live clamp. What
+    /// the clamp does do is the other side of it -- holding the compression up at one far downwind, where
+    /// `(r_mp/r)^2` falls away -- and the case counts the nodes where it acts.
+    ///
+    /// And the output is **gated on the boundary's own weight** (`kPortDrapeWeight`): inside the surface it is the
+    /// plain external field, because that is what an external field is where no boundary current has bent it, and
+    /// because the ungated image term downwind is `1e8` times the external field -- a number the reference publishes
+    /// inside a mask and multiplies by a weight of nearly zero later. The case measures both: the ungated value at
+    /// the mask's edge, and the largest ratio anywhere in the table this node publishes.
+    ///
+    /// ## The mask the reference uses is not ported, and the number is here
+    ///
+    /// The reference applies the draping only where `x > -10 R_E` -- an optimisation, since beyond that the fade
+    /// below has already taken it to nearly nothing -- and leaves the external field untouched outside the mask.
+    /// At the mask's edge the fade weight is `1 / (1 + exp(2.5)) = 0.076`, so the reference's field **jumps** by
+    /// that fraction of the draping there, which is a current sheet nobody asked for. This node applies the fade
+    /// everywhere, which costs one pass over a lattice it is already visiting and removes the jump; the case
+    /// measures the continuity that results.
+    ///
+    /// ## The fade
+    ///
+    /// `w = 1 / (1 + exp(-(x + 5 R_E) / (2 R_E)))`: nothing downwind, everything at the nose, half applied at
+    /// `x = -5 R_E`. That is the reference's own blend, kept because it is what makes the tailward end of this
+    /// construction agree with the uniform external field -- a hard edge there would be a second current sheet.
+    static constexpr const char* kDrapeType = "field.draping";
+
+    /// @brief The external field to wrap: the IMF, as a vector table. Required.
+    static constexpr qp::graph::PortNumber kPortDrapeField = 1;
+    /// @brief The boundary's radius at every node, in metres: the **table** `field.magnetopause` publishes. Required.
+    static constexpr qp::graph::PortNumber kPortDrapeRadius = 2;
+
+    /// @brief The boundary's **weight**, which is what decides where this construction is a model at all. Required.
+    ///
+    /// ## The blow-up this port exists to prevent, and its size
+    ///
+    /// The image moment is `M = -B r_mp^3 / 2`, so its field at distance `r` carries a factor `(r_mp/r)^3`. That
+    /// factor is one at the nose, small outside -- and **enormous wherever the surface has run away**, which the Shue
+    /// form does downwind: with `cos theta` clamped at the antipode, the reference's own parameters give
+    /// `r_mp = 2284 R_E` at `x = -3 R_E`, so the image term is `7.6e2` cubed, or **4.4e8** times the external field.
+    /// The reference is not wrong to produce that number, because it multiplies its external field by the boundary's
+    /// outside weight before anything reads it and that weight is zero there. But it *publishes* the number, inside
+    /// a mask at `x > -10 R_E` whose edge it then jumps across.
+    ///
+    /// This node instead gates its own output on the boundary's weight -- the same table the composition uses, on a
+    /// wire, so the gate and the weight cannot disagree. Inside the boundary the output is the plain external field,
+    /// which is what an external field is where no boundary current has bent it; outside it is the wrapped field. The
+    /// case measures the ungated value at the mask edge as the number that justifies the gate, and asserts that the
+    /// table this node publishes never exceeds a few times the external field anywhere.
+    static constexpr qp::graph::PortNumber kPortDrapeWeight = 3;
+
+    /// @brief The external field, wrapped. A vector table on the input's lattice.
+    static constexpr qp::graph::PortNumber kPortDrapeOut = 1;
+
+    /// @brief How strongly the field is compressed at the nose: the reference's `3.5`.
+    static constexpr double kDrapeCompression = 3.5;
+    /// @brief The floor the compression is clamped to: the reference's `1`, which is "no compression at all".
+    static constexpr double kDrapeCompressionMin = 1.0;
+    /// @brief The ceiling: the reference's `5`, reached inside `0.837 r_mp`.
+    ///
+    /// The ceiling is what keeps the construction finite at the origin, where `3.5 (r_mp/r)^2` would diverge; the
+    /// reference clips it and so does this. It is also the reason the case's closed form is compared **including**
+    /// the clipped region: a table that had forgotten the clip would agree with the formula everywhere outside it.
+    static constexpr double kDrapeCompressionMax = 5.0;
+    /// @brief Where the fade is half applied, in earth radii: the reference's `-5`.
+    static constexpr double kDrapeFadeCentreRe = -5.0;
+    /// @brief The fade's width, in earth radii: the reference's `2`.
+    static constexpr double kDrapeFadeWidthRe = 2.0;
+    /// @brief The radius floor used when `r` is small, in earth radii: the reference's `0.1`.
+    ///
+    /// Not a physical scale but a guard: `1 / r^3` diverges at the origin, the radius table is finite there (the
+    /// surface is computed from an angle that is undefined at the centre), and a node that produced infinities would
+    /// poison every consumer downstream. The reference floors it at a tenth of an earth radius and so does this.
+    static constexpr double kDrapeRadiusFloorRe = 0.1;
+
     /// @brief The tail: a **Harris current sheet**, the analytic model of the stretched nightside.
     ///
     /// The reference implementation's `tail.py` is "the distant tail's analytic model", and the analytic tail is the
@@ -1096,6 +1217,26 @@ public:
     /// answer this kit gives to "can a parameter be wired?" -- the parameter stays typed and keeps its meaning
     /// alone, the socket is optional, and the choice is visible on the canvas rather than buried in a node.
     static constexpr qp::graph::PortNumber kPortMagnetopauseKp = 13;
+
+    /// @brief The surface's own radius, as a **second output**: the number two nodes must not each compute.
+    ///
+    /// `r_mp(theta) = r0 (2 / (1 + cos theta))^alpha` is what this node already evaluates to build its weight; this
+    /// port publishes the same number as a **table in metres**, so that the draping node (which needs the surface
+    /// radius at every node) can read it on a wire instead of recomputing it from its own copy of the two
+    /// parameters. That distinction is the whole reason the port exists: a second copy is a second answer to "where
+    /// is the boundary", and the two would agree until somebody edited one of them -- after which the picture would
+    /// show a draped field wrapping around a surface that is not the one the weight was built from. **The wire is
+    /// the agreement.**
+    ///
+    /// It is useful on its own as well, which is why it is a port rather than an internal value: the boundary's
+    /// shape is the thing to plot against Shue's, and a reader who wants to check `r0` and `alpha` can now do it
+    /// from the table instead of from the model that produced it.
+    ///
+    /// Numbered 2 because output numbers are their own sequence -- `ports_are_usable` checks inputs and outputs
+    /// separately, which is how `field.mask`'s single weight output can be port 1 beside eight input ports. Port 1
+    /// is already this node's weight, so the radius is 2, and a consumer addressing an output says which one by
+    /// number exactly as it does for an input.
+    static constexpr qp::graph::PortNumber kPortMagnetopauseRadius = 2;
 
     /// @brief The default standoff distance, in earth radii: the textbook ten at ordinary solar wind pressure.
     ///
@@ -1910,6 +2051,49 @@ public:
                             qp::graph::field::FieldSet& fields);
 
 /**
+ * @brief Wraps an external field around a boundary: the reference's dayside draping.
+ *
+ * The model -- the image dipole, the compression, the fade and the mask this implementation does **not** copy -- is
+ * argued on `kDrapeType`. What belongs here is what the arithmetic decides:
+ *
+ *   - the **radius comes in as a table** and is never recomputed. That is the whole reason `field.magnetopause`
+ *     publishes it: two nodes each deriving "where is the boundary" from their own copy of the same two parameters
+ *     is the two-sources-of-truth failure this repository keeps removing, and a draped field wrapping a surface
+ *     that is not the one the weight came from looks entirely plausible.
+ *   - the two tables must be on **one lattice**, checked before anything is allocated, for the reason `bake_sum`
+ *     refuses two lattices that disagree: a compression factor read from another region than the field it
+ *     multiplies is a model of nothing.
+ *   - the **position** is floored at `kDrapeRadiusFloorRe` because `1/r^3` diverges at the origin, while the radius
+ *     is not: the surface table is finite there (it is built from an angle that is undefined at the centre), so a
+ *     node that produced infinities would poison every consumer downstream.
+ *
+ * @param external The field to wrap, a vector volume. Borrowed.
+ * @param radius   The boundary's radius at every node, in metres: a scalar volume on the same lattice. Borrowed.
+ * @param weight   The boundary's inside weight, on the same lattice. Borrowed. It is the gate: `1 - w` is outside,
+ *                 and outside is where this construction is a model at all.
+ * @param grid     The lattice both are on. Checked against both tables rather than trusted.
+ * @param key      Who is publishing it.
+ * @param fields   The store. Borrowed; the samples are moved into it on success.
+ *
+ * @ownership   owns the samples it publishes on success
+ * @thread      main
+ * @pre         none
+ * @post        On true, `fields.view(key)` is a readable vector volume in the external field's dimension, whose
+ *              every node is `fade * compress * (B + B_image) + (1 - fade) * B`
+ * @invariant   On false the store is unchanged
+ * @errors      Returns false -- never throws -- for an unreadable input, a radius table that is not scalar, a
+ *              dimension or element mismatch, or two tables that disagree about their lattice
+ * @complexity  O(points)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.the_draping_wraps_the_field_around_the_nose
+ */
+[[nodiscard]] bool bake_draping(const qp::graph::field::FieldValue& external,
+                                const qp::graph::field::FieldValue& radius,
+                                const qp::graph::field::FieldValue& weight, const GridSpec& grid,
+                                qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
+
+/**
  * @brief Blends two fields along `x` with the correction that keeps the result divergence-free.
  *
  * The model, the derivation and the reference's `0.1` are argued on `kBlendType`. What belongs here is how the
@@ -2058,7 +2242,8 @@ public:
  * @tests       magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose
  */
 [[nodiscard]] bool bake_magnetopause(const FieldNodes::MagnetopauseSpec& spec, const GridSpec& grid,
-                                     qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
+                                     qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields,
+                                     qp::graph::field::FieldKey radius_key);
 
 /**
  * @brief Blends two fields by a published weight table, with the vector-potential divergence correction.

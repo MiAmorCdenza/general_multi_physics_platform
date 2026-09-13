@@ -319,6 +319,31 @@ private:
 }
 
 /**
+ * @brief The dimension of a length: metres, and nothing else.
+ *
+ * `qp::units::dims::length` is the `units` module's own record of the same thing, and it is a *different type* --
+ * a `units::Dim` carries the base quantities a dimension is made of, while `abi::FieldDim` is the exponents an
+ * `abi::LatticeDesc` stores. The bake that publishes the magnetopause's surface radius needs the second, so this
+ * is where the two meet, once, with the correspondence written down: one length, no mass, no time, no current.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        The exponents of a length
+ * @invariant   Constant
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.the_boundary_publishes_its_own_radius
+ */
+[[nodiscard]] inline qp::abi::FieldDim length_dimension() noexcept {
+    qp::abi::FieldDim dim;
+    dim.L = 1;
+    return dim;
+}
+
+/**
  * @brief The dimension of an electric field: kg m / (A s^3) -- one length, one less inverse time than tesla.
  *
  * @ownership   pure

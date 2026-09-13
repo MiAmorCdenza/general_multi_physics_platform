@@ -121,6 +121,15 @@ namespace pp = qp::graph::particles;
     return std::pair<double, double>{scale, thickness};
 }
 
+/// @brief A key for the **second** table `bake_magnetopause` publishes, derived from the weight's key.
+///
+/// Derived rather than typed so that a case cannot accidentally give two magnetopause nodes the same radius key --
+/// and so that adding the radius output to this bake did not require every existing case to invent a number. The
+/// offset is large enough to sit outside the port numbers the tests use for their own tables.
+[[nodiscard]] qp::graph::field::FieldKey radius_key_for(qp::graph::field::FieldKey weight) {
+    return qp::graph::field::FieldKey{weight.node + 1000, weight.port};
+}
+
 /// @brief The descriptor of `name` in a type table, or a failure when this build does not offer it.
 ///
 /// **By name, and the reason is a defect this file has now had twice.** These cases used `types[9]` and its
@@ -199,7 +208,7 @@ struct Scene final {
         // numbers, which is the composition principle -- a shielding field is `mul(convection, shield)` -- and three
         // of them could not be composed out of the others: no wiring of sums and products keeps a field
         // divergence-free (the two blends), and none of them moves a field onto another lattice (the resampler).
-        REQUIRE(FieldNodes::mount(host) == 16);
+        REQUIRE(FieldNodes::mount(host) == 17);
         REQUIRE(SourceNodes::mount(host) == 2);
         REQUIRE(PusherNodes::mount(host) == 2);
     }
@@ -291,14 +300,12 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // declaration never made. The check is that every port the reader asks for exists, with the type the reader
     // needs, and that the output is the field port a pusher can be wired to.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    // Seven field models: the dipole, the uniform magnetic field, the sum, the uniform electric field, the region
-    // mask, the multiplier and the convection field. Each is a **type of its own** with its own port numbers,
-    // which is the composition principle -- a shielding field is `mul(convection, shield)`, not a switch inside a
-    // node.
+    // Fifteen field models, one type each with its own port numbers, which is the composition principle -- a
+    // shielding field is `mul(convection, shield)`, and the reference's `mp_model` switch is a node in a wire.
     // **The size of the field-type table is asserted here and nowhere else.** Every other case in this file
     // asks for the type it is about by name, so adding a node type moves no assertion but this one, and a
     // missing type fails the case about *that* node rather than one about its neighbour.
-    REQUIRE(types.size() == 16);
+    REQUIRE(types.size() == 17);
     // The mask is last, and its output is the one thing that distinguishes it from every other type here: a
     // **scalar** field. The declaration and the bake have to agree about that, because a consumer reads its
     // samples by the component count the registry publishes.
@@ -363,7 +370,7 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     qp::host::PluginHost host{qp::plugin::Capability::node_types};
     // Fourteen field models now, and the count is asserted rather than assumed: it is the one place a new type
     // announces itself in the test suite, so a type that silently failed to register is a failure here.
-    REQUIRE(FieldNodes::mount(host) == 16);
+    REQUIRE(FieldNodes::mount(host) == 17);
     REQUIRE(host.node_types().find(FieldNodes::kDipoleType) != nullptr);
     REQUIRE(FieldNodes::mount(host) == 0);
 }
@@ -1611,6 +1618,307 @@ TEST_CASE("magnetosphere.source.the_kp_index_sets_the_tails_lobe_field", "[magne
     REQUIRE(plain_lobe != lobe);
 }
 
+TEST_CASE("magnetosphere.field_nodes.the_draping_wraps_the_field_around_the_nose", "[magnetosphere]") {
+    // **The reference's `mp_model = 2`**, which is the last of the four magnetosheath compositions and the only one
+    // that is neither the plain IMF nor a Fortran model. It is an **image dipole**: a moment `M = -B r_mp^3 / 2`
+    // antiparallel to the external field, so that on the sunward axis the two cancel, the whole sum compressed
+    // towards the nose and faded in from the tail side.
+    //
+    // The case compares the baked table against the closed form on the `+x` axis, at **every** node of it:
+    //
+    //     B_x = B_ext,x compress ( 1 - (r_mp/r)^3 )          B_y = B_ext,y compress ( 1 + (r_mp/r)^3 / 2 )
+    //
+    // wrapped in the fade. That is the entire construction -- the image dipole, the compression, its clip at five,
+    // and the blend -- so a table that got any one of them wrong disagrees here rather than in a picture.
+    const double re = kEarthRadiusM;
+    const double standoff = 8.0 * re;
+    const GridSpec grid{Vec3{-16.0 * re, 0.0, -8.0 * re}, Vec3{1.0 * re, 1.0 * re, 1.0 * re}, 33, 2, 17};
+    gfield::FieldSet fields;
+
+    // The external field: the same Parker-spiral IMF the demo uses, on this lattice, so the direction is a real one
+    // rather than a convenient axis.
+    FieldNodes::ImfSpec imf_spec;
+    imf_spec.kp = 4.0;
+    const gfield::FieldKey imf_key{91, FieldNodes::kPortField};
+    REQUIRE(bake_imf(imf_spec, grid, imf_key, fields));
+    const gfield::FieldValue imf = fields.view(imf_key);
+    REQUIRE(gfield::is_readable(imf));
+
+    // The boundary's radius, from the node that owns the surface.
+    FieldNodes::MagnetopauseSpec boundary;
+    boundary.standoff_m = standoff;
+    boundary.flaring = 0.58;
+    boundary.width_m = re;
+    const gfield::FieldKey weight_key{92, FieldNodes::kPortWeight};
+    REQUIRE(bake_magnetopause(boundary, grid, weight_key, fields, gfield::FieldKey{92, 2}));
+    const gfield::FieldValue radius = fields.view(gfield::FieldKey{92, 2});
+    REQUIRE(gfield::is_readable(radius));
+
+    const gfield::FieldKey drape_key{93, FieldNodes::kPortDrapeOut};
+    const gfield::FieldValue boundary_weight = fields.view(weight_key);
+    REQUIRE(gfield::is_readable(boundary_weight));
+    REQUIRE(bake_draping(imf, radius, boundary_weight, grid, drape_key, fields));
+    const gfield::FieldValue draped = fields.view(drape_key);
+    REQUIRE(gfield::is_readable(draped));
+    REQUIRE(draped.is_vector());
+    // The external field's own dimension: draping rearranges a field, it does not change what it is.
+    REQUIRE(draped.desc.dimension.M == imf.desc.dimension.M);
+    REQUIRE(draped.desc.dimension.T == imf.desc.dimension.T);
+
+    // ---- The closed form, at every node of the sunward axis --------------------------------------------------------
+    const auto axis_at = [&](double x_re) {
+        const std::uint64_t column =
+            static_cast<std::uint64_t>(std::lround((x_re * re - grid.origin_m.x) / grid.spacing_m.x));
+        return (column * grid.ny + 0) * grid.nz + static_cast<std::uint64_t>(
+                                                      std::lround((0.0 - grid.origin_m.z) / grid.spacing_m.z));
+    };
+    const Vec3 external{gfield::get_component(imf, 0, 0), gfield::get_component(imf, 0, 1),
+                        gfield::get_component(imf, 0, 2)};
+    REQUIRE(external.x != 0.0);
+    REQUIRE(external.y != 0.0);
+    // The nose is a node: the standoff is eight earth radii and the spacing one, so the surface's radius is exactly
+    // the radius table's value there and `(r_mp/r)^3` is exactly one.
+    REQUIRE(gfield::get_component(radius, axis_at(8.0), 0) == standoff);
+    double worst = 0.0;
+    double worst_x = 0.0;
+    std::size_t clipped = 0;
+    std::size_t nose_nodes = 0;
+    for (double x_re = -15.0; x_re <= 15.0; x_re += 1.0) {
+        // **The origin is excluded, and it is the only node excluded.** The construction is written in terms of
+        // `rhat`, which does not exist at `r = 0`: the implementation floors the *position* and gets `rhat = 0`,
+        // exactly as the reference does with its own `safe_r`, and the closed form below assumes an axis direction
+        // the origin does not have. The value there is therefore asserted on its own, below, rather than compared
+        // against a formula that does not apply to it.
+        if (x_re == 0.0) continue;
+        const double x = x_re * re;
+        const double r = std::abs(x);
+        const double surface = gfield::get_component(radius, axis_at(x_re), 0);
+        // **The cap is part of the model**, so it is part of the closed form: `min(r_mp, r) / r` is what the image's
+        // far-field expansion can mean, and the case mirrors it rather than checking a formula the implementation
+        // deliberately does not use.
+        const double ratio = std::min(surface, r) / r;
+        const double raw_compress = FieldNodes::kDrapeCompression * ratio * ratio;
+        // The clamp that **acts** is the floor: with the ratio capped at one, `3.5 ratio^2` cannot reach the
+        // reference's ceiling of five, and it does fall below one far downwind and inside the cavity.
+        if (raw_compress < FieldNodes::kDrapeCompressionMin) ++clipped;
+        const double compress =
+            std::clamp(raw_compress, FieldNodes::kDrapeCompressionMin, FieldNodes::kDrapeCompressionMax);
+        const double fade =
+            1.0 / (1.0 + std::exp(-(x - FieldNodes::kDrapeFadeCentreRe * re) / (FieldNodes::kDrapeFadeWidthRe * re)));
+        const double cube = ratio * ratio * ratio;
+        // **The gate is part of the closed form**, because it is part of the model: the boundary's own weight says
+        // where a draped magnetosheath field exists at all, and outside it the value here is the plain external
+        // field. Without the gate the expected values on the tail side of this axis would be `1e8` times the
+        // external field -- see the measurement below, which is what justifies the gate rather than a comment.
+        const double gate = 1.0 - gfield::get_component(boundary_weight, static_cast<std::size_t>(axis_at(x_re)), 0);
+        const double wrapped_x = compress * external.x * (1.0 - cube);
+        const double wrapped_y = compress * external.y * (1.0 + 0.5 * cube);
+        const double expected_x = gate * (fade * wrapped_x + (1.0 - fade) * external.x) +
+                                  (1.0 - gate) * external.x;
+        const double expected_y = gate * (fade * wrapped_y + (1.0 - fade) * external.y) +
+                                  (1.0 - gate) * external.y;
+        const std::size_t at = static_cast<std::size_t>(axis_at(x_re));
+        const double actual_x = gfield::get_component(draped, at, 0);
+        const double actual_y = gfield::get_component(draped, at, 1);
+        const double this_worst = std::max(std::abs(actual_x - expected_x) / std::abs(external.x),
+                                           std::abs(actual_y - expected_y) / std::abs(external.y));
+        if (this_worst > worst) { worst = this_worst; worst_x = x_re; }
+        // **The radial component of the *wrapped* field is exactly zero at the nose**, which is the physics of the
+        // construction rather than a coincidence: the image moment is antiparallel to the external field and sized
+        // so that `1 - (r_mp/r)^3` vanishes there. It is measured by dividing the gate and the fade back out of the
+        // table -- and it is an equality, not a bound, because the nose is a lattice node, `r_mp` there is the
+        // standoff to the last bit (`pow(1.0, alpha)` is one), and `r` is the standoff too.
+        if (x_re == 8.0) {
+            const double gate_here =
+                1.0 - gfield::get_component(boundary_weight, static_cast<std::size_t>(axis_at(x_re)), 0);
+            const double fade_here =
+                1.0 / (1.0 + std::exp(-(x - FieldNodes::kDrapeFadeCentreRe * re) /
+                                      (FieldNodes::kDrapeFadeWidthRe * re)));
+            REQUIRE(gate_here > 0.0);
+            REQUIRE(fade_here > 0.0);
+            // **Both factors come out, and the first version forgot one.** The table holds
+            // `gate (fade wrapped + (1 - fade) plain) + (1 - gate) plain`; dividing out the gate alone leaves the
+            // blend, whose tail-side term is the fade's own 0.0015 -- which is exactly what the first version
+            // measured, printed as `-0.0` and compared against zero. The wrapped part is what the cancellation is
+            // about, so the fade comes out too.
+            const double blended_x = (actual_x - (1.0 - gate_here) * external.x) / gate_here;
+            const double wrapped_x = (blended_x - (1.0 - fade_here) * external.x) / fade_here;
+            // A part in 1e15 of the external field rather than an equality: the quantity is recovered *through* two
+            // divisions, so what is being measured now is the round trip, not the model. The wrapped radial part
+            // itself is zero -- 1 - (r_mp/r)^3 with both radii equal to the standoff.
+            REQUIRE(std::abs(wrapped_x) < 1.0e-15 * std::abs(external.x));
+            ++nose_nodes;
+        }
+    }
+    INFO("worst disagreement with the closed form: " << worst << " at x = " << worst_x << " R_E, clamped: " << clipped);
+    REQUIRE(worst < 1.0e-15);
+
+    // ---- Why the gate exists, as a number --------------------------------------------------------------------------
+    //
+    // The ungated construction at the tail-side edge of the region this case walks: `(r_mp/r)^3` there is the ratio
+    // of a surface that has run away to a radius that has not, and the image term carries its cube. This is the
+    // value the reference publishes inside its `x > -10 R_E` mask and then multiplies by a weight of ~0 downstream;
+    // this node removes it at the source instead, and the number below is the size of what it removes.
+    {
+        const double x = -10.0 * re;
+        const double r = std::abs(x);
+        const double surface = gfield::get_component(radius, axis_at(-10.0), 0);
+        // **Uncapped on purpose**: this is the number the reference's own parameters produce, and it is the reason
+        // both the cap and the gate exist. Its expression is the one this node would use if the ratio were not
+        // capped -- a far-field expansion evaluated inside its own source region.
+        const double cube = std::pow(surface / r, 3.0);
+        INFO("the uncapped image term at x = -10 R_E is " << cube << " times the external field");
+        REQUIRE(cube > 1.0e6);
+        // ... and what this node actually publishes there is the external field, because the gate is closed.
+        const double gate_here = 1.0 - gfield::get_component(boundary_weight, static_cast<std::size_t>(axis_at(-10.0)), 0);
+        REQUIRE(gate_here < 1.0e-6);
+        REQUIRE(relative_to(gfield::get_component(draped, static_cast<std::size_t>(axis_at(-10.0)), 1), external.y) <
+                1.0e-6);
+    }
+    // **The origin, where `rhat` does not exist.** The gate is what answers it: the boundary's weight at the centre
+    // of the cavity is one (the surface is eleven earth radii away and the transition is a tenth of that), so the
+    // output there is the plain external field -- the same answer the reference reaches by having no direction to
+    // drape along, arrived at for a reason rather than by an accident of a zero vector.
+    {
+        const std::size_t origin = static_cast<std::size_t>(axis_at(0.0));
+        const double gate_at_origin = 1.0 - gfield::get_component(boundary_weight, origin, 0);
+        REQUIRE(gate_at_origin < 1.0e-5);
+        // The bound is the gate times the largest the wrapped part can be: the compression's ceiling (five) times a
+        // field that is at most `1 + 1/2` of the external one once the image's ratio is capped at one. Anything
+        // larger would mean the cap is not doing its job, which is exactly what the first version of this case
+        // found -- an output twenty-five times the field it wraps, leaking through a gate of six parts in a million.
+        const double origin_bound = gate_at_origin * FieldNodes::kDrapeCompressionMax * 1.5;
+        INFO("origin: gate " << gate_at_origin << " bounds the leak at " << origin_bound);
+        for (int component = 0; component < 3; ++component) {
+            const double external_component = component == 0 ? external.x : (component == 1 ? external.y : external.z);
+            REQUIRE(relative_to(gfield::get_component(draped, origin, static_cast<std::uint64_t>(component)),
+                                external_component) < origin_bound);
+        }
+    }
+
+    // **Bounded everywhere**, which is the property the gate buys: no node of this table is more than the largest
+    // compression (five) times the field it wraps, plus the image's own bounded contribution outside the boundary.
+    double largest_ratio = 0.0;
+    for (std::uint64_t point = 0; point < draped.point_count(); ++point) {
+        const Vec3 at{gfield::get_component(draped, point, 0), gfield::get_component(draped, point, 1),
+                      gfield::get_component(draped, point, 2)};
+        largest_ratio = std::max(largest_ratio, norm(at) / norm(external));
+    }
+    INFO("largest |B| / |B_external| in the table: " << largest_ratio);
+    REQUIRE(largest_ratio < 8.0);
+    // The clamp is **exercised**, not merely implemented: the floor acts where `3.5 (r_mp/r)^2 < 1`, which on this
+    // lattice is the outermost sunward node -- `r > 1.87 r_mp` -- and a table that had forgotten it would disagree
+    // with the closed form exactly there. The reference's ceiling of five cannot be reached at all once the ratio is
+    // capped; the declaration records that as a consequence of the cap rather than as a defect.
+    REQUIRE(clipped >= 1);
+    REQUIRE(nose_nodes == 1);
+    // The tangential component at the nose, on the other hand, is **amplified**: `1 + 1/2` from the image, times the
+    // compression at the surface (3.5), faded in -- which is the field wrapping around the obstacle instead of
+    // piling up on it. The gate halves it there, since the nose node sits exactly on the surface where the weight is
+    // one half, so the expected factor is `1 + gate * (fade * 3.5 * 1.5 - 1)`.
+    {
+        const std::size_t nose = static_cast<std::size_t>(axis_at(8.0));
+        const double gate_here = 1.0 - gfield::get_component(boundary_weight, nose, 0);
+        const double fade_here =
+            1.0 / (1.0 + std::exp(-(8.0 * re - FieldNodes::kDrapeFadeCentreRe * re) /
+                                  (FieldNodes::kDrapeFadeWidthRe * re)));
+        const double expected =
+            1.0 + gate_here * (fade_here * FieldNodes::kDrapeCompression * 1.5 + (1.0 - fade_here) - 1.0);
+        REQUIRE(relative_to(gfield::get_component(draped, nose, 1) / external.y, expected) < 1.0e-15);
+        REQUIRE(expected > 3.0);        // the field at the nose is more than three times the IMF it wraps
+    }
+
+    // ---- The fade, and the mask this implementation does not copy ---------------------------------------------------
+    //
+    // The reference applies the draping only where `x > -10 R_E` and leaves the field untouched outside, so its
+    // table jumps at that edge by the fade weight there -- `1 / (1 + exp(2.5)) = 0.076` of the draping, which is a
+    // current sheet nobody asked for. This node applies the fade everywhere, which the closed-form loop above
+    // already asserts at `x = -10` as much as anywhere else; the number is here so that the decision is on the
+    // record rather than in a comment.
+    const double fade_at_mask_edge = 1.0 / (1.0 + std::exp(2.5));
+    REQUIRE(relative_to(fade_at_mask_edge, 0.0759) < 0.01);
+    // Downwind of the fade the field is the external one, untouched...
+    const std::size_t far_tail = static_cast<std::size_t>(axis_at(-15.0));
+    REQUIRE(relative_to(gfield::get_component(draped, far_tail, 1), external.y) < 0.01);
+    // ... and at the far sunward end the image term is still present, falling as `(r_mp/r)^3`: at fifteen earth
+    // radii it is 15% of the tangential component, which is a statement about how slowly a dipole image dies.
+    const std::size_t far_nose = static_cast<std::size_t>(axis_at(15.0));
+    const double far_ratio = gfield::get_component(draped, far_nose, 1) / external.y;
+    const double cube_at_15 = std::pow(standoff / (15.0 * re), 3.0);
+    REQUIRE(relative_to(far_ratio, 1.0 + 0.5 * cube_at_15) < 0.01);
+
+    // ---- The refusals ----------------------------------------------------------------------------------------------
+    //
+    // A radius table from another lattice is refused rather than fitted: the compression would be read from the
+    // wrong region and every number would still be finite.
+    const GridSpec other{Vec3{-16.0 * re, 0.0, -8.0 * re}, Vec3{1.0 * re, 1.0 * re, 1.0 * re}, 17, 2, 17};
+    const gfield::FieldKey other_key{94, FieldNodes::kPortWeight};
+    REQUIRE(bake_magnetopause(boundary, other, other_key, fields, gfield::FieldKey{94, 2}));
+    REQUIRE_FALSE(bake_draping(imf, fields.view(gfield::FieldKey{94, 2}), boundary_weight, grid,
+                               gfield::FieldKey{95, FieldNodes::kPortDrapeOut}, fields));
+    // ... and an unreadable input is refused before anything is allocated.
+    REQUIRE_FALSE(bake_draping(gfield::FieldValue{}, radius, boundary_weight, grid,
+                               gfield::FieldKey{95, FieldNodes::kPortDrapeOut}, fields));
+    REQUIRE_FALSE(gfield::is_readable(fields.view(gfield::FieldKey{95, FieldNodes::kPortDrapeOut})));
+}
+
+TEST_CASE("magnetosphere.field_nodes.the_boundary_publishes_its_own_radius", "[magnetosphere]") {
+    // **The second output, and the reason it exists.** `r_mp(theta) = r0 (2 / (1 + cos theta))^alpha` is what the
+    // magnetopause's weight is made of; the draping node needs the same number at every node. A second copy of the
+    // two parameters would be a second answer to "where is the boundary", and the two would agree until somebody
+    // edited one of them -- after which the picture would show a field wrapping around a surface that is not the
+    // one the weight came from. So it is published, and this case measures that what is published is the surface.
+    const double re = kEarthRadiusM;
+    const double standoff = 6.0 * re;
+    const double flaring = 0.6;
+    const double width = 1.0 * re;
+    FieldNodes::MagnetopauseSpec spec;
+    spec.standoff_m = standoff;
+    spec.flaring = flaring;
+    spec.width_m = width;
+    const GridSpec grid{Vec3{-12.0 * re, 0.0, -12.0 * re}, Vec3{1.5 * re, 1.0 * re, 1.5 * re}, 17, 2, 17};
+    gfield::FieldSet fields;
+    const gfield::FieldKey weight_key{101, FieldNodes::kPortWeight};
+    const gfield::FieldKey radius_key{101, FieldNodes::kPortMagnetopauseRadius};
+    REQUIRE(bake_magnetopause(spec, grid, weight_key, fields, radius_key));
+    const gfield::FieldValue weight = fields.view(weight_key);
+    const gfield::FieldValue radius = fields.view(radius_key);
+    REQUIRE(gfield::is_readable(weight));
+    REQUIRE(gfield::is_readable(radius));
+    // A **scalar** table in metres, which is what a draping node reads and what a plot of the boundary needs.
+    REQUIRE(radius.is_scalar());
+    REQUIRE(radius.desc.dimension.L == 1);
+    REQUIRE(radius.desc.dimension.T == 0);
+    REQUIRE(radius.desc.dimension.M == 0);
+    REQUIRE(radius.point_count() == weight.point_count());
+
+    // Every node: the radius is the Shue surface, and the weight is the sigmoid of the distance to **that** radius.
+    // Asserting them together is the point of the port -- one table is the other's argument.
+    for (std::uint64_t point = 0; point < radius.point_count(); ++point) {
+        const std::uint64_t k = point % grid.nz;
+        const std::uint64_t j = (point / grid.nz) % grid.ny;
+        const std::uint64_t i = point / (static_cast<std::uint64_t>(grid.nz) * grid.ny);
+        const Vec3 at = grid.node_position(static_cast<std::uint32_t>(i), static_cast<std::uint32_t>(j),
+                                           static_cast<std::uint32_t>(k));
+        const double r = norm(at);
+        const double cosine = r > 0.0 ? std::max(FieldNodes::kMagnetopauseMinCosine, at.x / r) : 0.0;
+        const double expected = standoff * std::pow(2.0 / (1.0 + cosine), flaring);
+        REQUIRE(gfield::get_component(radius, point, 0) == expected);
+        REQUIRE(gfield::get_component(weight, point, 0) == 1.0 / (1.0 + std::exp((r - expected) / width)));
+    }
+    // The nose is exactly the standoff distance, and that is the assertion a reader can check by hand.
+    const std::uint64_t nose_column =
+        static_cast<std::uint64_t>(std::lround((standoff - grid.origin_m.x) / grid.spacing_m.x));
+    const std::uint64_t nose_row = static_cast<std::uint64_t>(std::lround((0.0 - grid.origin_m.z) / grid.spacing_m.z));
+    const std::uint64_t nose = (nose_column * grid.ny + 0) * grid.nz + nose_row;
+    REQUIRE(relative_to(gfield::get_component(radius, nose, 0), standoff) < 1.0e-15);
+    // Down the tail the surface opens without bound, which is what a paraboloid does -- and the reason a tail needs
+    // the current sheet rather than this node to be closed.
+    const std::uint64_t tail_column = static_cast<std::uint64_t>(
+        std::lround((-12.0 * re - grid.origin_m.x) / grid.spacing_m.x));
+    REQUIRE(gfield::get_component(radius, (tail_column * grid.ny + 0) * grid.nz + nose_row, 0) > 4.0 * standoff);
+}
+
 TEST_CASE("magnetosphere.field_nodes.the_tail_flares_and_follows_the_index", "[magnetosphere]") {
     // **The other two thirds of the reference's `tail.py`.** The hinge came first (that case); what is left is the
     // profile -- an unflared Harris sheet or a flaring one -- and the three numbers the reference derives from the
@@ -2468,7 +2776,7 @@ TEST_CASE("magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose",
     const FieldNodes::MagnetopauseSpec exact_spec{8.0 * re, 1.0, 1.0 * re};
     const GridSpec coarse{Vec3{-16.0 * re, -16.0 * re, -16.0 * re}, Vec3{re, re, re}, 33, 33, 33};
     const gfield::FieldKey weight_key{61, FieldNodes::kPortWeight};
-    REQUIRE(bake_magnetopause(exact_spec, coarse, weight_key, fields));
+    REQUIRE(bake_magnetopause(exact_spec, coarse, weight_key, fields, radius_key_for(weight_key)));
     const gfield::FieldValue weight = fields.view(weight_key);
     REQUIRE(gfield::is_readable(weight));
     // **A scalar**, and the shape of the table is asserted before anything is read out of it: a consumer that
@@ -2508,7 +2816,7 @@ TEST_CASE("magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose",
     const GridSpec slab{Vec3{-25.0 * re, -25.0 * re, -0.2 * re}, Vec3{0.1 * re, 0.1 * re, 0.1 * re}, 501, 501, 5};
     const FieldNodes::MagnetopauseSpec default_spec;
     const gfield::FieldKey fine_key{62, FieldNodes::kPortWeight};
-    REQUIRE(bake_magnetopause(default_spec, slab, fine_key, fields));
+    REQUIRE(bake_magnetopause(default_spec, slab, fine_key, fields, radius_key_for(fine_key)));
     const gfield::FieldValue fine = fields.view(fine_key);
     REQUIRE(gfield::is_readable(fine));
     const double degrees[5] = {0.0, 30.0, 60.0, 90.0, 105.0};
@@ -2576,21 +2884,21 @@ TEST_CASE("magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose",
     // than clamped -- the internal singularities are the formula's own and are clamped, but these are the user's.
     FieldNodes::MagnetopauseSpec zero_standoff = default_spec;
     zero_standoff.standoff_m = 0.0;
-    REQUIRE_FALSE(bake_magnetopause(zero_standoff, slab, fine_key, fields));
+    REQUIRE_FALSE(bake_magnetopause(zero_standoff, slab, fine_key, fields, radius_key_for(fine_key)));
     FieldNodes::MagnetopauseSpec negative_standoff = default_spec;
     negative_standoff.standoff_m = -5.0 * re;
-    REQUIRE_FALSE(bake_magnetopause(negative_standoff, slab, fine_key, fields));
+    REQUIRE_FALSE(bake_magnetopause(negative_standoff, slab, fine_key, fields, radius_key_for(fine_key)));
     FieldNodes::MagnetopauseSpec negative_flaring = default_spec;
     negative_flaring.flaring = -0.1;
-    REQUIRE_FALSE(bake_magnetopause(negative_flaring, slab, fine_key, fields));
+    REQUIRE_FALSE(bake_magnetopause(negative_flaring, slab, fine_key, fields, radius_key_for(fine_key)));
     FieldNodes::MagnetopauseSpec zero_width = default_spec;
     zero_width.width_m = 0.0;
-    REQUIRE_FALSE(bake_magnetopause(zero_width, slab, fine_key, fields));
+    REQUIRE_FALSE(bake_magnetopause(zero_width, slab, fine_key, fields, radius_key_for(fine_key)));
     FieldNodes::MagnetopauseSpec not_a_number = default_spec;
     not_a_number.standoff_m = std::nan("");
-    REQUIRE_FALSE(bake_magnetopause(not_a_number, slab, fine_key, fields));
+    REQUIRE_FALSE(bake_magnetopause(not_a_number, slab, fine_key, fields, radius_key_for(fine_key)));
     const GridSpec no_interior{Vec3{}, Vec3{re, re, re}, 1, 1, 1};
-    REQUIRE_FALSE(bake_magnetopause(default_spec, no_interior, fine_key, fields));
+    REQUIRE_FALSE(bake_magnetopause(default_spec, no_interior, fine_key, fields, radius_key_for(fine_key)));
 
     // The reader is the one the evaluator uses: a node carrying only the flaring exponent gets the defaults for the
     // other two, which is the state a freshly placed node is in.
@@ -2731,7 +3039,7 @@ TEST_CASE("magnetosphere.field_nodes.a_mix_blends_the_potentials_not_the_fields"
     // version of this half used an axial outer field, and the naive divergence came out at the difference
     // operator's own floor -- a measurement of the experiment rather than of the node.
     REQUIRE(bake_uniform(Vec3{5.0e-9, 0.0, 0.0}, wide, sheath_key, fields, tesla_dimension()));
-    REQUIRE(bake_magnetopause(FieldNodes::MagnetopauseSpec{}, wide, boundary_key, fields));
+    REQUIRE(bake_magnetopause(FieldNodes::MagnetopauseSpec{}, wide, boundary_key, fields, radius_key_for(boundary_key)));
     const gfield::FieldKey naive_mix_key{79, FieldNodes::kPortMixOut};
     const gfield::FieldKey corrected_mix_key{80, FieldNodes::kPortMixOut};
     REQUIRE(bake_mix(fields.view(dipole_key), fields.view(sheath_key), fields.view(boundary_key), wide, 0.0,

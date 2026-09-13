@@ -218,6 +218,13 @@ bool resolve_field_origin(const graph::Graph& graph, graph::NodeId consumer, gra
             port = FieldNodes::kPortMulField;
             continue;
         }
+        // The draping has no grid either, and its **first** socket is the one that carries it: the radius table is
+        // on the same lattice by construction, which is the agreement `bake_draping` refuses to guess at.
+        if (source->type_name == FieldNodes::kDrapeType) {
+            current = source_id;
+            port = FieldNodes::kPortDrapeField;
+            continue;
+        }
         // The blend has no grid either, and its first socket is the one that carries it: both inputs must be on
         // the same lattice for a blend to be built at all, so either would do and the first is the one a reader
         // is looking at when they ask. A second type added here rather than a rule invented for it -- the rule is
@@ -835,7 +842,7 @@ bool bake_resample(const gfield::FieldValue& source, const GridSpec& source_grid
 }
 
 bool bake_magnetopause(const FieldNodes::MagnetopauseSpec& spec, const GridSpec& grid, gfield::FieldKey key,
-                       gfield::FieldSet& fields) {
+                       gfield::FieldSet& fields, gfield::FieldKey radius_key) {
     if (!bakeable(grid)) return false;
     if (!std::isfinite(spec.standoff_m) || !(spec.standoff_m > 0.0)) return false;
     if (!std::isfinite(spec.flaring) || spec.flaring < 0.0) return false;
@@ -847,8 +854,16 @@ bool bake_magnetopause(const FieldNodes::MagnetopauseSpec& spec, const GridSpec&
     const qp::abi::LatticeDesc desc = qp::abi::make_lattice(
         qp::abi::LatticeKind::volume, qp::abi::ComponentKind::scalar, qp::abi::ElementType::f64,
         qp::abi::kDimensionless, grid.nx, grid.ny, grid.nz);
+    // **The surface radius is kept as a table of its own**, in metres. It is computed here anyway -- it is what the
+    // weight is made of -- and the draping node needs it at every node, so publishing it is what stops two nodes
+    // from each answering "where is the boundary" out of their own copy of the two parameters. See
+    // `kPortMagnetopauseRadius`: the same numbers, one per node, with a length dimension rather than none.
+    const qp::abi::LatticeDesc radius_desc = qp::abi::make_lattice(
+        qp::abi::LatticeKind::volume, qp::abi::ComponentKind::scalar, qp::abi::ElementType::f64,
+        length_dimension(), grid.nx, grid.ny, grid.nz);
 
     std::vector<double> weights(static_cast<std::size_t>(grid.point_count()), 0.0);
+    std::vector<double> radii(static_cast<std::size_t>(grid.point_count()), 0.0);
     std::size_t at = 0;
     for (std::uint32_t i = 0; i < grid.nx; ++i) {
         for (std::uint32_t j = 0; j < grid.ny; ++j) {
@@ -863,13 +878,128 @@ bool bake_magnetopause(const FieldNodes::MagnetopauseSpec& spec, const GridSpec&
                 const double cosine =
                     r > 0.0 ? std::max(FieldNodes::kMagnetopauseMinCosine, point.x / r) : 0.0;
                 const double surface = spec.standoff_m * std::pow(2.0 / (1.0 + cosine), spec.flaring);
+                radii[at] = surface;
                 // One **inside**, zero outside: the orientation `field.mask` uses, so a wire reads the same way --
                 // "this weight is one where the field it multiplies exists".
-                weights[at++] = 1.0 / (1.0 + std::exp((r - surface) / spec.width_m));
+                weights[at] = 1.0 / (1.0 + std::exp((r - surface) / spec.width_m));
+                ++at;
             }
         }
     }
+    // The radius first, the weight second, and the order matters for one reason: `publish` moves the vector, so a
+    // failure of the second call would leave the first table in the store and the node half-baked. Publishing the
+    // **radius** first and checking it means a refusal here happens before the weight exists -- and the evaluator's
+    // own contract is that a refused bake leaves the store as it was, which is why the second publish is the last
+    // statement.
+    if (!fields.publish(radius_key, radius_desc, std::move(radii))) return false;
     return fields.publish(key, desc, std::move(weights));
+}
+
+bool bake_draping(const gfield::FieldValue& external, const gfield::FieldValue& radius,
+                  const gfield::FieldValue& weight, const GridSpec& grid, gfield::FieldKey key,
+                  gfield::FieldSet& fields) {
+    if (!gfield::is_readable(external) || !gfield::is_readable(radius) || !gfield::is_readable(weight)) return false;
+    if (external.kind() != gfield::Kind::Volume || radius.kind() != gfield::Kind::Volume ||
+        weight.kind() != gfield::Kind::Volume) {
+        return false;
+    }
+    if (!external.is_vector() || radius.is_vector() || weight.is_vector()) return false;
+    if (external.desc.element != qp::abi::ElementType::f64 || radius.desc.element != qp::abi::ElementType::f64 ||
+        weight.desc.element != qp::abi::ElementType::f64) {
+        return false;
+    }
+    // **The two tables must describe the same lattice**, for the reason `bake_sum` refuses two lattices that
+    // disagree: a compression factor read from a different region than the field it multiplies would be a model of
+    // nothing, and it would look plausible -- every number finite, the picture smooth.
+    for (int axis = 0; axis < 3; ++axis) {
+        if (external.desc.count[axis] != radius.desc.count[axis] ||
+            external.desc.count[axis] != weight.desc.count[axis]) {
+            return false;
+        }
+    }
+    if (external.desc.count[0] != grid.nx || external.desc.count[1] != grid.ny ||
+        external.desc.count[2] != grid.nz) {
+        return false;
+    }
+
+    const auto* b = static_cast<const double*>(external.data);
+    const auto* r_mp = static_cast<const double*>(radius.data);
+    const auto* w_in = static_cast<const double*>(weight.data);
+    if (b == nullptr || r_mp == nullptr || w_in == nullptr) return false;
+
+    const double fade_centre_m = FieldNodes::kDrapeFadeCentreRe * kEarthRadiusM;
+    const double fade_width_m = FieldNodes::kDrapeFadeWidthRe * kEarthRadiusM;
+    const double radius_floor_m = FieldNodes::kDrapeRadiusFloorRe * kEarthRadiusM;
+
+    const std::size_t points = static_cast<std::size_t>(external.point_count());
+    std::vector<double> out(points * 3, 0.0);
+    for (std::size_t point = 0; point < points; ++point) {
+        const std::uint64_t k = point % grid.nz;
+        const std::uint64_t j = (point / grid.nz) % grid.ny;
+        const std::uint64_t i = point / (static_cast<std::uint64_t>(grid.nz) * grid.ny);
+        const Vec3 at = grid.node_position(static_cast<std::uint32_t>(i), static_cast<std::uint32_t>(j),
+                                           static_cast<std::uint32_t>(k));
+        const Vec3 external_field{b[point * 3 + 0], b[point * 3 + 1], b[point * 3 + 2]};
+        const double surface = r_mp[point];
+
+        // The **position** is floored, not the radius: `1 / r^3` diverges at the origin, the surface table is finite
+        // there, and a node that produced infinities would poison every consumer downstream. See the declaration.
+        const double r = std::max(norm(at), radius_floor_m);
+        const Vec3 rhat{at.x / r, at.y / r, at.z / r};
+
+        // **The image is a far-field representation, so the radius it is built from is capped at `r`.** `M = -B
+        // r_mp^3 / 2` stands for the currents induced on a boundary of radius `r_mp`, and the field it produces
+        // carries `(r_mp/r)^3`: using that at `r < r_mp` is extrapolating a far-field expansion *inside its own
+        // source region*, where it grows without bound -- 1.7e6 at the origin of a lattice whose surface is twelve
+        // earth radii away. The cap is the statement of what the expansion can mean: the image may cancel the
+        // external field at the boundary and never grow past that. Outside the boundary, where this construction is
+        // a model at all, `r >= r_mp` and the cap is inert.
+        //
+        // **It applies to the moment as well as to the compression, and the case found that the hard way**: capping
+        // only the compression left the image itself at `512 B` one earth radius from the origin, which the gate
+        // then leaked into the published table as 1.5 times the field. The two have to use the same radius or the
+        // closed form the case asserts is not the model the bake computes.
+        const double effective_surface = std::min(surface, r);
+        const double ratio = effective_surface / r;
+        // `compress = clip(3.5 (r_mp/r)^2, 1, 5)`: squeezed towards the nose, untouched far away.
+        double compress = FieldNodes::kDrapeCompression * ratio * ratio;
+        compress = std::clamp(compress, FieldNodes::kDrapeCompressionMin, FieldNodes::kDrapeCompressionMax);
+
+        // The image dipole: a moment **antiparallel** to the external field and of the size that cancels it on the
+        // sunward axis -- `M = -B r_mp^3 / 2` -- evaluated with the textbook dipole expression. That cancellation is
+        // the whole point: the field wraps around the obstacle instead of piling up on its nose.
+        const double moment_scale = -effective_surface * effective_surface * effective_surface * 0.5;
+        const Vec3 moment{moment_scale * external_field.x, moment_scale * external_field.y,
+                          moment_scale * external_field.z};
+        const double moment_dot_r = moment.x * rhat.x + moment.y * rhat.y + moment.z * rhat.z;
+        const double inverse_cube = 1.0 / (r * r * r);
+        const Vec3 image{(3.0 * moment_dot_r * rhat.x - moment.x) * inverse_cube,
+                         (3.0 * moment_dot_r * rhat.y - moment.y) * inverse_cube,
+                         (3.0 * moment_dot_r * rhat.z - moment.z) * inverse_cube};
+
+        // The fade: nothing downwind, everything at the nose, half applied at `x = -5 R_E`. Applied over the whole
+        // lattice rather than inside the reference's `x > -10 R_E` mask -- the declaration records the size of the
+        // jump that mask leaves behind.
+        const double fade = 1.0 / (1.0 + std::exp(-(at.x - fade_centre_m) / fade_width_m));
+        const double wrapped[3] = {compress * (external_field.x + image.x),
+                                   compress * (external_field.y + image.y),
+                                   compress * (external_field.z + image.z)};
+        const double plain[3] = {external_field.x, external_field.y, external_field.z};
+        // **The gate, and it is the boundary's own weight rather than a second opinion about it.** The weight is one
+        // *inside* the surface, so `1 - w` is the outside -- which is where a draped magnetosheath field exists at
+        // all. Inside, the output is the plain external field: no boundary current has bent it there, and the
+        // alternative is to publish the image term where `(r_mp/r)^3` has reached 1e8 because the Shue surface ran
+        // away downwind. See `kPortDrapeWeight` for that number.
+        const double gate = 1.0 - w_in[point];
+        for (int component = 0; component < 3; ++component) {
+            out[point * 3 + static_cast<std::size_t>(component)] =
+                gate * (fade * wrapped[component] + (1.0 - fade) * plain[component]) +
+                (1.0 - gate) * plain[component];
+        }
+    }
+
+    // The external field's own dimension and lattice: draping rearranges a field, it does not change what it is.
+    return fields.publish(key, external.desc, std::move(out));
 }
 
 bool bake_mix(const gfield::FieldValue& a, const gfield::FieldValue& b, const gfield::FieldValue& weight,
@@ -1510,6 +1640,22 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     magnetopause_kp.required = false;
     magnetopause_kp.unit_symbol = "1";
     magnetopause.inputs.push_back(magnetopause_kp);
+    // Its **second output**: the surface radius, in metres, which the draping node reads rather than recomputing.
+    // Output numbers are their own sequence -- the weight is 1 -- so this is 2, and a consumer says which output it
+    // wants by number exactly as it does for an input.
+    graph::PortDesc magnetopause_radius;
+    magnetopause_radius.number = kPortMagnetopauseRadius;
+    magnetopause_radius.name = "radius";
+    magnetopause_radius.label = "Surface radius";
+    magnetopause_radius.description = "The Shue surface's own radius at every node, in metres: the number the weight "
+                                      "is built from. Wire it into a `field.draping` node, which needs the "
+                                      "boundary's radius to wrap a field around -- reading it here is what keeps two "
+                                      "nodes from each answering where the boundary is.";
+    magnetopause_radius.type = qp::ports::kScalarField;
+    magnetopause_radius.connectable = true;
+    magnetopause_radius.required = false;
+    magnetopause_radius.unit_symbol = "m";
+    magnetopause.outputs.push_back(magnetopause_radius);
     // Its own nine grid ports, after its three parameters.
     for (graph::PortNumber offset = 0; offset < 9; ++offset) {
         const char* names[9] = {"origin_x", "origin_y", "origin_z", "spacing_x", "spacing_y",
@@ -1769,6 +1915,65 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     a_out.unit_symbol = "1/s";
     atmosphere.outputs.push_back(a_out);
 
+    graph::NodeDesc draping;
+    draping.type_name = kDrapeType;
+    draping.label = "Dayside draping";
+    draping.description = "The external field wrapped around the magnetopause: the IMF plus an image dipole that "
+                          "cancels its radial component at the nose, compressed towards the boundary and faded in "
+                          "from the tail side. The reference's `mp_model = 2`. Wire a `field.imf` into the field "
+                          "socket and a `field.magnetopause`'s radius output into the other.";
+    draping.category = "field";
+    draping.version = 1;
+    draping.allow_in_field_domain = true;
+    draping.allow_in_particle_domain = false;
+    draping.has_compute = true;
+    graph::PortDesc drape_field;
+    drape_field.number = kPortDrapeField;
+    drape_field.name = "field";
+    drape_field.label = "External field";
+    drape_field.description = "The field to wrap: the IMF, or whatever else stands outside the boundary. A vector "
+                              "volume in tesla, and the lattice this node bakes on.";
+    drape_field.type = qp::ports::kVectorField;
+    drape_field.connectable = true;
+    drape_field.required = true;
+    drape_field.unit_symbol = "T";
+    draping.inputs.push_back(drape_field);
+    graph::PortDesc drape_radius;
+    drape_radius.number = kPortDrapeRadius;
+    drape_radius.name = "radius";
+    drape_radius.label = "Boundary radius";
+    drape_radius.description = "The Shue surface's radius at every node, in metres -- `field.magnetopause`'s second "
+                               "output. It is what the compression is measured against, so it comes from the node "
+                               "that owns the boundary rather than from a second copy of the same parameters.";
+    drape_radius.type = qp::ports::kScalarField;
+    drape_radius.connectable = true;
+    drape_radius.required = true;
+    drape_radius.unit_symbol = "m";
+    draping.inputs.push_back(drape_radius);
+    graph::PortDesc drape_weight;
+    drape_weight.number = kPortDrapeWeight;
+    drape_weight.name = "weight";
+    drape_weight.label = "Boundary weight";
+    drape_weight.description = "The boundary's inside weight, from the same `field.magnetopause` -- the gate that "
+                               "keeps this construction outside the surface, where a draped magnetosheath field "
+                               "exists. Inside, the output is the plain external field.";
+    drape_weight.type = qp::ports::kScalarField;
+    drape_weight.connectable = true;
+    drape_weight.required = true;
+    drape_weight.unit_symbol = "1";
+    draping.inputs.push_back(drape_weight);
+    graph::PortDesc drape_out;
+    drape_out.number = kPortDrapeOut;
+    drape_out.name = "field";
+    drape_out.label = "Draped field";
+    drape_out.description = "The wrapped field, as a volume of tesla vectors on the external field's lattice. Wire "
+                            "it into `field.mix`'s outside socket.";
+    drape_out.type = qp::ports::kVectorField;
+    drape_out.connectable = true;
+    drape_out.required = false;
+    drape_out.unit_symbol = "T";
+    draping.outputs.push_back(drape_out);
+
     // ---------------- the tail's current sheet ----------------
     graph::NodeDesc sheet;
     sheet.type_name = kCurrentSheetType;
@@ -1864,7 +2069,7 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     s_out.unit_symbol = "T";
     sheet.outputs.push_back(s_out);
 
-    return {std::move(dipole),      std::move(uniform),    std::move(imf),        std::move(sum),        std::move(electric),
+    return {std::move(dipole),      std::move(uniform),    std::move(imf),        std::move(draping),    std::move(sum),        std::move(electric),
             std::move(mask),        std::move(mul),        std::move(convection), std::move(corotation),
             std::move(atmosphere),  std::move(sheet),      std::move(blend),      std::move(resample),
             std::move(magnetopause), std::move(mix),     std::move(shield)};
@@ -2062,11 +2267,18 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
         const GridSpec magnetopause_grid =
             FieldNodes::read_from(magnetopause_view, FieldNodes::kPortMagnetopauseOrigin0);
         const gfield::FieldKey magnetopause_key{id.index, FieldNodes::kPortWeight};
-        if (!bake_magnetopause(magnetopause_spec, magnetopause_grid, magnetopause_key, *fields_)) {
+        const gfield::FieldKey magnetopause_radius_key{id.index, FieldNodes::kPortMagnetopauseRadius};
+        if (!bake_magnetopause(magnetopause_spec, magnetopause_grid, magnetopause_key, *fields_,
+                               magnetopause_radius_key)) {
             return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
         }
         Outcome out;
         out.emplace_back(FieldNodes::kPortWeight, qp::ports::Value{fields_->view(magnetopause_key).desc});
+        // The second output, on the same lattice: a consumer that wires it gets the surface radius in metres, and
+        // the evaluator's outcome carries one entry per output port -- which is what makes a two-output node a node
+        // rather than a special case.
+        out.emplace_back(FieldNodes::kPortMagnetopauseRadius,
+                         qp::ports::Value{fields_->view(magnetopause_radius_key).desc});
         return qp::diag::Result<Outcome>{std::move(out)};
     }
     if (desc.type_name == FieldNodes::kMixType) {
@@ -2156,6 +2368,25 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
         }
         Outcome out;
         out.emplace_back(FieldNodes::kPortField, qp::ports::Value{fields_->view(imf_key).desc});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
+    if (desc.type_name == FieldNodes::kDrapeType) {
+        // Two field inputs and no grid of its own: this node bakes on the lattice of the field it wraps, for the
+        // reason `field.mul` and `field.corotation` do -- it rearranges a field rather than sampling a model, so a
+        // grid of its own would be a second place the geometry is decided.
+        const gfield::FieldValue external = input_field(id, FieldNodes::kPortDrapeField);
+        const gfield::FieldValue radius = input_field(id, FieldNodes::kPortDrapeRadius);
+        const gfield::FieldValue boundary_weight = input_field(id, FieldNodes::kPortDrapeWeight);
+        GridSpec drape_grid;
+        if (graph_ == nullptr || !resolve_field_origin(*graph_, id, FieldNodes::kPortDrapeField, drape_grid)) {
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        const gfield::FieldKey drape_key{id.index, FieldNodes::kPortDrapeOut};
+        if (!bake_draping(external, radius, boundary_weight, drape_grid, drape_key, *fields_)) {
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        Outcome out;
+        out.emplace_back(FieldNodes::kPortDrapeOut, qp::ports::Value{fields_->view(drape_key).desc});
         return qp::diag::Result<Outcome>{std::move(out)};
     }
     if (desc.type_name == FieldNodes::kUniformType) {

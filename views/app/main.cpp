@@ -250,8 +250,8 @@ int main(int argc, char** argv) {
     // right when it was written and nothing tied it to the kit it was counting, which is the same shape as the
     // stale expectations this repository keeps finding in tests -- a number that describes another module's
     // inventory does not live in this one.
-    if (mounted_field_types != 16 || mounted_pushers != 2 || mounted_emitters != 1 || mounted_drivers != 2) {
-        qWarning().noquote() << "magnetosphere: mounted" << mounted_field_types << "of 16 field types,"
+    if (mounted_field_types != 17 || mounted_pushers != 2 || mounted_emitters != 1 || mounted_drivers != 2) {
+        qWarning().noquote() << "magnetosphere: mounted" << mounted_field_types << "of 17 field types,"
                              << mounted_pushers << "of 2 pushers," << mounted_emitters << "of 1 emitter and"
                              << mounted_drivers << "of 2 drivers";
     }
@@ -335,6 +335,11 @@ int main(int argc, char** argv) {
         set(boundary, FieldNodes::kPortMagnetopauseWidth, qp::ports::Value{1.0 * re});
         grid(boundary, FieldNodes::kPortMagnetopauseOrigin0);
 
+        // The dayside draping: the reference's `mp_model = 2`, as a node rather than as a setting. It reads the
+        // **boundary's own two tables** -- the radius it wraps around and the weight that says where it is a model --
+        // so there is exactly one answer in this graph to "where is the magnetopause", and the wire is the agreement.
+        const std::size_t draped = node(FieldNodes::kDrapeType, "draping");
+
         const std::size_t driver = node(SourceNodes::kKpType, "Kp");
         set(driver, SourceNodes::kPortKp, qp::ports::Value{4.0});
 
@@ -398,7 +403,6 @@ int main(int argc, char** argv) {
         wire(dipole, FieldNodes::kPortField, sum, FieldNodes::kPortAddendA);
         wire(sheet, FieldNodes::kPortField, sum, FieldNodes::kPortAddendB);
         wire(sum, FieldNodes::kPortField, mix, FieldNodes::kPortMixA);
-        wire(sheath, FieldNodes::kPortField, mix, FieldNodes::kPortMixB);
         wire(boundary, FieldNodes::kPortWeight, mix, FieldNodes::kPortMixWeight);
         // The driver: one index that decides the boundary's standoff and flaring, rather than two numbers typed into
         // the boundary. This is what source.kp exists for, and the demo shows the wire.
@@ -415,6 +419,12 @@ int main(int argc, char** argv) {
         // ... and the same date into the sheet's hinge, which is the pair the reference's `tail.py` wires: one
         // driver, two nodes that must agree about which way is up.
         wire(date, SourceNodes::kPortDayOut, sheet, FieldNodes::kPortSheetHinge);
+        // The external field goes **through the draping** before it reaches the mix: that is the difference between
+        // mode 1 (a uniform IMF) and mode 2 (the IMF wrapped around the boundary), and it is one node in a wire.
+        wire(sheath, FieldNodes::kPortField, draped, FieldNodes::kPortDrapeField);
+        wire(boundary, FieldNodes::kPortMagnetopauseRadius, draped, FieldNodes::kPortDrapeRadius);
+        wire(boundary, FieldNodes::kPortWeight, draped, FieldNodes::kPortDrapeWeight);
+        wire(draped, FieldNodes::kPortDrapeOut, mix, FieldNodes::kPortMixB);
         wire(mix, FieldNodes::kPortMixOut, emitter, EmitterNodes::kPortMagnetic);
         wire(convection, FieldNodes::kPortField, shielded, FieldNodes::kPortMulField);
         wire(shield, FieldNodes::kPortShieldOut, shielded, FieldNodes::kPortMulWeight);
