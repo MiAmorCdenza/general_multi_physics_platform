@@ -120,6 +120,73 @@ void connect_nodes(qp::authoring::Session& session, qp::graph::NodeId from,
 
 }  // namespace
 
+TEST_CASE("qt.views.editor_window.a_demo_replaces_the_document", "[views][qt]") {
+    // **The user's report, as a case.** Launch the shell, choose `Demos -> magnetosphere`, press Run: the picture
+    // panels stayed empty. The cause was that a demo was *added* to the document the window opens with -- the
+    // spring-damper demonstrator -- and the run controller asks the operator path first (deliberately: a graph both
+    // paths could run keeps the answer it had before providers existed). The oscillator therefore claimed the run,
+    // the kit never ran, and the line on screen reported validation problems rather than the run that did not happen.
+    //
+    // What the case pins is the word: a demo **opens** a document. The graph afterwards holds the demo's nodes and
+    // nothing else, whatever was there before.
+    qp::views::model::GraphBlueprint demo;
+    demo.label = "two nodes";
+    qp::views::model::BlueprintNode source;
+    source.type_name = "demo.signal";
+    source.name = "src";
+    demo.nodes.push_back(source);
+    qp::views::model::BlueprintNode sink;
+    sink.type_name = "demo.instrument";
+    sink.name = "meter";
+    demo.nodes.push_back(sink);
+    qp::views::model::BlueprintWire wire;
+    wire.from = 0;
+    wire.from_port = 1;
+    wire.to = 1;
+    wire.to_port = 1;
+    demo.wires.push_back(wire);
+
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content, {demo}};
+
+    // A document that already has something in it: the demonstrator the window opens with, in miniature.
+    window.seed_demo_graph();
+    const std::size_t before = window.session().graph().node_count();
+    REQUIRE(before >= 2);
+    REQUIRE(window.session().graph().edge_count() >= 1);
+
+    window.seed_blueprint(demo);
+    // **Replaced, not appended**: the demo's two nodes, and the demonstrator's are gone. An appended demo would
+    // read `before + 2` here, which is exactly the state that produced the user's empty panels.
+    REQUIRE(window.session().graph().node_count() == 2);
+    REQUIRE(window.session().graph().edge_count() == 1);
+    bool has_source = false;
+    bool has_meter = false;
+    bool has_demo_oscillator = false;
+    for (const qp::graph::NodeSlot& slot : window.session().graph().slots()) {
+        if (!slot.occupied) continue;
+        if (slot.node.name == "src") has_source = true;
+        if (slot.node.name == "meter") has_meter = true;
+        if (slot.node.type_name == "demo.spring_damper") has_demo_oscillator = true;
+    }
+    REQUIRE(has_source);
+    REQUIRE(has_meter);
+    REQUIRE_FALSE(has_demo_oscillator);
+
+    // The status line says what to do next, which is the second half of the fix: the sentence a user needs after
+    // choosing a demo is "press Run", not a report about the graph they no longer have.
+    REQUIRE(window.status_label() != nullptr);
+    REQUIRE(window.status_label()->text().contains(QStringLiteral("press Run")));
+
+    // And a demo this build cannot offer leaves the document **alone**: validated before anything is cleared, so a
+    // refusal is not a way to lose work. (This is the ordering the existing refusal case caught me getting wrong
+    // once already.)
+    qp::views::model::GraphBlueprint absent = demo;
+    absent.nodes[1].type_name = "demo.nonexistent";
+    window.seed_blueprint(absent);
+    REQUIRE(window.session().graph().node_count() == 2);
+}
+
 TEST_CASE("qt.views.scene3d.a_scene_can_be_turned", "[views][qt][scene3d]") {
     // **The camera belongs to the panel, and the scene's view is where it starts.** A scene states the direction its
     // item wants to be seen from; the panel opens there, and the user turns it from that point. The assertion that

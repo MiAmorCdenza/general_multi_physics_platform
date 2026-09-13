@@ -232,7 +232,31 @@ public:
     /// UI action's business; the seeding is the window's.
     [[nodiscard]] bool confirm_replacing_document(const QString& what);
 
-    /// @brief Replaces the document with `blueprint`, after validating it. **Does not ask**: see above.
+    /**
+     * @brief Replaces the document with `blueprint`, after validating it. **Does not ask**: see above.
+     *
+     * **A demo opens a document.** It used to append, and a user found the consequence: choosing a demo on top of
+     * the demonstrator the window opens with produced a graph holding both, the run controller let the operator path
+     * claim it (deliberately -- a graph both paths could run keeps the answer it had before providers existed), and
+     * the kit's picture panels stayed empty with nothing on screen saying why.
+     *
+     * A block comment rather than doc-comment lines, and the reason is the gate: it reads block comments, so a claim
+     * written in doc-comment lines is a claim nothing checks -- this declaration's own first draft made exactly that
+     * mistake, for the fourth time in one session, which is why the rule is stated here for the next reader.
+     *
+     * @param blueprint The demo to open. Not copied beyond the session's own placement of it.
+     *
+     * @ownership   observes `blueprint`, mutates this window's session
+     * @thread      ui
+     * @pre         `blueprint` passes `check_blueprint` against this window's catalog
+     * @post        The session holds the blueprint's nodes, parameters and wires, and nothing that was there before
+     * @invariant   A blueprint this build cannot offer leaves the document untouched: validation precedes the clear
+     * @errors      Reports through `on_mutation_failed`; never throws
+     * @complexity  O(nodes + wires)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.editor_window.a_demo_replaces_the_document
+     */
     void seed_blueprint(const qp::views::model::GraphBlueprint& blueprint);
 
     /// @brief Seeds the window with a small graph and a matching measurement session.
