@@ -63,6 +63,7 @@
 #include <cstdint>
 #include <vector>
 
+#include <qp/plugins/magnetosphere/baked_field.hpp>
 #include <qp/plugins/magnetosphere/geometry.hpp>
 
 namespace qp::plugins::magnetosphere {
@@ -156,6 +157,23 @@ public:
     /// with no interpolation error in the comparison at all. Every test of the Boris kernel in this kit builds
     /// one by hand; this node is what puts that in the palette.
     static constexpr const char* kUniformType = "field.uniform";
+
+    /// @brief A uniform **electric** field: the second kind of field a pusher reads.
+    ///
+    /// The pusher has had an electric socket since it was written and **nothing produced a field for it**. This
+    /// is that production: a constant `E`, in volts per metre, on the same uniform lattice the magnetic bakes use.
+    /// The cross-polar-cap convection field is the case a first course treats as uniform, and the lesson it
+    /// enables is the `E x B` drift -- the reason a magnetosphere has a convection pattern at all.
+    static constexpr const char* kUniformElectricType = "field.uniform_electric";
+
+    /// @brief The electric field's `x`, `y`, `z` components, in volts per metre.
+    static constexpr qp::graph::PortNumber kPortE0 = 1;
+    /// @brief The electric field's `y` component, in volts per metre.
+    static constexpr qp::graph::PortNumber kPortE1 = 2;
+    /// @brief The electric field's `z` component, in volts per metre.
+    static constexpr qp::graph::PortNumber kPortE2 = 3;
+    /// @brief Where the **electric** node's grid starts: after the three components.
+    static constexpr qp::graph::PortNumber kPortElectricOrigin0 = 4;
 
     /// @brief The **sum** of two fields: the composition principle as a node.
     ///
@@ -392,7 +410,8 @@ public:
  * @tests       magnetosphere.field_nodes.a_uniform_field_is_uniform
  */
 [[nodiscard]] bool bake_uniform(const Vec3& value, const GridSpec& grid, qp::graph::field::FieldKey key,
-                                qp::graph::field::FieldSet& fields);
+                                qp::graph::field::FieldSet& fields,
+                                qp::abi::FieldDim dimension = tesla_dimension());
 
 /**
  * @brief Adds two published fields node by node and publishes the result under `key`.

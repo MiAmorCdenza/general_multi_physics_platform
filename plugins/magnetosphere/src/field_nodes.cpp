@@ -135,7 +135,8 @@ bool bake_dipole(double tilt_degrees, double moment_am2, const GridSpec& grid, g
     return fields.publish(key, desc, std::move(table.data()));
 }
 
-bool bake_uniform(const Vec3& value, const GridSpec& grid, gfield::FieldKey key, gfield::FieldSet& fields) {
+bool bake_uniform(const Vec3& value, const GridSpec& grid, gfield::FieldKey key, gfield::FieldSet& fields,
+                  const qp::abi::FieldDim dimension) {
     if (!is_finite(value)) return false;
     if (!bakeable(grid)) return false;
     BakedField table{grid.origin_m, grid.spacing_m, grid.nx, grid.ny, grid.nz};
@@ -144,7 +145,7 @@ bool bake_uniform(const Vec3& value, const GridSpec& grid, gfield::FieldKey key,
             for (std::uint32_t k = 0; k < grid.nz; ++k) table.set_node(i, j, k, value);
         }
     }
-    const qp::abi::LatticeDesc desc = table.view().desc;
+    const qp::abi::LatticeDesc desc = table.view(dimension).desc;
     return fields.publish(key, desc, std::move(table.data()));
 }
 
@@ -349,7 +350,7 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
                          real_or(uniform_view, FieldNodes::kPortField2, 0.0)};
         const GridSpec uniform_grid = FieldNodes::read_from(uniform_view, FieldNodes::kPortUniformOrigin0);
         const gfield::FieldKey uniform_key{id.index, FieldNodes::kPortField};
-        if (!bake_uniform(value, uniform_grid, uniform_key, *fields_)) {
+        if (!bake_uniform(value, uniform_grid, uniform_key, *fields_, tesla_dimension())) {
             return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
         }
         Outcome out;
