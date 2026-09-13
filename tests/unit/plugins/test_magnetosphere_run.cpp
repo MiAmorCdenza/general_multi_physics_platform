@@ -964,6 +964,122 @@ TEST_CASE("magnetosphere.render.a_field_becomes_a_family_of_curves", "[magnetosp
     REQUIRE(item.scene(wrong_declaration).empty());
 }
 
+TEST_CASE("magnetosphere.run.the_recorded_channels_are_the_ones_a_report_names", "[magnetosphere]") {
+    // **The trace, and why it is the platform's point rather than a convenience.** Until this existed a run of this
+    // kit produced a report, a position snapshot and a field store -- and **no record over time**, which meant no
+    // measurements, no uncertainty and no provenance for either: the closed loop the platform is built around was
+    // dead for its flagship experiment. What is asserted here is therefore in three parts: the channels exist and
+    // are named and dimensioned, the physics they carry is the physics this configuration actually has, and the
+    // samples belong to a run identity some ledger issued.
+    Scene scene;
+    const Chain chain = add_chain(scene, 0.0, 6.6, 4, 0.01, 90.0);
+
+    MagnetosphereRunProvider provider;
+    qp::graph::execution::RunBuildResult built = provider.build(scene.g, scene.host.node_types());
+    REQUIRE(built.ok());
+    // Not recorded until somebody says which record this is: a trace whose samples nobody can look up is not a
+    // record, and `Trace` takes its identity at construction for exactly that reason.
+    built.run->set_run(qp::runtime::RunId{11});
+    REQUIRE(built.run->advance(600, 0.01).has_value());
+
+    const qp::runtime::Trace& record = built.run->trace();
+    REQUIRE(record.run() == qp::runtime::RunId{11});
+    REQUIRE(record.channels().size() == 4);
+    // By **name**, because that is how every consumer finds a channel: the confidence and measurement models
+    // locate theirs by name and never by position, so a channel inserted at the front must not rename the rest.
+    const auto channel = [&record](const char* name) -> const qp::runtime::Channel* {
+        for (const qp::runtime::Channel& candidate : record.channels()) {
+            if (candidate.name == name) return &candidate;
+        }
+        return nullptr;
+    };
+    REQUIRE(channel(MagnetosphereRun::kSpeedChannel) != nullptr);
+    REQUIRE(channel(MagnetosphereRun::kEnergyChannel) != nullptr);
+    REQUIRE(channel(MagnetosphereRun::kMuChannel) != nullptr);
+    REQUIRE(channel(MagnetosphereRun::kRadiusChannel) != nullptr);
+    REQUIRE(channel(MagnetosphereRun::kSpeedChannel)->dim == qp::units::dims::velocity);
+    REQUIRE(channel(MagnetosphereRun::kEnergyChannel)->dim == qp::units::dims::energy);
+    REQUIRE(channel(MagnetosphereRun::kMuChannel)->dim == qp::units::dims::magnetic_dipole);
+    REQUIRE(channel(MagnetosphereRun::kRadiusChannel)->dim == qp::units::dims::length);
+    // Provenance: every channel names the node the samples came from, which is the question a reader asks after
+    // "which run" and the one a window needs in order to point at the thing a reading came from.
+    REQUIRE(channel(MagnetosphereRun::kRadiusChannel)->source.valid());
+    REQUIRE(channel(MagnetosphereRun::kRadiusChannel)->source.index == chain.pusher.index);
+
+    // `steps + 1` samples: the initial condition plus one per step, the shape `GraphRun` produces and the shape a
+    // reader assumes -- the first number in a column is where the experiment started.
+    REQUIRE(record.size() == 601);
+    REQUIRE(record.is_consistent());
+
+    // -- the physics -----------------------------------------------------------------------------------------
+    const auto read = [&record](std::size_t index, const char* name) {
+        for (std::size_t slot = 0; slot < record.channels().size(); ++slot) {
+            if (record.channels()[slot].name != name) continue;
+            const auto value = record.value_at(static_cast<std::uint64_t>(index), slot);
+            REQUIRE(value.has_value());
+            return value->value;
+        }
+        return 0.0;
+    };
+
+    // **A magnetic force does no work, so the speed is exactly conserved by the motion** and every change in it is
+    // the integrator's. Measured over six hundred steps at beta = 0.01: the relative change is below 1e-12, which
+    // is rounding rather than truncation -- and that is the number a reader needs to tell "the run converged" from
+    // "the run drifted".
+    const double speed_first = read(0, MagnetosphereRun::kSpeedChannel);
+    const double speed_last = read(record.size() - 1, MagnetosphereRun::kSpeedChannel);
+    REQUIRE(speed_first > 0.0);
+    REQUIRE(std::abs(speed_last - speed_first) / speed_first < 1.0e-12);
+    // And the energy channel is the same statement in the units a report is written in: `m v^2 / 2` at the
+    // proton's mass. Asserted against the closed form rather than against the speed channel, so a unit slip in
+    // either conversion shows up as a disagreement between two independent expressions.
+    const double energy_first = read(0, MagnetosphereRun::kEnergyChannel);
+    REQUIRE(std::abs(energy_first - 0.5 * kProtonMassKg * speed_first * speed_first) / energy_first < 1.0e-12);
+    // A tenth of the speed of light: beta = 0.01 is what the chain launched with, and a channel in metres per
+    // second is what tells a reader that the SI conversion happened at the boundary.
+    REQUIRE(std::abs(speed_first - 0.01 * kSpeedOfLightSI) / speed_first < 1.0e-3);
+
+    // **The first adiabatic invariant drifts, and that is physics rather than error.** `mu` is conserved when the
+    // field varies slowly over a gyro-orbit; a ring launched at L = 6.6 with a 90-degree pitch angle has a
+    // gyro-radius small compared with the field's scale, so mu is conserved to a few parts in ten thousand -- and
+    // the case asserts the order rather than a tight bound, because a tight bound would be asserting that the
+    // adiabatic approximation is exact, which it is not and which this platform should never claim.
+    const double mu_first = read(0, MagnetosphereRun::kMuChannel);
+    const double mu_last = read(record.size() - 1, MagnetosphereRun::kMuChannel);
+    const double radius_first = read(0, MagnetosphereRun::kRadiusChannel);
+    REQUIRE(mu_first > 0.0);
+    REQUIRE(radius_first > 0.0);
+
+    // **The bound is derived, not chosen.** `mu` is conserved when the field varies slowly over a gyro-orbit, so
+    // its drift is set by the ratio of the gyro-radius to the field's scale length -- here `rho / L`, with
+    // `rho = v / omega_c` and `omega_c = (q/m) B` at the equator. Measured on this configuration: `rho/L` is
+    // 7.2e-3 and the drift over six hundred steps is **1.55e-2**, a factor of about two. Asserting the band around
+    // that prediction is asserting the *mechanism*; the first version of this case asserted 1e-3, which is
+    // asserting that the adiabatic approximation is exact -- which it is not, and which this platform must never
+    // claim.
+    const double b_equator = kEquatorialSurfaceFieldT / (6.6 * 6.6 * 6.6);
+    const double gyro_radius_ratio =
+        (speed_first / (kProtonChargeMassSI * b_equator)) / radius_first;
+    const double mu_drift = std::abs(mu_last - mu_first) / mu_first;
+    REQUIRE(gyro_radius_ratio > 0.0);
+    REQUIRE(gyro_radius_ratio < 0.05);
+    REQUIRE(mu_drift > 0.5 * gyro_radius_ratio);
+    REQUIRE(mu_drift < 5.0 * gyro_radius_ratio);
+    // And the statement that separates the physics from the arithmetic: the **speed** is conserved nine orders of
+    // magnitude better than `mu` drifts. A run whose speed drifted like this has a broken integrator; a run whose
+    // `mu` did not drift at all has a broken diagnostic.
+    REQUIRE(mu_drift > 1.0e9 * (std::abs(speed_last - speed_first) / speed_first));
+
+    // The radius channel is in **metres**, which is what makes it readable by a measurement session whose dataset
+    // is a length: the kit converts at its boundary and a session in metres must be able to take a reading from it.
+    REQUIRE(std::abs(radius_first / kEarthRadiusM - 6.6) < 0.2);
+    // A 90-degree pitch angle means the whole velocity is perpendicular, so `mu` and the energy are related:
+    // `mu = E / B` exactly at the launch, and `B` at the equator of a tilted dipole is the model's own surface
+    // field over `L^3`. Asserting the relation rather than either number is what makes this a check on the
+    // *diagnostic* and not on the field model, which has its own cases.
+    REQUIRE(std::abs(mu_first - energy_first / b_equator) / mu_first < 0.01);
+}
+
 TEST_CASE("magnetosphere.field_nodes.a_uniform_field_is_uniform", "[magnetosphere]") {
     // The second field model, and the one whose answer is **exact** under trilinear interpolation at any
     // spacing: every node holds the same vector, so a sample anywhere is that vector to the last bit. That is

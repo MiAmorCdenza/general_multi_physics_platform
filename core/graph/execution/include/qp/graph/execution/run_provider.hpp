@@ -63,6 +63,7 @@
 #include <qp/graph/field/field_set.hpp>
 #include <qp/graph/ir.hpp>
 #include <qp/graph/structure.hpp>
+#include <qp/runtime/trace/trace.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -227,6 +228,58 @@ public:
      * @tests       execution.run_provider.a_run_with_no_field_answers_with_an_empty_set
      */
     [[nodiscard]] virtual const qp::graph::field::FieldSet& fields() const noexcept;
+
+    /**
+     * @brief Tells the run which record in the ledger its samples belong to.
+     *
+     * Called **after** a successful build and before the first step, which is the order the operator path already
+     * documents: binding comes before anything is written down, so a refused build leaves no ledger entry, and an
+     * entry that exists always has a run that really executed. A run that has not been told answers with an empty
+     * trace whose `RunId` is invalid, which is the honest state and the one a caller can test.
+     *
+     * Why the identity arrives from outside at all: a trace's samples are only lookups if somebody issued the id,
+     * and the issuer is the ledger -- which belongs to whoever started the run, not to the run. `Trace` therefore
+     * takes its `RunId` at construction and this call is what supplies it.
+     *
+     * @param run The id the ledger issued. `RunId{}` is legal and means "not recorded".
+     *
+     * @ownership   value
+     * @thread      main
+     * @pre         none
+     * @post        On an implementation that records, `trace().run()` is `run`
+     * @invariant   Does not disturb the report, the positions or the fields
+     * @errors      noexcept
+     * @complexity  O(channels)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.run_provider.a_run_records_under_the_id_it_was_given
+     */
+    virtual void set_run(qp::runtime::RunId run) noexcept;
+
+    /**
+     * @brief What this run recorded, for the measurement chain to read.
+     *
+     * **Empty for a run that records nothing**, which is the default and is not a failure: a run's job is to
+     * advance state, and recording is a service it may offer. The default is a shared empty trace rather than a
+     * pure virtual for the reason `fields()` gives -- a pure one would stop every existing implementation from
+     * compiling for a capability it does not have.
+     *
+     * This is the interface the platform's whole closed loop hangs from at this end: without a trace there is no
+     * measurement, no uncertainty and no report, which is why the flagship kit records one. The channels are the
+     * run's own -- a trace names quantities, and which quantities are worth recording is content.
+     *
+     * @ownership   borrows from this object
+     * @thread      main
+     * @pre         none
+     * @post        A trace whose channels and samples are the run's own; empty before `set_run`
+     * @invariant   Every append during `advance` grows it by at most one sample per step
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.run_provider.a_run_records_under_the_id_it_was_given
+     */
+    [[nodiscard]] virtual const qp::runtime::Trace& trace() const noexcept;
 };
 
 /**

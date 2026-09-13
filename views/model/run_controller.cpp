@@ -133,6 +133,15 @@ RunResult RunController::run() const {
                 out.report.message = built.refusal;
                 return out;
             }
+            // **The record, and the identity that makes it findable.** The ledger entry is opened *here*, after the
+            // build succeeded and before the first step, which is the order the operator path argues for: a
+            // refused build is not an event, so an entry that exists always has a run that really executed. The id
+            // is handed to the run before it steps, because a trace's samples are only lookups if somebody issued
+            // the identity they carry -- and for this kit that chain is the platform's whole point: the trace is
+            // what the measurement session reads, the ledger is what a reading's provenance points back into, and
+            // the uncertainty follows from there.
+            const qp::runtime::RunId id = ledger_.begin(spec_for());
+            built.run->set_run(id);
             const auto advanced = built.run->advance(kSteps, kDt);
             if (!advanced.has_value()) {
                 out.report.message = std::string{provider->name()} + " refused a step";
@@ -141,7 +150,9 @@ RunResult RunController::run() const {
             const execution::GraphRunReport summary = built.run->report();
             out.report.ok = true;
             out.report.steps = summary.steps;
+            out.report.samples = built.run->trace().size();
             out.report.operator_name = std::string{provider->name()};
+            out.report.run = id;
             out.report.message = summary.note;
             out.particle_positions = built.run->positions();
             // **Copied, not borrowed, and by the rule already applied one line above.** The run that owns the
@@ -153,6 +164,13 @@ RunResult RunController::run() const {
             // that one copy per Run press for the same bytes resident for the life of the window, and it would
             // make `run()` return a value that borrows from the controller.
             out.fields = built.run->fields();
+            // The record, copied by the same rule and for the same reason. Unlike the fields this one is small --
+            // four doubles a step for four thousand steps is a hundred and thirty kilobytes -- and unlike the
+            // positions it is what the **measurement chain** reads: the window hands this trace to the measurement
+            // session, so a run of this kit finally produces readings, an uncertainty and a report. Before this
+            // line the platform's flagship experiment produced no trace at all, which meant no measurements, no
+            // confidence report and no provenance for either.
+            out.trace = built.run->trace();
             return out;
         }
         out.report.message = ready.detail;

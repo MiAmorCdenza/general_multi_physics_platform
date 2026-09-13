@@ -187,6 +187,30 @@ public:
     /// @tests       magnetosphere.emitter.the_type_declares_the_ports_the_run_reads
     [[nodiscard]] static double charge_mass_of(std::int64_t index) noexcept;
 
+    /// @brief The mass of species `index`, in kilograms.
+    ///
+    /// **Why a second table when the first one is a ratio.** The pusher needs `q/m` and nothing else: a Boris push
+    /// divides by the mass in every stage, so the ratio is exactly the quantity it wants and carrying the pair
+    /// separately would be two numbers where one is used. The **measurement chain** needs the mass: an energy is
+    /// `m v^2 / 2` and the first adiabatic invariant is `m v_perp^2 / 2B`, and a trace channel that reported either
+    /// of those with the mass missing would be reporting a quantity the kit does not have. So the ratio stays where
+    /// the kernel reads it and the mass joins it here, beside the same index, from the same table order -- and the
+    /// index is asserted by the same test, because "which species is 2" has to mean one thing.
+    ///
+    /// @param index The choice index. Out of range takes the proton, as `charge_mass_of` does.
+    ///
+    /// @ownership   pure
+    /// @thread      any
+    /// @pre         none
+    /// @post        One of the three published masses, in kilograms
+    /// @invariant   `mass_of(0) == kProtonMassKg`, and `charge_mass_of(i) * mass_of(i)` is the species' charge
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.emitter.the_mass_table_agrees_with_the_charge_mass_table
+    [[nodiscard]] static double mass_of(std::int64_t index) noexcept;
+
     /**
      * @brief The node types this build ships, ready to register with a host.
      *

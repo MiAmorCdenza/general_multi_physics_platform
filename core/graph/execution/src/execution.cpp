@@ -273,6 +273,19 @@ const qp::graph::field::FieldSet& IGraphRun::fields() const noexcept {
     return kNoFields;
 }
 
+void IGraphRun::set_run(qp::runtime::RunId /*run*/) noexcept {
+    // The default is to ignore it, and that is the right default: a run that records nothing has no use for an
+    // identity, and one that does record overrides this. Not a pure virtual, for the reason `fields()` is not.
+}
+
+const qp::runtime::Trace& IGraphRun::trace() const noexcept {
+    // A shared empty trace, for the same reason as the shared empty set above. Its `RunId` is invalid, which is
+    // what "this run was never given one" means -- `Trace` exposes no way to change it afterwards, deliberately,
+    // so the id it carries is always the id some ledger issued.
+    static const qp::runtime::Trace kNoTrace{qp::runtime::RunId{}};
+    return kNoTrace;
+}
+
 RunOutcome GraphRun::run(std::size_t steps, double dt) {
     RunOutcome out;
     out.operator_name = operator_name_;

@@ -116,6 +116,16 @@ void MagnetosphereRun::reset() noexcept {
     plan_refusal_ = PlanBuildRefusal::ok;
     executor_refusal_ = pp::PlanRefusal::ok;
     field_only_ = false;
+    // The record and what it is computed against: a rebuild is a different experiment, so it starts with an empty
+    // trace and no channels. The identity is *not* cleared -- `set_run` rebuilds the trace around it, and a run
+    // that kept recording into the previous experiment's channels would append samples of a second setup to the
+    // first setup's series.
+    trace_ = qp::runtime::Trace{qp::runtime::RunId{}};
+    recording_ = false;
+    recorded_field_ = qp::graph::field::FieldValue{};
+    recorded_grid_ = GridSpec{};
+    recorded_mass_kg_ = 0.0;
+    recorded_source_ = qp::graph::NodeId{};
 }
 
 const pp::AdvanceReport& MagnetosphereRun::advance_report() const noexcept {
@@ -164,6 +174,71 @@ std::vector<double> MagnetosphereRun::positions() const {
 const qp::graph::field::FieldSet& MagnetosphereRun::fields() const noexcept {
     // The base's shared empty set when there is no store, rather than a member: see the declaration's comment.
     return fields_ != nullptr ? *fields_ : IGraphRun::fields();
+}
+
+const qp::runtime::Trace& MagnetosphereRun::trace() const noexcept { return trace_; }
+
+void MagnetosphereRun::set_run(qp::runtime::RunId run) noexcept {
+    // A fresh trace rather than a cleared one, because `Trace` takes its identity at construction and exposes no
+    // way to change it afterwards -- deliberately, so the id a trace carries is always one a ledger issued.
+    trace_ = qp::runtime::Trace{run};
+    recording_ = false;
+    const qp::runtime::Channel::NodeRef source{recorded_source_.index, recorded_source_.generation};
+    const auto declare = [this, source](const char* name, qp::units::Dim dim) {
+        return trace_.add_channel(qp::runtime::Channel{name, dim, source}).has_value();
+    };
+    if (!declare(kSpeedChannel, qp::units::dims::velocity)) return;
+    if (!declare(kEnergyChannel, qp::units::dims::energy)) return;
+    if (!declare(kMuChannel, qp::units::dims::magnetic_dipole)) return;
+    if (!declare(kRadiusChannel, qp::units::dims::length)) return;
+    recording_ = true;
+}
+
+/// @brief One sample of the recorded particle, in SI.
+///
+/// A free function in the anonymous namespace rather than a member, because it is arithmetic over a state and a
+/// field and holds nothing: the run's job is to know *when* to call it.
+[[nodiscard]] bool append_sample(qp::runtime::Trace& trace, const pp::ParticleState& state,
+                                 const gfield::FieldValue& field, const GridSpec& grid, double mass_kg,
+                                 double t) {
+    if (state.count() == 0) return false;
+    const Vec3 position{state.at(0, 0, pp::ParticleState::Slot::position),
+                        state.at(0, 1, pp::ParticleState::Slot::position),
+                        state.at(0, 2, pp::ParticleState::Slot::position)};
+    const Vec3 velocity{state.at(0, 0, pp::ParticleState::Slot::velocity),
+                        state.at(0, 1, pp::ParticleState::Slot::velocity),
+                        state.at(0, 2, pp::ParticleState::Slot::velocity)};
+    // **The state is already SI**, and the conversion is therefore nothing at all -- which is worth stating because
+    // the first version of this function converted anyway and produced a speed of 8.99e14 m/s and a radius of
+    // 2.68e14 m. The measurement that settled it is one line: an L shell of 6.6 came out as 4.2e7, which is 6.6
+    // earth radii **in metres**. `positions()` multiplies by `kNormalizedPerMetre` to *undo* this, so the two
+    // callers now agree about which unit the state holds, and the disagreement was a second conversion in a kit
+    // whose whole unit story is "the conversion happens once, at the boundary".
+    const double speed_si = norm(velocity);
+    const double radius_si = norm(position);
+    const double energy_j = 0.5 * mass_kg * speed_si * speed_si;
+
+    // `v_perp` needs the **local** field direction, and `B` its magnitude: `mu = m v_perp^2 / 2B`. Sampling the
+    // same table the pusher reads, through the same sampler, is what makes this the invariant *of this run*
+    // rather than of a second reading of the graph.
+    const Vec3 magnetic = sample_baked(field, grid.origin_m, grid.spacing_m, position);
+    const double b_magnitude = norm(magnetic);
+    double mu = 0.0;
+    if (b_magnitude > 0.0) {
+        const Vec3 b_hat = magnetic * (1.0 / b_magnitude);
+        const double along = dot(velocity, b_hat);
+        const Vec3 perpendicular = velocity - b_hat * along;
+        const double v_perp_si = norm(perpendicular);
+        // Joules per tesla: `m v^2 / 2B` in SI, which is the same expression the label promises.
+        mu = 0.5 * mass_kg * v_perp_si * v_perp_si / b_magnitude;
+    }
+
+    return trace
+        .append(t, {qp::runtime::UncertainValue::measured(speed_si, 0.0, qp::units::dims::velocity),
+                    qp::runtime::UncertainValue::measured(energy_j, 0.0, qp::units::dims::energy),
+                    qp::runtime::UncertainValue::measured(mu, 0.0, qp::units::dims::magnetic_dipole),
+                    qp::runtime::UncertainValue::measured(radius_si, 0.0, qp::units::dims::length)})
+        .has_value();
 }
 
 RunRefusal MagnetosphereRun::build_with_own_fields(const graph::Graph& g, const graph::Declarations& declared,
@@ -270,6 +345,37 @@ RunRefusal MagnetosphereRun::build(const graph::Graph& g, const graph::Declarati
         case PlanBuildRefusal::grid_unknown: return RunRefusal::grid_unknown;
         case PlanBuildRefusal::stale_order: return RunRefusal::field_not_baked;
     }
+
+    // -- 3b. What the record will be computed against ---------------------------------------------------------
+    //
+    // The **pusher's** magnetic socket, not the emitter's, even though the two are usually the same wire: `mu` is
+    // a property of the field the particle moves in, and a graph that launched a ring against one field and pushed
+    // it through another would otherwise get a diagnostic about the wrong one -- a number that is plausible, wrong
+    // and impossible to notice. Resolved with the same `resolve_field`, so "which field is on this socket" has one
+    // answer in this file rather than two.
+    //
+    // The mass comes from the emitter's **species index**, read from the node rather than from the spec: the spec
+    // carries `q/m` because that is what the pusher divides by, and the trace needs `m` (see `mass_of`).
+    recorded_source_ = emitters.front();
+    for (const graph::NodeId id : whole.particle.order()) {
+        if (is_type(g, id, PusherNodes::kBorisType)) {
+            recorded_source_ = id;
+            break;
+        }
+    }
+    recorded_field_ = magnetic;
+    recorded_grid_ = grid;
+    if (const graph::Node* pusher = g.find_node(recorded_source_); pusher != nullptr) {
+        gfield::FieldValue pushed;
+        GridSpec pushed_grid;
+        if (resolve_field(g, recorded_source_, PusherNodes::kPortMagnetic, fields, pushed, pushed_grid) ==
+                PlanBuildRefusal::ok &&
+            gfield::is_readable(pushed)) {
+            recorded_field_ = pushed;
+            recorded_grid_ = pushed_grid;
+        }
+    }
+    recorded_mass_kg_ = EmitterNodes::mass_of(emitter_node->param(EmitterNodes::kPortSpecies).as_i64());
     // Nothing wired: the emitter's magnetic socket is `required`, so this is the case the graph validator also
     // reports -- and the run cannot launch without it, because a pitch angle needs a field to be measured
     // against.
@@ -304,11 +410,25 @@ qp::diag::Result<void> MagnetosphereRun::advance(std::size_t steps, double dt) {
     }
     pk::AdvanceContext ctx;
     ctx.dt = dt;
+    // The initial condition is recorded **before** the first step, so a trace of `steps` steps holds `steps + 1`
+    // samples -- the same shape `GraphRun` produces, and the shape a reader assumes: the first number in a column
+    // is where the experiment started, not where it had already got to.
+    double t = 0.0;
+    if (recording_) {
+        append_sample(trace_, state_, recorded_field_, recorded_grid_, recorded_mass_kg_, t);
+    }
     for (std::size_t step = 0; step < steps; ++step) {
         const auto advanced = executor_->advance(ctx);
         // The first refusal stops the loop and is returned: a run whose kernel refused a step did not silently
         // take the rest, and the counters say how far it got.
         if (!advanced.has_value()) return advanced.error();
+        t += dt;
+        // Recorded **after** the step and with the step's own time, so sample `n` is the state at `n * dt`. A
+        // refusal above leaves the trace one sample short of the counter, which is the honest record: the last
+        // sample is the last state that was actually computed.
+        if (recording_) {
+            append_sample(trace_, state_, recorded_field_, recorded_grid_, recorded_mass_kg_, t);
+        }
     }
     return {};
 }

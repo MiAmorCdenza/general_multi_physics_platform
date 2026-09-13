@@ -46,7 +46,10 @@
  * @errors      See `build`
  * @frozen      no
  * @tests       magnetosphere.run.a_graph_becomes_a_run,
- *              magnetosphere.run.a_run_without_a_field_is_refused
+ *              magnetosphere.run.a_run_without_a_field_is_refused,
+ *              magnetosphere.run.a_provider_builds_a_run_from_a_graph,
+ *              magnetosphere.render.a_field_becomes_a_family_of_curves,
+ *              magnetosphere.run.the_recorded_channels_are_the_ones_a_report_names
  */
 #pragma once
 
@@ -58,6 +61,7 @@
 #include <qp/graph/kernels/kernel.hpp>
 #include <qp/graph/particles/executor.hpp>
 #include <qp/graph/particles/particle_state.hpp>
+#include <qp/runtime/trace/trace.hpp>
 
 #include <cstddef>
 #include <cstdint>
@@ -288,6 +292,76 @@ public:
     /// @tests       magnetosphere.run.a_provider_builds_a_run_from_a_graph
     [[nodiscard]] const qp::graph::field::FieldSet& fields() const noexcept override;
 
+    /// @brief The channels this run records, by name.
+    ///
+    /// Four quantities, and each one is here for a different reason -- which is the whole argument for a trace
+    /// rather than a single "diagnostic" number:
+    ///
+    ///   - **`speed`** is the pusher's own numerical-error diagnostic. A magnetic force does no work, so the speed
+    ///     of every particle is **exactly** conserved by the motion and any change in it is the integrator's. A
+    ///     run whose speed drifts is a run whose answer is wrong, and this channel is the number that says so
+    ///     without the reader having to know what Boris does.
+    ///   - **`mu`** is the physics: the first adiabatic invariant `m v_perp^2 / 2B` is conserved when the field
+    ///     varies slowly over a gyro-orbit and **not** otherwise, so its drift measures how adiabatic this
+    ///     experiment actually is. That is a real, measurable property of the configuration -- not an error -- and
+    ///     it is the quantity a course on magnetospheric motion is about.
+    ///   - **`energy`** is `m v^2 / 2`, which for a static magnetic field is the same statement as `speed` in
+    ///     different units; it is here because a report is written in joules and because its dimension is what
+    ///     makes it usable by the analysis plugins.
+    ///   - **`radius`** is the distance from the origin, in **metres**, and it is the channel the measurement
+    ///     chain reads: the window's measurement session measures a length, so a reading taken from this trace
+    ///     needs a length channel in SI. It is also what an orbit is drawn against.
+    ///
+    /// Every value is **SI**, converted at this kit's boundary like `positions` -- and `radius` in metres is the
+    /// one that makes the difference visible, because a session whose dataset is in metres cannot take a reading
+    /// from a channel in earth radii and should not be able to.
+    static constexpr const char* kSpeedChannel = "speed";
+    /// @brief The kinetic energy of the recorded particle, in joules. See `kSpeedChannel`.
+    static constexpr const char* kEnergyChannel = "energy";
+    /// @brief The first adiabatic invariant `m v_perp^2 / 2B`, in joules per tesla. See `kSpeedChannel`.
+    static constexpr const char* kMuChannel = "mu";
+    /// @brief The distance from the origin, in metres. See `kSpeedChannel`.
+    static constexpr const char* kRadiusChannel = "radius";
+
+    /// @brief Names the run's record, so its samples carry the identity the ledger issued.
+    ///
+    /// Also where the channels are declared, which is deliberate: the count has to exist before the first sample
+    /// or `Trace::append` refuses a sample whose width does not match, and a run that recorded before being named
+    /// would append into a trace nobody can look up. Called after a successful build and before the first step.
+    ///
+    /// @param run The id the ledger issued. `RunId{}` records nothing but still declares the channels.
+    ///
+    /// @ownership   value
+    /// @thread      main
+    /// @pre         none
+    /// @post        `trace().run()` is `run`, and every step after this appends one sample
+    /// @invariant   Declaring the channels twice does not double them: the trace is rebuilt
+    /// @errors      noexcept
+    /// @complexity  O(channels)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.run.the_recorded_channels_are_the_ones_a_report_names
+    void set_run(qp::runtime::RunId run) noexcept override;
+
+    /// @brief What this run recorded: one sample per host step, plus the initial condition.
+    ///
+    /// The **first particle** is the one recorded, which is the convention `GraphRun` already sets and for the same
+    /// reason: a trace is a time series about something, and a channel that silently averaged a population would
+    /// be a different quantity with the same name. A population aggregate is a legitimate channel; it is a
+    /// different one, and it arrives with a different name when a course needs it.
+    ///
+    /// @ownership   borrows from this object
+    /// @thread      main
+    /// @pre         none
+    /// @post        Empty of samples before `set_run`, and one sample per step after it
+    /// @invariant   Every sample's width is four, whatever a step did
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.run.the_recorded_channels_are_the_ones_a_report_names
+    [[nodiscard]] const qp::runtime::Trace& trace() const noexcept override;
+
     /**
      * @brief Builds a run over a graph, **baking the field domain into a store this object owns**.
      *
@@ -383,7 +457,7 @@ public:
     /// @nondet      none
     /// @frozen      no
     /// @tests       magnetosphere.run.a_rebuild_replaces_the_run,
-    ///              magnetosphere.run.a_field_only_graph_bakes_without_particles
+    ///              magnetosphere.render.a_field_becomes_a_family_of_curves
     [[nodiscard]] bool built() const noexcept { return executor_ != nullptr || field_only_; }
 
     /// @brief Why `build_particle_plan` refused, when the refusal was `plan_rejected`.
@@ -425,6 +499,21 @@ private:
     std::unique_ptr<qp::graph::field::FieldSet> owned_fields_{};
     /// Whether this run baked a field and has no particles to step. See `built()` and `build_with_own_fields`.
     bool field_only_ = false;
+    /// The record of this run: its channels, and one sample per step. See the channel names in the class body.
+    qp::runtime::Trace trace_{qp::runtime::RunId{}};
+    /// Whether `set_run` has declared the channels, which is what makes appending legal.
+    bool recording_ = false;
+    /// The magnetic field the recorded particle moves in, and where its samples are.
+    ///
+    /// Resolved at build time by the same `resolve_field` the pusher's own socket uses, so the `mu` channel samples
+    /// **the field the particle actually feels** rather than a second reading of the graph -- a diagnostic computed
+    /// from a different field would be a number about a different experiment.
+    qp::graph::field::FieldValue recorded_field_{};
+    GridSpec recorded_grid_{};
+    /// The recorded species' mass, in kilograms. See `EmitterNodes::mass_of` for why the ratio is not enough.
+    double recorded_mass_kg_ = 0.0;
+    /// The node the recorded samples come from, for the channel's provenance.
+    qp::graph::NodeId recorded_source_{};
     qp::graph::particles::ParticleState state_{};
     BuiltPlan plan_{};
     std::unique_ptr<qp::graph::particles::ParticleExecutor> executor_{};

@@ -1141,6 +1141,34 @@ private:
     qp::graph::field::FieldSet fields_{};
 };
 
+/// @brief A run that records something, so the *other* trace answer is checked too.
+class RecordingRun final : public execution::IGraphRun {
+public:
+    RecordingRun() {
+        published =
+            trace_.add_channel(qp::runtime::Channel{"anything", qp::units::dims::length, {}}).has_value();
+    }
+
+    [[nodiscard]] qp::diag::Result<void> advance(std::size_t, double dt) override {
+        if (!(dt > 0.0)) return qp::diag::ErrorCode::invalid_argument;
+        return {};
+    }
+    [[nodiscard]] execution::GraphRunReport report() const override { return {}; }
+    [[nodiscard]] std::vector<double> positions() const override { return {}; }
+    void set_run(qp::runtime::RunId run) noexcept override {
+        trace_ = qp::runtime::Trace{run};
+        published =
+            trace_.add_channel(qp::runtime::Channel{"anything", qp::units::dims::length, {}}).has_value();
+    }
+    [[nodiscard]] const qp::runtime::Trace& trace() const noexcept override { return trace_; }
+
+    /// Whether the channel went in, so a case fails on *that* rather than on a later assertion.
+    bool published = false;
+
+private:
+    qp::runtime::Trace trace_{qp::runtime::RunId{}};
+};
+
 }  // namespace
 
 TEST_CASE("execution.run_provider.a_run_with_no_field_answers_with_an_empty_set", "[execution]") {
@@ -1187,6 +1215,41 @@ TEST_CASE("execution.run_provider.a_run_with_no_field_answers_with_an_empty_set"
     REQUIRE(qp::graph::field::get_component(view, 3, 1) == 0.25);
     // The same store answers a key it does not hold with the unreadable value, which is the single branch above.
     REQUIRE_FALSE(qp::graph::field::is_readable(baked.view(qp::graph::field::FieldKey{9, 9})));
+}
+
+TEST_CASE("execution.run_provider.a_run_records_under_the_id_it_was_given", "[execution]") {
+    // The trace half of the same interface. A run's job is to advance state; recording is a service it may offer,
+    // and the platform's closed loop hangs from it -- without a trace there is no measurement, no uncertainty and
+    // no report, which is why the flagship kit records one and why the interface has to be able to carry it.
+    //
+    // The default is what `StubRun` above answers with, and it is the interesting half: a run that records nothing
+    // must keep compiling, must answer with something a caller can iterate (nothing) rather than something a
+    // caller must test, and must not claim an identity nobody issued.
+    StubRun plain;
+    REQUIRE(plain.trace().empty());
+    REQUIRE_FALSE(plain.trace().run().valid());
+    REQUIRE(plain.trace().channels().empty());
+    // Being told an identity does not turn the default into a recorder: the base's answer is still "nothing", and
+    // that is the honest one -- a stub that invented a trace would be reporting samples it never took.
+    plain.set_run(qp::runtime::RunId{7});
+    REQUIRE(plain.trace().empty());
+    REQUIRE_FALSE(plain.trace().run().valid());
+
+    // The shared empty trace, for the same reason `fields()` shares one: a hundred stub runs should not allocate a
+    // hundred empty vectors. Pinned here so that giving each run its own is a deliberate change.
+    StubRun another;
+    REQUIRE(&plain.trace() == &another.trace());
+
+    // And the other answer: a run that records reports its own trace under the id it was given.
+    RecordingRun recording;
+    REQUIRE(recording.published);
+    REQUIRE_FALSE(recording.trace().run().valid());
+    recording.set_run(qp::runtime::RunId{42});
+    REQUIRE(recording.trace().run() == qp::runtime::RunId{42});
+    REQUIRE(recording.trace().channels().size() == 1);
+    const qp::runtime::Trace& kept = recording.trace();
+    REQUIRE(&kept != &plain.trace());
+    REQUIRE(kept.empty());
 }
 
 TEST_CASE("execution.run_provider.a_provider_names_its_own_refusal", "[execution]") {

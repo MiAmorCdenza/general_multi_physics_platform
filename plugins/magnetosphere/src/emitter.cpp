@@ -91,6 +91,18 @@ double EmitterNodes::charge_mass_of(std::int64_t index) noexcept {
     }
 }
 
+double EmitterNodes::mass_of(std::int64_t index) noexcept {
+    // The same switch order as `charge_mass_of`, and the alpha's mass is written the way its charge-to-mass ratio
+    // already writes it (`4 * kProtonMassKg`) rather than as a fourth constant: an alpha is two protons and two
+    // neutrons, and a second literal for it is a second place for that to stop being true.
+    switch (index) {
+        case 0: return kProtonMassKg;
+        case 1: return kElectronMassKg;
+        case 2: return 4.0 * kProtonMassKg;
+        default: return kProtonMassKg;
+    }
+}
+
 EmitterSpec EmitterNodes::read_from(const graph::Node& node) noexcept {
     EmitterSpec spec;
     spec.charge_mass_si = charge_mass_of(node.param(kPortSpecies).as_i64());
