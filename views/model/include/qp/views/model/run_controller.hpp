@@ -187,23 +187,30 @@ public:
      *
      * @param session The editing session, read-only. Borrowed, not copied: a controller over a copy of
      *                the graph would run something the user is not looking at.
+     * @param session The graph to run. Borrowed.
+     * @param ledger Where the run is recorded. Borrowed, and **the caller's** rather than this object's: a
+     *                session has one history of what happened in it, so the object that runs and the objects
+     *                that report must write and read the same one. The window that owns the ledger hands its
+     *                own over, which is what makes its status line count the runs it just watched.
      * @param binders Consulted in order; the first that claims a node runs it.
      * @param resolve The catalog and port registry `graph/validate` needs. Passed in rather than reached for,
      *                because a controller that found them itself would be deciding which registry is
      *                authoritative -- and the window already knows.
      *
-     * @ownership   observes `session`
+     * @ownership   observes `session` and `ledger`
      * @thread      ui
-     * @pre         `session` outlives this object
+     * @pre         `session` and `ledger` outlive this object
      * @post        none
-     * @invariant   The borrowed reference is never written through
+     * @invariant   The borrowed references are never written through, except the ledger, which gains one
+     *              record per run that executes
      * @errors      noexcept
      * @complexity  O(binders)
      * @nondet      none
      * @frozen      no
-     * @tests       run.controller.refuses_a_graph_with_nothing_to_run
+     * @tests       run.controller.refuses_a_graph_with_nothing_to_run,
+     *              run.controller.one_ledger_for_the_caller
      */
-    RunController(const qp::authoring::Session& session,
+    RunController(const qp::authoring::Session& session, qp::runtime::RunLedger& ledger,
                   std::vector<graph::execution::IOperatorBinder*> binders,
                   qp::graph::ResolveContext resolve);
 
@@ -227,16 +234,22 @@ public:
     [[nodiscard]] std::string description() const;
 
     /**
-     * @brief The ledger of runs this controller has started.
+     * @brief The ledger the runs went into: the one this object was constructed with.
      *
-     * The ids in `RunReport::run` are issued by it, so a caller that wants to show a run's provenance
-     * reads it here. One ledger per controller rather than per caller, because two ledgers in one
-     * session is how the window's status line and a panel came to disagree about how many runs had
-     * happened.
+     * The ids in `RunReport::run` are issued by it, so a caller that wants to show a run's provenance reads
+     * it here -- and because it is the caller's own ledger, that caller reads the same object it already
+     * holds rather than a second history of the same session.
      *
-     * @ownership   borrows from this object
+     * **This used to be one ledger per controller, and that was measured to be wrong.** The window's status
+     * line counts the runs recorded in *its* ledger, so a controller holding its own made the one line the
+     * user looks at say `runs 0 | reproducibility gaps: no run yet` immediately after a successful run whose
+     * particles were being drawn in the panel beside it. The comment that used to be here argued for one
+     * ledger per controller on the grounds that two ledgers in a session disagree; the disagreement it named
+     * was real, and the fix is to have one, not to have the other one.
+     *
+     * @ownership   borrows from the caller
      * @thread      ui
-     * @pre         none
+     * @pre         The ledger outlives this object
      * @post        none
      * @invariant   Every reported `run` is a valid id in this ledger
      * @errors      noexcept
@@ -244,9 +257,10 @@ public:
      * @nondet      none
      * @frozen      no
      * @tests       run.controller.a_second_run_is_a_second_entry,
-     *              run.controller.runs_a_node_and_records_its_trace
+     *              run.controller.runs_a_node_and_records_its_trace,
+     *              run.controller.one_ledger_for_the_caller
      */
-    [[nodiscard]] const qp::runtime::RunLedger& ledger() const noexcept { return ledger_; }
+    [[nodiscard]] const qp::runtime::RunLedger& ledger() const noexcept { return *ledger_; }
 
     /**
      * @brief Binds the first runnable node, runs it, and returns its trace.
@@ -281,10 +295,10 @@ private:
     const qp::authoring::Session* session_;
     std::vector<graph::execution::IOperatorBinder*> binders_;
     qp::graph::ResolveContext resolve_{};
-    /// Mutable because `run()` is const: the controller does not change what it runs, but starting a run
-    /// is an event the ledger records. Marking the method non-const would say the graph might change,
-    /// which is the property worth keeping.
-    mutable qp::runtime::RunLedger ledger_{};
+    /// Not `mutable`, and not owned. `run()` is `const` because the controller does not change what it runs,
+    /// and writing a record through a pointer does not change that: the record is the caller's, which is the
+    /// point of borrowing it.
+    qp::runtime::RunLedger* ledger_ = nullptr;
 };
 
 }  // namespace qp::views::model

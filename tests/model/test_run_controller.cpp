@@ -34,6 +34,8 @@
 #include <qp/views/model/run_controller.hpp>
 #include <qp/views/model/run_providers.hpp>
 
+#include <qp/runtime/run/run.hpp>
+
 #include <qp/views/model/demo_library.hpp>
 #include <qp/graph/ir/node_type_registry.hpp>
 
@@ -108,8 +110,15 @@ public:
         REQUIRE(applied.has_value());
     }
 
+    /// @brief The ledger the runs are recorded in: the **fixture's**, not the controller's.
+    ///
+    /// Handing it over is what the cases below assert from the outside -- a run that landed in a ledger
+    /// this fixture cannot see would be a run whose record no reporter of this session would find.
+    [[nodiscard]] qp::runtime::RunLedger& ledger() noexcept { return ledger_; }
+
 private:
     qp::authoring::Session session_{};
+    qp::runtime::RunLedger ledger_{};
     qp::graph::NodeTypeRegistry catalog_{};
     qp::graph::NodeId node_{};
     /// Registers the demonstrator types, so `graph/validate` has something to check the fixture's node against
@@ -127,7 +136,7 @@ TEST_CASE("run.controller.refuses_a_graph_with_nothing_to_run", "[run]") {
     // one the user has. "Nothing to run" alone would leave someone staring at three nodes wondering why.
     {
         Fixture fixture{Shape::empty};
-        RunController controller{fixture.session(), binders(), fixture.resolve()};
+        RunController controller{fixture.session(), fixture.ledger(), binders(), fixture.resolve()};
         const RunResult result = controller.run();
         REQUIRE_FALSE(result.report.ok);
         REQUIRE(result.report.message.find("empty") != std::string::npos);
@@ -143,7 +152,7 @@ TEST_CASE("run.controller.refuses_a_graph_with_nothing_to_run", "[run]") {
         // "the operator exists and cannot honour this node". Reporting the first would tell the user to
         // install a plugin they already have.
         Fixture fixture{Shape::unparameterised};
-        RunController controller{fixture.session(), binders(), fixture.resolve()};
+        RunController controller{fixture.session(), fixture.ledger(), binders(), fixture.resolve()};
         const RunResult result = controller.run();
         REQUIRE_FALSE(result.report.ok);
         REQUIRE(result.report.message.find("cannot run demo.spring_damper") != std::string::npos);
@@ -155,7 +164,7 @@ TEST_CASE("run.controller.refuses_a_graph_with_nothing_to_run", "[run]") {
     {
         // No binders at all: a build with no plugins. Still a sentence rather than a crash.
         Fixture fixture{Shape::ready};
-        RunController controller{fixture.session(), {}, fixture.resolve()};
+        RunController controller{fixture.session(), fixture.ledger(), {}, fixture.resolve()};
         const RunResult result = controller.run();
         REQUIRE_FALSE(result.report.ok);
         REQUIRE(result.trace.empty());
@@ -165,7 +174,7 @@ TEST_CASE("run.controller.refuses_a_graph_with_nothing_to_run", "[run]") {
     // report nobody can read, and the count a supervisor looks at would be wrong.
     {
         Fixture fixture{Shape::empty};
-        RunController controller{fixture.session(), binders(), fixture.resolve()};
+        RunController controller{fixture.session(), fixture.ledger(), binders(), fixture.resolve()};
         for (int i = 0; i < 3; ++i) (void)controller.run();
         REQUIRE(controller.ledger().size() == 0);
     }
@@ -176,7 +185,7 @@ TEST_CASE("run.controller.damping_is_reported_not_hidden", "[run]") {
     // honoured, and the message names the node type and the two settings that caused it rather than
     // reporting an error code -- the useful thing for a user to know is *which node* and *what to change*.
     Fixture fixture{Shape::ready, 200.0, 0.5, /*c=*/0.5};
-    RunController controller{fixture.session(), binders(), fixture.resolve()};
+    RunController controller{fixture.session(), fixture.ledger(), binders(), fixture.resolve()};
     const RunResult result = controller.run();
 
     REQUIRE_FALSE(result.report.ok);
@@ -189,7 +198,7 @@ TEST_CASE("run.controller.damping_is_reported_not_hidden", "[run]") {
     // An unimplemented integrator is reported the same way, for the same reason: the user chose `verlet`
     // to get different behaviour, and running RK4 would contradict the choice silently.
     Fixture verlet{Shape::ready, 200.0, 0.5, 0.0, /*integrator=*/2};
-    RunController other{verlet.session(), binders(), verlet.resolve()};
+    RunController other{verlet.session(), verlet.ledger(), binders(), verlet.resolve()};
     REQUIRE_FALSE(other.run().report.ok);
 }
 
@@ -201,7 +210,7 @@ TEST_CASE("run.controller.runs_a_node_and_records_its_trace", "[run]") {
     // frequency component and the kernel's parameter block agree, and a disagreement would show up here
     // as a trajectory at the wrong period.
     Fixture fixture{Shape::ready};
-    RunController controller{fixture.session(), binders(), fixture.resolve()};
+    RunController controller{fixture.session(), fixture.ledger(), binders(), fixture.resolve()};
     const RunResult result = controller.run();
 
     REQUIRE(result.report.ok);
@@ -255,7 +264,7 @@ TEST_CASE("run.controller.reports_validation_without_refusing", "[run]") {
     qp::graph::NodeTypeRegistry empty_catalog{};
     const qp::graph::ResolveContext blind{&empty_catalog, &qp::ports::builtin_registry()};
 
-    RunController controller{fixture.session(), binders(), blind};
+    RunController controller{fixture.session(), fixture.ledger(), binders(), blind};
     const RunResult result = controller.run();
 
     REQUIRE(result.report.ok);
@@ -269,7 +278,7 @@ TEST_CASE("run.controller.reports_validation_without_refusing", "[run]") {
 
     // And with a catalog that knows the demonstrator types, the same graph validates cleanly: the findings are
     // measurements of the graph, not a standing complaint about the fixture.
-    RunController informed{fixture.session(), binders(), fixture.resolve()};
+    RunController informed{fixture.session(), fixture.ledger(), binders(), fixture.resolve()};
     const RunResult clean = informed.run();
     REQUIRE(clean.report.ok);
     REQUIRE(clean.report.validation_errors == 0);
@@ -281,7 +290,7 @@ TEST_CASE("run.controller.a_second_run_is_a_second_entry", "[run]") {
     // make two experiments share a record, and the ledger could no longer say which numbers came from
     // which configuration.
     Fixture fixture{Shape::ready};
-    RunController controller{fixture.session(), binders(), fixture.resolve()};
+    RunController controller{fixture.session(), fixture.ledger(), binders(), fixture.resolve()};
 
     const RunResult first = controller.run();
     REQUIRE(first.report.ok);
@@ -304,7 +313,7 @@ TEST_CASE("run.controller.description_states_what_it_will_do", "[run]") {
     // A button that does not say what it will do is a button that surprises. The description names the
     // step count and size, and those are the two numbers that decide whether the answer is right.
     Fixture fixture{Shape::ready};
-    RunController controller{fixture.session(), binders(), fixture.resolve()};
+    RunController controller{fixture.session(), fixture.ledger(), binders(), fixture.resolve()};
     const std::string text = controller.description();
 
     REQUIRE_FALSE(text.empty());
@@ -390,18 +399,24 @@ TEST_CASE("views.binders.a_provider_runs_a_graph_the_operators_declined", "[run]
     // exactly the thing under test: one mounted provider.
     Fixture fixture{Shape::ready};
     StubProvider provider;
+    // Three ledgers rather than one, so that a run landing in the wrong one is visible: each controller is
+    // handed a different ledger and the counts below say which of them each run reached.
+    qp::runtime::RunLedger alone_ledger{};
+    qp::runtime::RunLedger provided{};
+    qp::runtime::RunLedger refused_ledger{};
 
     clear_run_providers();
-    RunController alone{fixture.session(), {}, fixture.resolve()};
+    RunController alone{fixture.session(), alone_ledger, {}, fixture.resolve()};
     const RunResult refused = alone.run();
     REQUIRE_FALSE(refused.report.ok);
     REQUIRE(refused.report.message.find("no node") != std::string::npos);
     REQUIRE(refused.particle_positions.empty());
+    REQUIRE(alone_ledger.size() == 0);
 
     // With one mounted: the report is filled from the provider's own report, and the snapshot -- the one thing
     // a canvas reads -- comes through `particle_positions`.
     mount_run_provider(&provider);
-    RunController with_provider{fixture.session(), {}, fixture.resolve()};
+    RunController with_provider{fixture.session(), provided, {}, fixture.resolve()};
     const RunResult ran = with_provider.run();
     REQUIRE(ran.report.ok);
     REQUIRE(ran.report.steps == RunController::kSteps);
@@ -410,15 +425,18 @@ TEST_CASE("views.binders.a_provider_runs_a_graph_the_operators_declined", "[run]
     REQUIRE(ran.particle_positions.size() == 6);
     REQUIRE(ran.particle_positions.front() == 1.0);
     REQUIRE(ran.particle_positions.back() == 6.0);
+    REQUIRE(provided.size() == 1);
+    REQUIRE(provided.find(ran.report.run) != nullptr);
 
     // A refusal passes the provider's own sentence through unchanged: this layer has no vocabulary for "a
     // magnetic socket nobody wired", and inventing one would be worse than repeating the kit's.
     provider.refuse = true;
-    RunController declining{fixture.session(), {}, fixture.resolve()};
+    RunController declining{fixture.session(), refused_ledger, {}, fixture.resolve()};
     const RunResult declined = declining.run();
     REQUIRE_FALSE(declined.report.ok);
     REQUIRE(declined.report.message == std::string{"nothing to bake"});
     REQUIRE(declined.particle_positions.empty());
+    REQUIRE(refused_ledger.size() == 0);
 
     // The list is a process-wide static: a case that left an entry behind would change every later case's
     // answer, so the leak is cleaned up by the case that made it.
@@ -436,7 +454,7 @@ TEST_CASE("run.controller.a_provider_run_records_under_the_ledgers_identity", "[
     clear_run_providers();
     mount_run_provider(&provider);
 
-    RunController controller{fixture.session(), {}, fixture.resolve()};
+    RunController controller{fixture.session(), fixture.ledger(), {}, fixture.resolve()};
     const RunResult ran = controller.run();
     REQUIRE(ran.report.ok);
 
@@ -505,7 +523,7 @@ TEST_CASE("run.controller.carries_what_the_graph_wants_drawn", "[run]") {
     // run providers work from the graph themselves. So the controller computes it, and this case is what says
     // it does.
     Fixture fixture{Shape::ready};
-    RunController plain{fixture.session(), binders(), fixture.resolve()};
+    RunController plain{fixture.session(), fixture.ledger(), binders(), fixture.resolve()};
     const RunResult without = plain.run();
     // The fixture's graph is a spring-damper: step content, not a declaration, so there is nothing to draw and
     // the list is empty rather than missing. **This assertion is what found the defect**: the first rule was
@@ -523,11 +541,51 @@ TEST_CASE("run.controller.carries_what_the_graph_wants_drawn", "[run]") {
     REQUIRE(added.has_value());
     DeclarationCatalog catalog;
     const qp::graph::ResolveContext resolve{&catalog, &qp::ports::builtin_registry()};
-    RunController controller{session, {}, resolve};
+    qp::runtime::RunLedger ledger{};
+    RunController controller{session, ledger, {}, resolve};
     const RunResult result = controller.run();
     REQUIRE(result.render_declared.size() == 1);
     REQUIRE(result.render_declared.front().node == reserved.value());
     REQUIRE(result.render_declared.front().port == 1);
     // Declared and not run: the refusal is unchanged, because a render node is not an operator.
     REQUIRE_FALSE(result.report.ok);
+}
+
+TEST_CASE("run.controller.one_ledger_for_the_caller", "[run]") {
+    // **The defect this pins was read off a screenshot of the running window.** A magnetosphere run drew
+    // twenty-four particles and nested field lines on the panels while the status line beside them said
+    // `runs 0 | reproducibility gaps: no run yet`. Both statements were true about their own object: the
+    // controller kept a ledger of its own and the window counted the one it holds. A run ledger is the record
+    // of what happened in a session, so two of them means the session has two histories -- the same
+    // two-sources-of-truth failure the authoring layer exists to prevent, one layer up.
+    //
+    // The assertion is on the **identity** of the ledger. Equality of contents would also pass for a copy that
+    // happened to match, and a copy is the bug.
+    Fixture fixture{Shape::ready};
+    qp::runtime::RunLedger mine{};
+    RunController controller{fixture.session(), mine, binders(), fixture.resolve()};
+    REQUIRE(&controller.ledger() == &mine);
+
+    const RunResult first = controller.run();
+    REQUIRE(first.report.ok);
+    // The run is in the caller's ledger, and it is the run the report names -- not merely one of the same size.
+    REQUIRE(mine.size() == 1);
+    REQUIRE(mine.find(first.report.run) != nullptr);
+
+    // A second controller over the same ledger continues the same numbering rather than starting again: ids are
+    // issued by the ledger, so two controllers sharing one is what makes "which run was that" have one answer.
+    RunController second{fixture.session(), mine, binders(), fixture.resolve()};
+    const RunResult after = second.run();
+    REQUIRE(after.report.ok);
+    REQUIRE(mine.size() == 2);
+    REQUIRE(after.report.run != first.report.run);
+    REQUIRE(after.report.run.value > first.report.run.value);
+
+    // And a controller handed a **different** ledger records there instead, which is what makes the identity
+    // above a distinction rather than two objects that happen to be empty together.
+    qp::runtime::RunLedger other{};
+    RunController elsewhere{fixture.session(), other, binders(), fixture.resolve()};
+    REQUIRE(elsewhere.run().report.ok);
+    REQUIRE(other.size() == 1);
+    REQUIRE(mine.size() == 2);
 }

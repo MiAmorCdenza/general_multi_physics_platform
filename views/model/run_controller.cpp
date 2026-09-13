@@ -28,10 +28,10 @@ constexpr std::uint64_t kSeed = 20240517;
 
 }  // namespace
 
-RunController::RunController(const qp::authoring::Session& session,
+RunController::RunController(const qp::authoring::Session& session, qp::runtime::RunLedger& ledger,
                              std::vector<execution::IOperatorBinder*> binders,
                              qp::graph::ResolveContext resolve)
-    : session_(&session), binders_(std::move(binders)), resolve_(resolve) {}
+    : session_(&session), binders_(std::move(binders)), resolve_(resolve), ledger_(&ledger) {}
 
 std::string RunController::description() const {
     // Stated in the same sentence the status line shows, so the numbers are never a surprise after the
@@ -140,7 +140,7 @@ RunResult RunController::run() const {
             // the identity they carry -- and for this kit that chain is the platform's whole point: the trace is
             // what the measurement session reads, the ledger is what a reading's provenance points back into, and
             // the uncertainty follows from there.
-            const qp::runtime::RunId id = ledger_.begin(spec_for());
+            const qp::runtime::RunId id = ledger_->begin(spec_for());
             built.run->set_run(id);
             // **The run's own cadence, when it has one.** The two constants on this class were measured against a
             // laboratory oscillator, and applying them to a magnetosphere makes a run 8.7 milliseconds long --
@@ -224,7 +224,7 @@ RunResult RunController::run() const {
     // The id has to exist before the trace does, or the trace would carry an identity nobody issued and
     // could not be looked up -- which defeats the point of recording it. `set_run` is what starts the
     // trace, and it is called only here.
-    const rt::RunId run_id = ledger_.begin(spec_for());
+    const rt::RunId run_id = ledger_->begin(spec_for());
     if (!run_id.valid()) {
         out.report.message = "could not open a run in the ledger";
         return out;

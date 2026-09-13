@@ -83,7 +83,7 @@ class EditorWindow::StatusBridge final : public qp::authoring::IChangeListener {
 public:
     explicit StatusBridge(EditorWindow& window) noexcept : window_(&window) {}
     void on_change(const qp::authoring::Change&) noexcept override {
-        window_->refresh_status();
+        window_->refresh_state();
     }
 
 private:
@@ -283,7 +283,8 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, std::vector<qp::views:
     // state -- a build with no plugins has none -- and the Run action's message for that case is
     // already true and actionable.
     run_controller_ = std::make_unique<qp::views::model::RunController>(
-        session_, qp::views::model::execution_binders(),
+        session_, ledger_,
+        qp::views::model::execution_binders(),
         qp::graph::ResolveContext{&content_->node_types(), &qp::ports::builtin_registry()});
     auto* tools = addToolBar(tr("Experiment"));
     tools->setMovable(false);
@@ -337,8 +338,18 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, std::vector<qp::views:
     build_file_menu();
     build_view_menu();
 
+    // **Two labels, because there are two kinds of text.** The left one carries news -- the sentence a run,
+    // a save or a refusal produced -- and is replaced by the next piece of news. The right one carries the
+    // standing state of the session as counts, and is replaced by nothing but a change to that state.
+    //
+    // They shared one label until a run made the difference measurable: `run_once` writes the run's sentence
+    // and then refreshed the counts over it, inside the same synchronous call, so the answer to the button
+    // press was on screen for no time at all. `addPermanentWidget` is Qt's own name for the right-hand side of
+    // a status bar, which is the side readers learn to consult for state.
     status_ = new QLabel(this);
     statusBar()->addWidget(status_);
+    state_ = new QLabel(this);
+    statusBar()->addPermanentWidget(state_);
 
     // The canvas tells the panel what to show. Note the direction: the panel does
     // not ask the canvas, and neither asks the graph. One signal, and both keep
@@ -368,7 +379,7 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, std::vector<qp::views:
     status_bridge_ = std::make_unique<StatusBridge>(*this);
     (void)session_.add_listener(*status_bridge_);
 
-    refresh_status();
+    refresh_state();
     // **Fit the window to the screen it opens on**, and the measurement that forced it: at this machine's 144%
     // scaling a 1280x720 window occupies 1843x1037 physical pixels while the display has 1707x1067, so the window
     // opened 95 logical pixels wider than the desktop. What lives in those 95 pixels is the right-hand column --
@@ -494,7 +505,7 @@ void EditorWindow::new_document() {
     // Same reasoning as a load: the readings and the trace were taken while another experiment was on screen.
     measurements_.clear_session(qp::runtime::RunId{});
     refresh_panels();
-    refresh_status();
+    refresh_state();
 }
 
 bool EditorWindow::save_document(const std::string& path) {
@@ -546,7 +557,7 @@ bool EditorWindow::open_document(const std::string& path) {
         next_node_index_ = static_cast<int>(report.nodes) + 1;
     }
     refresh_panels();
-    refresh_status();
+    refresh_state();
     return report.ok;
 }
 
@@ -683,7 +694,7 @@ void EditorWindow::seed_blueprint(const qp::views::model::GraphBlueprint& bluepr
         on_mutation_failed(QString::fromStdString(report.refusal));
         return;
     }
-    refresh_status();
+    refresh_state();
     status_->setText(QStringLiteral("%1: %2 nodes, %3 wires")
                          .arg(QString::fromStdString(blueprint.label))
                          .arg(report.nodes.size())
@@ -694,7 +705,7 @@ void EditorWindow::seed_demo() {
     // Order is the whole content of this function. See the header.
     seed_demo_graph();
     seed_demo_measurement();
-    refresh_status();
+    refresh_state();
 }
 
 EditorWindow::~EditorWindow() {
@@ -736,7 +747,7 @@ qp::graph::NodeId EditorWindow::add_node(const std::string& type_name) {
         return {};
     }
 
-    refresh_status();
+    refresh_state();
     return reserved.value();
 }
 
@@ -818,7 +829,7 @@ void EditorWindow::seed_demo_graph() {
                   qp::runtime::ReproField::toolchain | qp::runtime::ReproField::optimisation;
     (void)ledger_.begin(std::move(spec));
 
-    refresh_status();
+    refresh_state();
 }
 
 void EditorWindow::on_node_selected(qp::graph::NodeId node) {
@@ -829,9 +840,13 @@ void EditorWindow::on_mutation_failed(const QString& reason) {
     status_->setText(QStringLiteral("refused: %1").arg(reason));
 }
 
-void EditorWindow::refresh_status() {
+void EditorWindow::refresh_state() {
     // Every number is read from the core. A status line with a hard-coded value
     // would keep looking correct after the wiring behind it had broken.
+    //
+    // It goes to `state_` and not to `status_`: this text is the standing description of the
+    // session, and writing it over the sentence a run just produced is how the answer to the Run
+    // button came to be invisible.
     const std::string gaps = [this] {
         if (ledger_.records().empty()) return std::string{"no run yet"};
         const std::vector<std::string> missing = ledger_.records().back().spec.missing_names();
@@ -844,7 +859,7 @@ void EditorWindow::refresh_status() {
         return text;
     }();
 
-    status_->setText(QStringLiteral("nodes %1 | edges %2 | graph v%3 | changes %4 | undo %5 | "
+    state_->setText(QStringLiteral("nodes %1 | edges %2 | graph v%3 | changes %4 | undo %5 | "
                                     "runs %6 | reproducibility gaps: %7")
                          .arg(session_.graph().node_count())
                          .arg(session_.graph().edge_count())
@@ -1012,7 +1027,7 @@ void EditorWindow::run_once() {
     confidence_.set_omega(qp::views::model::RunController::kOmega);
 
     refresh_panels();
-    refresh_status();
+    refresh_state();
 }
 
 void EditorWindow::measure_selection() {

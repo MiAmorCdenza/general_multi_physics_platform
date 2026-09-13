@@ -162,7 +162,35 @@ public:
     /// Exposed so a test can assert that the measurement session **borrows this one** rather
     /// than holding a second. The window had two ledgers once, and the status line and the
     /// measurement panel then disagreed on screen about how many runs the session had.
+    ///
+    /// `RunController` was the third holder and the last to be converted, and its own ledger was
+    /// invisible in exactly the same way: the run it recorded was drawn on the panels beside a status
+    /// line reading `runs 0`. Everything in a session that writes or reads run identities now
+    /// borrows this object, and the two labels of the status bar are where that is visible.
     [[nodiscard]] qp::runtime::RunLedger& ledger() noexcept { return ledger_; }
+
+    /**
+     * @brief The message half of the status bar, and the standing half. Exposed so a case can assert what a
+     *        user actually reads.
+     *
+     * The two are separate labels because they are two kinds of text: news on the left, state on the right.
+     * A case asserting only on the ledger would say the run was recorded; these say the user can see that it
+     * was, and the second claim is the one that was false -- the window's ledger was correct and empty while
+     * its neighbour drew the run's particles.
+     *
+     * @ownership   borrows from this window
+     * @thread      ui
+     * @pre         none
+     * @post        Non-null once the constructor has run
+     * @invariant   The pointer is stable for the window's lifetime
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.run.the_status_bar_shows_the_run_it_recorded
+     */
+    [[nodiscard]] QLabel* status_label() noexcept { return status_; }
+    [[nodiscard]] QLabel* state_label() noexcept { return state_; }
 
     /// @brief Adds a node of `type_name` through the session, and selects it.
     ///
@@ -302,8 +330,14 @@ private:
 
     /// @brief Rebuilds the palette list from the catalog.
     void build_palette();
-    /// @brief Refreshes the status line from the session and the ledger.
-    void refresh_status();
+    /// @brief Refreshes the **standing** half of the status bar from the session and the ledger.
+    ///
+    /// Two kinds of text live in one status bar and they are refreshed by different things: a **message**
+    /// (what just happened, in a sentence) and the **standing state** (what the session is, as counts). They
+    /// used to be the same label, which meant every message was overwritten by the next `refresh_status()`
+    /// -- including, measurably, the sentence a run produced, written and replaced inside one call. The
+    /// message goes to `status_` and the standing state to `state_`, so each survives the other.
+    void refresh_state();
     /// @brief Follows the canvas's selection into the property panel.
     void on_node_selected(qp::graph::NodeId node);
     /// @brief Reports a refused mutation in the status line.
@@ -405,6 +439,9 @@ private:
     /// the call rather than being copied into a second local that a pointer could outlive.
     qp::runtime::UncertainValue scratch_reading_{};
     QLabel* status_ = nullptr;
+    /// The standing half of the status bar: the same counts on every refresh, on the right-hand side where
+    /// Qt puts permanent widgets and where a reader learns to look for state rather than for news.
+    QLabel* state_ = nullptr;
     std::unique_ptr<StatusBridge> status_bridge_;
     int next_node_index_ = 1;
 };

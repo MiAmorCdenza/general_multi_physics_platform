@@ -50,6 +50,7 @@
 #include <QAction>
 #include <QColor>
 #include <QImage>
+#include <QLabel>
 #include <QMenu>
 #include <QMenuBar>
 #include <QPixmap>
@@ -1526,6 +1527,55 @@ TEST_CASE("qt.views.measurement.a_provider_run_closes_the_loop", "[views][qt]") 
     // The list is a process-wide static, so the case that mounted a provider is the one that cleans it up.
     qp::views::model::clear_run_providers();
     REQUIRE(qp::views::model::run_providers().empty());
+}
+
+TEST_CASE("qt.views.run.the_status_bar_shows_the_run_it_recorded", "[views][qt]") {
+    // **The last of three ledgers, and the one a screenshot found.** `MeasurementModel` was converted to
+    // borrow the window's ledger first (the case above), and `RunController` kept its own -- so the window
+    // could draw a run's particles on one panel while the status line beside them read
+    // `runs 0 | reproducibility gaps: no run yet`. Both were true about their own object, which is the whole
+    // problem: one session, one history.
+    //
+    // Two claims are asserted here and they are different claims. The first is that the run is **recorded**
+    // where the session can see it. The second is that the user can **see that it was** -- which needs the
+    // second label, because the counts used to be written over the run's own sentence inside the same call.
+    //
+    // A provider run rather than the operator loop, for the reason the case above gives: the window's wiring
+    // is what is under test, and the demonstrator graph's own binder is not linked into this target.
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content};
+
+    auto* news = window.status_label();
+    auto* state = window.state_label();
+    REQUIRE(news != nullptr);
+    REQUIRE(state != nullptr);
+
+    // Seeding records the first run, so the standing half reports one before the button is ever pressed.
+    window.seed_demo();
+    REQUIRE(window.ledger().size() == 1);
+    REQUIRE(state->text().contains(QStringLiteral("runs 1")));
+
+    RecordingProvider provider;
+    qp::views::model::clear_run_providers();
+    qp::views::model::mount_run_provider(&provider);
+    window.run_once();
+
+    // The button's run went into the **window's** ledger. Two, not one: a ledger that is merely non-empty is
+    // exactly what the screenshot showed -- the seed's own entry -- so the count is what distinguishes
+    // "recorded" from "recorded somewhere the window can read".
+    REQUIRE(window.ledger().size() == 2);
+    REQUIRE(window.ledger().last_id().valid());
+
+    // The standing half followed it...
+    REQUIRE(state->text().contains(QStringLiteral("runs 2")));
+    // ... and the news survived, which is the half that needed its own label. It is the **run's** sentence,
+    // asserted against the provider's own note rather than against "non-empty": a label that still held the
+    // previous message would be non-empty too, and the defect was precisely a message being overwritten.
+    REQUIRE(news->text() == QStringLiteral("recording stub"));
+    REQUIRE_FALSE(news->text().contains(QStringLiteral("nodes ")));
+
+    // The list is a process-wide static, so the case that mounted a provider is the one that cleans it up.
+    qp::views::model::clear_run_providers();
 }
 
 TEST_CASE("qt.views.measurement.a_reading_points_at_its_node", "[views][qt]") {
