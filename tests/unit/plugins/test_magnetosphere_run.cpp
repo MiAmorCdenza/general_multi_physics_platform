@@ -84,7 +84,7 @@ struct Scene final {
         // Fourteen field models now: the dipole, the uniform field, the sum, the electric field, the region mask,
         // the multiplier, the convection field, the corotation field, the atmosphere, the current sheet, the blend,
         // the resampler, the magnetopause and the mix.
-        REQUIRE(FieldNodes::mount(host) == 15);
+        REQUIRE(FieldNodes::mount(host) == 16);
         REQUIRE(SourceNodes::mount(host) == 2);
         REQUIRE(PusherNodes::mount(host) == 2);
         REQUIRE(EmitterNodes::mount(host) == 1);

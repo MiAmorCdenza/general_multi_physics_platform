@@ -144,6 +144,12 @@ namespace {
         out = FieldNodes::kPortUniformOrigin0;
         return true;
     }
+    if (type_name == FieldNodes::kImfType) {
+        // The IMF declares its own grid for the same reason the uniform field does: nothing feeds it a lattice, and
+        // a resolver that did not know this would report a table whose origin nobody could find.
+        out = FieldNodes::kPortImfOrigin0;
+        return true;
+    }
     if (type_name == FieldNodes::kUniformElectricType) {
         out = FieldNodes::kPortElectricOrigin0;
         return true;
@@ -252,6 +258,35 @@ bool bake_dipole(double tilt_degrees, double moment_am2, const GridSpec& grid, g
     // copy: a 100 MB field copied once per bake for no reason is a cost a user would feel as a pause with
     // nothing to explain it.
     const qp::abi::LatticeDesc desc = table.view().desc;
+    return fields.publish(key, desc, std::move(table.data()));
+}
+
+bool bake_imf(const FieldNodes::ImfSpec& spec, const GridSpec& grid, gfield::FieldKey key,
+              gfield::FieldSet& fields) {
+    if (!bakeable(grid)) return false;
+    if (!std::isfinite(spec.kp) || !std::isfinite(spec.angle_degrees)) return false;
+    if (!std::isfinite(spec.polarity)) return false;
+
+    // The magnitude, in the reference's own two constants: `b_ref = 3 + 0.5 Kp` nanotesla, times the factor whose
+    // meaning is argued on `kImfType`. The conversion to tesla is here because the port says `T`, and a table in
+    // nanotesla would be a table whose dimension lies.
+    const double b_ref_nt = FieldNodes::kReferenceImfBaseNt + FieldNodes::kReferenceImfPerKpNt * spec.kp;
+    const double b_total_tesla = b_ref_nt * FieldNodes::kReferenceMagnitudeFactor * 1.0e-9;
+
+    // The direction. Degrees on the port, radians here: `theta` is measured from the Sun-Earth line, so at zero the
+    // field points along `x` and the spiral rotates it into `-y` for the standard sector -- the reference's own
+    // signs, kept because they are a convention about which way the spiral trails and not a free choice.
+    const double theta = spec.angle_degrees * kPi / 180.0;
+    const Vec3 value{spec.polarity * b_total_tesla * std::cos(theta),
+                     -spec.polarity * b_total_tesla * std::sin(theta), 0.0};
+
+    BakedField table{grid.origin_m, grid.spacing_m, grid.nx, grid.ny, grid.nz};
+    for (std::uint32_t i = 0; i < grid.nx; ++i) {
+        for (std::uint32_t j = 0; j < grid.ny; ++j) {
+            for (std::uint32_t k = 0; k < grid.nz; ++k) table.set_node(i, j, k, value);
+        }
+    }
+    const qp::abi::LatticeDesc desc = table.view(tesla_dimension()).desc;
     return fields.publish(key, desc, std::move(table.data()));
 }
 
@@ -538,6 +573,38 @@ FieldNodes::SheetSpec FieldNodes::read_sheet(const graph::Node& node) noexcept {
     values.reserve(node.params.size());
     for (const graph::ParamValue& p : node.params) values.emplace_back(p.number, p.value);
     return read_sheet_from(graph::InputView{values});
+}
+
+FieldNodes::ImfSpec FieldNodes::read_imf_from(const graph::InputView& inputs) noexcept {
+    ImfSpec spec;
+    // The polarity is an **enum index**, so the choice order in the descriptor is what decides its meaning: index
+    // zero is the field pointing sunward along the spiral (the reference's `-1`), index one the reverse. A value
+    // that is not an integer, or one outside the two choices, falls back to the standard sector rather than
+    // producing a third sign.
+    const qp::ports::Value polarity = inputs.get(kPortImfPolarity);
+    if (polarity.valid()) {
+        const std::int64_t choice = polarity.as_i64();
+        spec.polarity = choice == 1 ? 1.0 : -1.0;
+    }
+    // The spiral angle, **clamped into the observed range** rather than refused, which is what the reference does
+    // and what a saved document needs: a node holding 60 degrees was written by somebody who meant an angle, and
+    // the panel still shows 60 while the model uses the edge of the range. A non-finite angle is refused by the
+    // bake instead -- there is no edge to clamp it to.
+    const double angle = real_or(inputs, kPortImfAngle, kDefaultImfAngleDegrees);
+    spec.angle_degrees = std::clamp(angle, kMinImfAngleDegrees, kMaxImfAngleDegrees);
+    // The activity index, from the socket or from the same default `source.kp` carries, and clamped for the reason
+    // `read_kp` clamps: the magnitude is `3 + 0.5 Kp`, so a negative index would give a **negative magnitude**,
+    // which is not a field pointing the other way but a label with a sign in front of it.
+    const double kp = real_or(inputs, kPortImfKp, SourceNodes::kDefaultKp);
+    spec.kp = std::clamp(kp, SourceNodes::kMinKp, SourceNodes::kMaxKp);
+    return spec;
+}
+
+FieldNodes::ImfSpec FieldNodes::read_imf(const graph::Node& node) noexcept {
+    graph::PortValues values;
+    values.reserve(node.params.size());
+    for (const graph::ParamValue& p : node.params) values.emplace_back(p.number, p.value);
+    return read_imf_from(graph::InputView{values});
 }
 
 FieldNodes::BlendSpec FieldNodes::read_blend_from(const graph::InputView& inputs) noexcept {
@@ -979,6 +1046,71 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     uniform_out.required = false;
     uniform_out.unit_symbol = "T";
     uniform.outputs.push_back(uniform_out);
+
+    graph::NodeDesc imf;
+    imf.type_name = kImfType;
+    imf.label = "IMF (Parker spiral)";
+    imf.description = "The interplanetary field as the reference models it: one uniform vector whose direction is "
+                      "the Parker spiral angle and whose magnitude grows with the activity index. Wire a "
+                      "`source.kp` into its socket here; leave it empty and the quiet-time default stands. The "
+                      "field lies in the equatorial plane -- this model has no clock angle, so no southward B_z "
+                      "can come from it.";
+    imf.category = "field";
+    imf.version = 1;
+    imf.allow_in_field_domain = true;
+    imf.allow_in_particle_domain = false;
+    imf.has_compute = true;
+    // The polarity, as an enum: the reference's `-1`/`+1` with names a panel can offer and a document cannot
+    // mistype. The choice **order** is part of the stored value -- see `kPortImfPolarity`.
+    graph::PortDesc polarity = parameter(kPortImfPolarity, "polarity", "Polarity", "", 1.0);
+    polarity.type = qp::ports::kEnum;
+    polarity.description = "Which way the spiral's field runs along the Sun-Earth line. The standard sector "
+                           "points sunward; the reversed sector points away. It flips both components and leaves "
+                           "the magnitude alone.";
+    polarity.choice_names = {"toward_sun", "away_from_sun"};
+    polarity.choice_labels = {"Toward the Sun (standard)", "Away from the Sun (reversed)"};
+    imf.inputs.push_back(polarity);
+    graph::PortDesc angle = parameter(kPortImfAngle, "parker_angle", "Spiral angle", "deg", 1.0);
+    angle.description = "The angle between the field and the Sun-Earth line, in degrees: the classic Parker spiral "
+                        "is about 45 at one astronomical unit, and the observed range is 25 to 55, which is what "
+                        "the panel offers and what the reader clamps into.";
+    angle.has_range = true;
+    angle.min_value = kMinImfAngleDegrees;
+    angle.max_value = kMaxImfAngleDegrees;
+    imf.inputs.push_back(angle);
+    graph::PortDesc imf_kp;
+    imf_kp.number = kPortImfKp;
+    imf_kp.name = "kp";
+    imf_kp.label = "Kp (optional)";
+    imf_kp.description = "Wire a `source.kp` here and the magnitude follows that index -- `3 + 0.5 Kp` nanotesla, "
+                         "the reference's own relation, so a storm strengthens the field the magnetosheath is "
+                         "made of. Left empty, the quiet-time default stands.";
+    imf_kp.type = qp::ports::kScalarF64;
+    imf_kp.connectable = true;
+    imf_kp.required = false;
+    imf_kp.unit_symbol = "1";
+    imf.inputs.push_back(imf_kp);
+    // Its own nine grid ports, starting after the three model ports.
+    imf.inputs.push_back(parameter(kPortImfOrigin0, "origin_x", "Grid origin x", "m", kEarthRadiusM));
+    imf.inputs.push_back(parameter(kPortImfOrigin0 + 1, "origin_y", "Grid origin y", "m", kEarthRadiusM));
+    imf.inputs.push_back(parameter(kPortImfOrigin0 + 2, "origin_z", "Grid origin z", "m", kEarthRadiusM));
+    imf.inputs.push_back(parameter(kPortImfOrigin0 + 3, "spacing_x", "Grid spacing x", "m", 0.1 * kEarthRadiusM));
+    imf.inputs.push_back(parameter(kPortImfOrigin0 + 4, "spacing_y", "Grid spacing y", "m", 0.1 * kEarthRadiusM));
+    imf.inputs.push_back(parameter(kPortImfOrigin0 + 5, "spacing_z", "Grid spacing z", "m", 0.1 * kEarthRadiusM));
+    imf.inputs.push_back(parameter(kPortImfOrigin0 + 6, "count_x", "Nodes along x", "", 1.0));
+    imf.inputs.push_back(parameter(kPortImfOrigin0 + 7, "count_y", "Nodes along y", "", 1.0));
+    imf.inputs.push_back(parameter(kPortImfOrigin0 + 8, "count_z", "Nodes along z", "", 1.0));
+    graph::PortDesc imf_out;
+    imf_out.number = kPortField;
+    imf_out.name = "field";
+    imf_out.label = "Magnetic field";
+    imf_out.description = "The baked field, as a volume of tesla vectors: uniform, so every node carries the same "
+                          "vector.";
+    imf_out.type = qp::ports::kVectorField;
+    imf_out.connectable = true;
+    imf_out.required = false;
+    imf_out.unit_symbol = "T";
+    imf.outputs.push_back(imf_out);
 
     graph::NodeDesc sum;
     sum.type_name = kSumType;
@@ -1668,7 +1800,7 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     s_out.unit_symbol = "T";
     sheet.outputs.push_back(s_out);
 
-    return {std::move(dipole),      std::move(uniform),    std::move(sum),        std::move(electric),
+    return {std::move(dipole),      std::move(uniform),    std::move(imf),        std::move(sum),        std::move(electric),
             std::move(mask),        std::move(mul),        std::move(convection), std::move(corotation),
             std::move(atmosphere),  std::move(sheet),      std::move(blend),      std::move(resample),
             std::move(magnetopause), std::move(mix),     std::move(shield)};
@@ -1944,6 +2076,22 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
         (void)sum_grid;   // the addends' own lattice is the sum's: the grid ports are what a plan builder reads
         Outcome out;
         out.emplace_back(FieldNodes::kPortField, qp::ports::Value{fields_->view(sum_key).desc});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
+    if (desc.type_name == FieldNodes::kImfType) {
+        // The same three lines as the uniform field below, and the difference is the whole node: the vector is not
+        // read from three ports but computed from a model of the solar wind, and the index that drives its
+        // magnitude may have arrived on a wire -- which is why the spec is read through the `InputView` and not
+        // from the node.
+        const graph::InputView imf_view{inputs};
+        const FieldNodes::ImfSpec imf_spec = FieldNodes::read_imf_from(imf_view);
+        const GridSpec imf_grid = FieldNodes::read_from(imf_view, FieldNodes::kPortImfOrigin0);
+        const gfield::FieldKey imf_key{id.index, FieldNodes::kPortField};
+        if (!bake_imf(imf_spec, imf_grid, imf_key, *fields_)) {
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        Outcome out;
+        out.emplace_back(FieldNodes::kPortField, qp::ports::Value{fields_->view(imf_key).desc});
         return qp::diag::Result<Outcome>{std::move(out)};
     }
     if (desc.type_name == FieldNodes::kUniformType) {

@@ -65,6 +65,22 @@ namespace pp = qp::graph::particles;
     return std::abs(a - b) / scale;
 }
 
+/// @brief The descriptor of `name` in a type table, or a failure when this build does not offer it.
+///
+/// **By name, and the reason is a defect this file has now had twice.** These cases used `types[9]` and its
+/// neighbours, so adding one field type shifted every one of them: a case about the atmosphere node then failed
+/// with a message about the shield's ports, and the reader was sent to the wrong type. The size of the table is a
+/// fact one case owns (the field-type table's own case asserts it); a case that is *about* a node asks for that node
+/// by name.
+[[nodiscard]] const graph::NodeDesc& type_named(const std::vector<graph::NodeDesc>& types, const char* name) {
+    for (const graph::NodeDesc& desc : types) {
+        if (desc.type_name == name) return desc;
+    }
+    // `FAIL` aborts the case, so the reference below is never reached with a dangling target.
+    FAIL("this build does not offer the node type " << name);
+    return types.front();
+}
+
 /// @brief `div B` at one node of a table, by central differences in all three axes.
 ///
 /// Interior nodes only: a one-sided difference at the boundary is a different operator with a first-order error,
@@ -123,11 +139,11 @@ struct Scene final {
     Scene() {
         // Fourteen field models now: the dipole, the uniform field, the sum, the uniform electric field, the region
         // mask, the multiplier, the convection field, the corotation field, the atmosphere, the current sheet, the
-        // blend, the resampler, the magnetopause and the mix. Each is a **type of its own** with its own port
+        // blend, the resampler, the magnetopause, the mix and the IMF. Each is a **type of its own** with its own port
         // numbers, which is the composition principle -- a shielding field is `mul(convection, shield)` -- and three
         // of them could not be composed out of the others: no wiring of sums and products keeps a field
         // divergence-free (the two blends), and none of them moves a field onto another lattice (the resampler).
-        REQUIRE(FieldNodes::mount(host) == 15);
+        REQUIRE(FieldNodes::mount(host) == 16);
         REQUIRE(SourceNodes::mount(host) == 2);
         REQUIRE(PusherNodes::mount(host) == 2);
     }
@@ -223,19 +239,18 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // mask, the multiplier and the convection field. Each is a **type of its own** with its own port numbers,
     // which is the composition principle -- a shielding field is `mul(convection, shield)`, not a switch inside a
     // node.
-    REQUIRE(types.size() == 15);
-    REQUIRE(types[0].type_name == FieldNodes::kDipoleType);
-    REQUIRE(types[1].type_name == FieldNodes::kUniformType);
-    REQUIRE(types[2].type_name == FieldNodes::kSumType);
-    REQUIRE(types[3].type_name == FieldNodes::kUniformElectricType);
+    // **The size of the field-type table is asserted here and nowhere else.** Every other case in this file
+    // asks for the type it is about by name, so adding a node type moves no assertion but this one, and a
+    // missing type fails the case about *that* node rather than one about its neighbour.
+    REQUIRE(types.size() == 16);
     // The mask is last, and its output is the one thing that distinguishes it from every other type here: a
     // **scalar** field. The declaration and the bake have to agree about that, because a consumer reads its
     // samples by the component count the registry publishes.
-    REQUIRE(types[4].type_name == FieldNodes::kMaskType);
-    REQUIRE(types[4].has_compute);
-    REQUIRE(types[4].allow_in_field_domain);
-    REQUIRE_FALSE(types[4].allow_in_particle_domain);
-    const graph::PortDesc* weight = types[4].find_port(FieldNodes::kPortWeight, /*is_output=*/true);
+    const graph::NodeDesc& mask_type = type_named(types, FieldNodes::kMaskType);
+    REQUIRE(mask_type.has_compute);
+    REQUIRE(mask_type.allow_in_field_domain);
+    REQUIRE_FALSE(mask_type.allow_in_particle_domain);
+    const graph::PortDesc* weight = mask_type.find_port(FieldNodes::kPortWeight, /*is_output=*/true);
     REQUIRE(weight != nullptr);
     REQUIRE(weight->connectable);
     REQUIRE(weight->type == qp::ports::kScalarField);
@@ -243,7 +258,7 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     REQUIRE(scalar != nullptr);
     REQUIRE(scalar->is_field());
     REQUIRE(scalar->field_components == 1);
-    const graph::NodeDesc& dipole = types.front();
+    const graph::NodeDesc& dipole = type_named(types, FieldNodes::kDipoleType);
     REQUIRE(dipole.type_name == FieldNodes::kDipoleType);
     REQUIRE(dipole.valid());
     REQUIRE(dipole.has_compute);
@@ -292,7 +307,7 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     qp::host::PluginHost host{qp::plugin::Capability::node_types};
     // Fourteen field models now, and the count is asserted rather than assumed: it is the one place a new type
     // announces itself in the test suite, so a type that silently failed to register is a failure here.
-    REQUIRE(FieldNodes::mount(host) == 15);
+    REQUIRE(FieldNodes::mount(host) == 16);
     REQUIRE(host.node_types().find(FieldNodes::kDipoleType) != nullptr);
     REQUIRE(FieldNodes::mount(host) == 0);
 }
@@ -486,11 +501,10 @@ TEST_CASE("magnetosphere.field_nodes.a_field_scales_by_its_weight", "[magnetosph
     // where the weight belongs are both refused by `check_connection`, so the multiplier's own check is the second
     // line of defence rather than the only one.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 15);
-    REQUIRE(types[5].type_name == FieldNodes::kMulType);
-    REQUIRE(types[5].has_compute);
-    const graph::PortDesc* mul_field = types[5].find_port(FieldNodes::kPortMulField, false);
-    const graph::PortDesc* mul_weight = types[5].find_port(FieldNodes::kPortMulWeight, false);
+    const graph::NodeDesc& mul_type = type_named(types, FieldNodes::kMulType);
+    REQUIRE(mul_type.has_compute);
+    const graph::PortDesc* mul_field = mul_type.find_port(FieldNodes::kPortMulField, false);
+    const graph::PortDesc* mul_weight = mul_type.find_port(FieldNodes::kPortMulWeight, false);
     REQUIRE(mul_field != nullptr);
     REQUIRE(mul_weight != nullptr);
     REQUIRE(mul_field->type == qp::ports::kVectorField);
@@ -723,26 +737,25 @@ TEST_CASE("magnetosphere.field_nodes.a_blend_does_not_open_a_divergence", "[magn
     // The declaration: the type's own port numbers, both sockets vector fields, and three parameters that are
     // typed into a panel rather than wired from a node.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 15);
-    REQUIRE(types[10].type_name == FieldNodes::kBlendType);
-    REQUIRE(types[10].has_compute);
-    REQUIRE(types[10].allow_in_field_domain);
-    REQUIRE_FALSE(types[10].allow_in_particle_domain);
-    const graph::PortDesc* inner_port = types[10].find_port(FieldNodes::kPortBlendInner, false);
-    const graph::PortDesc* outer_port = types[10].find_port(FieldNodes::kPortBlendOuter, false);
+    const graph::NodeDesc& blend_type = type_named(types, FieldNodes::kBlendType);
+    REQUIRE(blend_type.has_compute);
+    REQUIRE(blend_type.allow_in_field_domain);
+    REQUIRE_FALSE(blend_type.allow_in_particle_domain);
+    const graph::PortDesc* inner_port = blend_type.find_port(FieldNodes::kPortBlendInner, false);
+    const graph::PortDesc* outer_port = blend_type.find_port(FieldNodes::kPortBlendOuter, false);
     REQUIRE(inner_port != nullptr);
     REQUIRE(outer_port != nullptr);
     REQUIRE(inner_port->type == qp::ports::kVectorField);
     REQUIRE(outer_port->type == qp::ports::kVectorField);
     REQUIRE(inner_port->required);
     REQUIRE(outer_port->required);
-    const graph::PortDesc* blend_out = types[10].find_port(FieldNodes::kPortBlendOut, true);
+    const graph::PortDesc* blend_out = blend_type.find_port(FieldNodes::kPortBlendOut, true);
     REQUIRE(blend_out != nullptr);
     REQUIRE(blend_out->type == qp::ports::kVectorField);
     REQUIRE(blend_out->unit_symbol == std::string{"T"});
     for (graph::PortNumber number : {FieldNodes::kPortBlendTransition, FieldNodes::kPortBlendWidth,
                                      FieldNodes::kPortBlendCorrection}) {
-        const graph::PortDesc* port = types[10].find_port(number, false);
+        const graph::PortDesc* port = blend_type.find_port(number, false);
         REQUIRE(port != nullptr);
         REQUIRE_FALSE(port->connectable);
     }
@@ -848,14 +861,13 @@ TEST_CASE("magnetosphere.field_nodes.the_convection_field_is_the_potentials_grad
 
     // The type is declared like the others and allowed only where a bake is.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 15);
-    REQUIRE(types[6].type_name == FieldNodes::kConvectionType);
-    REQUIRE(types[6].has_compute);
-    REQUIRE(types[6].allow_in_field_domain);
-    REQUIRE_FALSE(types[6].allow_in_particle_domain);
-    REQUIRE(types[6].find_port(FieldNodes::kPortConvectionA, false) != nullptr);
-    REQUIRE(types[6].find_port(FieldNodes::kPortField, true) != nullptr);
-    REQUIRE(types[6].find_port(FieldNodes::kPortField, true)->type == qp::ports::kVectorField);
+    const graph::NodeDesc& convection_type = type_named(types, FieldNodes::kConvectionType);
+    REQUIRE(convection_type.has_compute);
+    REQUIRE(convection_type.allow_in_field_domain);
+    REQUIRE_FALSE(convection_type.allow_in_particle_domain);
+    REQUIRE(convection_type.find_port(FieldNodes::kPortConvectionA, false) != nullptr);
+    REQUIRE(convection_type.find_port(FieldNodes::kPortField, true) != nullptr);
+    REQUIRE(convection_type.find_port(FieldNodes::kPortField, true)->type == qp::ports::kVectorField);
 
     // A grid that cannot be baked, and a non-finite amplitude, are refused rather than approximated.
     const GridSpec too_small{Vec3{}, Vec3{1.0, 1.0, 1.0}, 1, 1, 1};
@@ -977,14 +989,13 @@ TEST_CASE("magnetosphere.field_nodes.corotation_is_the_rotation_the_field_allows
     // The type declares one socket and no grid parameters, which is the decision this node makes: it bakes on the
     // lattice of the field it reads, so there is no second grid to disagree with the first.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 15);
-    REQUIRE(types[7].type_name == FieldNodes::kCorotationType);
-    REQUIRE(types[7].has_compute);
-    REQUIRE(types[7].inputs.size() == 1);
-    REQUIRE(types[7].inputs.front().number == FieldNodes::kPortCorotationMagnetic);
-    REQUIRE(types[7].inputs.front().type == qp::ports::kVectorField);
-    REQUIRE(types[7].inputs.front().connectable);
-    REQUIRE(types[7].inputs.front().required);
+    const graph::NodeDesc& corotation_type = type_named(types, FieldNodes::kCorotationType);
+    REQUIRE(corotation_type.has_compute);
+    REQUIRE(corotation_type.inputs.size() == 1);
+    REQUIRE(corotation_type.inputs.front().number == FieldNodes::kPortCorotationMagnetic);
+    REQUIRE(corotation_type.inputs.front().type == qp::ports::kVectorField);
+    REQUIRE(corotation_type.inputs.front().connectable);
+    REQUIRE(corotation_type.inputs.front().required);
 }
 
 TEST_CASE("magnetosphere.field_nodes.a_wired_field_reports_the_grid_it_was_baked_on", "[magnetosphere]") {
@@ -1277,18 +1288,17 @@ TEST_CASE("magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_
 
     // And the type is declared with its own grid ports, three parameters first -- the same shape the mask has.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 15);
-    REQUIRE(types[8].type_name == FieldNodes::kAtmosphereType);
-    REQUIRE(types[8].has_compute);
-    REQUIRE(types[8].allow_in_field_domain);
-    REQUIRE_FALSE(types[8].allow_in_particle_domain);
-    const graph::PortDesc* drag = types[8].find_port(FieldNodes::kPortAtmosphereOut, true);
+    const graph::NodeDesc& atmosphere_type = type_named(types, FieldNodes::kAtmosphereType);
+    REQUIRE(atmosphere_type.has_compute);
+    REQUIRE(atmosphere_type.allow_in_field_domain);
+    REQUIRE_FALSE(atmosphere_type.allow_in_particle_domain);
+    const graph::PortDesc* drag = atmosphere_type.find_port(FieldNodes::kPortAtmosphereOut, true);
     REQUIRE(drag != nullptr);
     REQUIRE(drag->type == qp::ports::kScalarField);
     REQUIRE(drag->unit_symbol == std::string{"1/s"});
     for (const graph::PortNumber number : {FieldNodes::kPortAtmosphereNu0, FieldNodes::kPortAtmosphereScaleHeight,
                                            FieldNodes::kPortAtmosphereReference}) {
-        const graph::PortDesc* parameter = types[8].find_port(number, false);
+        const graph::PortDesc* parameter = atmosphere_type.find_port(number, false);
         REQUIRE(parameter != nullptr);
         REQUIRE_FALSE(parameter->connectable);
     }
@@ -1443,20 +1453,19 @@ TEST_CASE("magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_impl
 
     // The type declares its own grid ports after its two parameters, and publishes tesla.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 15);
-    REQUIRE(types[9].type_name == FieldNodes::kCurrentSheetType);
-    REQUIRE(types[9].has_compute);
-    REQUIRE(types[9].allow_in_field_domain);
-    REQUIRE_FALSE(types[9].allow_in_particle_domain);
-    const graph::PortDesc* out = types[9].find_port(FieldNodes::kPortField, true);
+    const graph::NodeDesc& sheet_type = type_named(types, FieldNodes::kCurrentSheetType);
+    REQUIRE(sheet_type.has_compute);
+    REQUIRE(sheet_type.allow_in_field_domain);
+    REQUIRE_FALSE(sheet_type.allow_in_particle_domain);
+    const graph::PortDesc* out = sheet_type.find_port(FieldNodes::kPortField, true);
     REQUIRE(out != nullptr);
     REQUIRE(out->type == qp::ports::kVectorField);
     REQUIRE(out->unit_symbol == std::string{"T"});
-    REQUIRE(types[9].find_port(FieldNodes::kPortSheetOrigin0, false) != nullptr);
-    REQUIRE_FALSE(types[9].find_port(FieldNodes::kPortSheetOrigin0, false)->connectable);
+    REQUIRE(sheet_type.find_port(FieldNodes::kPortSheetOrigin0, false) != nullptr);
+    REQUIRE_FALSE(sheet_type.find_port(FieldNodes::kPortSheetOrigin0, false)->connectable);
     // The hinge socket, after the grid: connectable, in degrees, and **optional** -- an empty socket is the
     // unhinged sheet, which is what every graph written before this port has.
-    const graph::PortDesc* hinge = types[9].find_port(FieldNodes::kPortSheetHinge, false);
+    const graph::PortDesc* hinge = sheet_type.find_port(FieldNodes::kPortSheetHinge, false);
     REQUIRE(hinge != nullptr);
     REQUIRE(hinge->connectable);
     REQUIRE_FALSE(hinge->required);
@@ -1739,6 +1748,217 @@ TEST_CASE("magnetosphere.field_nodes.the_tail_sheet_hinges_with_the_dipole", "[m
     REQUIRE_FALSE(gfield::is_readable(fields.view(gfield::FieldKey{74, FieldNodes::kPortField})));
 }
 
+TEST_CASE("magnetosphere.field_nodes.the_imf_is_a_parker_spiral", "[magnetosphere]") {
+    // **The third of the reference's three sources, and the only one that publishes a field.** `imf_source` fills a
+    // lattice with one uniform vector whose direction is the Parker spiral angle and whose magnitude grows with the
+    // activity index, which is why it is a field node here rather than a fourth scalar driver: what a magnetosheath
+    // consumes is a table.
+    //
+    // Four measurements, and the first decides which of the reference's two readings of its own constant is ported.
+    const double re = kEarthRadiusM;
+    const double degrees = 3.14159265358979323846 / 180.0;
+    const GridSpec grid{Vec3{-8.0 * re, -8.0 * re, -2.0 * re}, Vec3{0.5 * re, 0.5 * re, 0.5 * re}, 33, 33, 9};
+    FieldNodes::ImfSpec spec;
+    gfield::FieldSet fields;
+    const gfield::FieldKey key{61, FieldNodes::kPortField};
+    REQUIRE(bake_imf(spec, grid, key, fields));
+    const gfield::FieldValue imf = fields.view(key);
+    REQUIRE(gfield::is_readable(imf));
+    REQUIRE(imf.is_vector());
+    REQUIRE(imf.desc.dimension.T == -2);      // tesla, not nanotesla: the port says `T` and the table agrees
+
+    // ---- 1. A rotation, not a rescaling of the components ------------------------------------------------------
+    //
+    // The reference writes `b_total = b_ref sqrt(2)` with the comment "preserve magnitude at 45 degrees", and the
+    // comment is true of the **components**: at the canonical angle each of them is `b_ref`. The magnitude is
+    // `b_total` at *every* angle, because the components are one vector rotated. That is the property asserted here,
+    // at three angles, and it is what tells a rotation apart from a pair of independently scaled components -- the
+    // second would have a magnitude that varied with the spiral angle, which would look like a stronger solar wind
+    // at some angles than at others.
+    const double expected_magnitude =
+        (FieldNodes::kReferenceImfBaseNt + FieldNodes::kReferenceImfPerKpNt * spec.kp) *
+        FieldNodes::kReferenceMagnitudeFactor * 1.0e-9;
+    const auto magnitude_of = [](const gfield::FieldValue& table, std::uint64_t point) {
+        return norm(Vec3{gfield::get_component(table, point, 0), gfield::get_component(table, point, 1),
+                         gfield::get_component(table, point, 2)});
+    };
+    REQUIRE(relative_to(magnitude_of(imf, 0), expected_magnitude) < 1.0e-15);
+    for (const double angle : {25.0, 40.0, 55.0}) {
+        FieldNodes::ImfSpec turned = spec;
+        turned.angle_degrees = angle;
+        REQUIRE(bake_imf(turned, grid, gfield::FieldKey{62, FieldNodes::kPortField}, fields));
+        const gfield::FieldValue table = fields.view(gfield::FieldKey{62, FieldNodes::kPortField});
+        REQUIRE(gfield::is_readable(table));
+        const double bx = gfield::get_component(table, 0, 0);
+        const double by = gfield::get_component(table, 0, 1);
+        INFO("spiral angle " << angle << " degrees gives |B| = " << magnitude_of(table, 0));
+        REQUIRE(relative_to(magnitude_of(table, 0), expected_magnitude) < 1.0e-15);
+        // The direction, against the closed form: the angle between the field and the **spiral axis** -- `-x` for the
+        // standard sector -- is the port's angle. Measured with `atan2` of the two components, so a bake that swapped
+        // sine and cosine, or lost a sign, fails on the direction rather than on a magnitude both readings share.
+        REQUIRE(relative_to(std::atan2(by, -bx), angle * degrees) < 1.0e-14);
+        // And the components are **exactly** the closed form, which is what makes the direction assertion above a
+        // measurement rather than a coincidence of two errors cancelling.
+        REQUIRE(bx == -expected_magnitude * std::cos(angle * degrees));
+        REQUIRE(by == expected_magnitude * std::sin(angle * degrees));
+    }
+
+    // ---- 2. The activity index, which arrives on a wire --------------------------------------------------------
+    //
+    // `3 + 0.5 Kp` nanotesla, the reference's own relation: a storm strengthens the field the magnetosheath is made
+    // of. Asserted against the **formula** at both ends of the index's range rather than against typed constants,
+    // and then as a ratio -- Kp 9 is two and a half times Kp 0 -- which is the statement a reader can check by hand.
+    const auto magnitude_for_kp = [&](double kp) {
+        FieldNodes::ImfSpec spec_kp = spec;
+        spec_kp.kp = kp;
+        REQUIRE(bake_imf(spec_kp, grid, gfield::FieldKey{63, FieldNodes::kPortField}, fields));
+        const gfield::FieldValue table = fields.view(gfield::FieldKey{63, FieldNodes::kPortField});
+        REQUIRE(gfield::is_readable(table));
+        return magnitude_of(table, 0);
+    };
+    const double quiet = magnitude_for_kp(0.0);
+    const double storm = magnitude_for_kp(9.0);
+    REQUIRE(relative_to(quiet, 3.0 * FieldNodes::kReferenceMagnitudeFactor * 1.0e-9) < 1.0e-15);
+    REQUIRE(relative_to(storm, 7.5 * FieldNodes::kReferenceMagnitudeFactor * 1.0e-9) < 1.0e-15);
+    REQUIRE(relative_to(storm / quiet, 2.5) < 1.0e-15);
+
+    // The socket, and the fallback when it is empty: a node read on its own has no wire, so it carries the same
+    // quiet-time index `source.kp` does -- the fourth consumer of the optional-socket shape.
+    graph::PortValues wired;
+    wired.emplace_back(FieldNodes::kPortImfKp, qp::ports::Value{6.5});
+    REQUIRE(FieldNodes::read_imf_from(graph::InputView{wired}).kp == 6.5);
+    REQUIRE(FieldNodes::read_imf(graph::Node{}).kp == SourceNodes::kDefaultKp);
+    // Clamped, because `3 + 0.5 Kp` with a negative index is a **negative magnitude**, which is not a field pointing
+    // the other way but a label with a sign in front of it; the polarity enum is where "the other way" is chosen.
+    graph::PortValues below;
+    below.emplace_back(FieldNodes::kPortImfKp, qp::ports::Value{-4.0});
+    REQUIRE(FieldNodes::read_imf_from(graph::InputView{below}).kp == SourceNodes::kMinKp);
+    graph::PortValues above;
+    above.emplace_back(FieldNodes::kPortImfKp, qp::ports::Value{20.0});
+    REQUIRE(FieldNodes::read_imf_from(graph::InputView{above}).kp == SourceNodes::kMaxKp);
+    // ... and the angle, into the range the spiral is observed in, which is what the reference clamps into as well.
+    graph::PortValues shallow;
+    shallow.emplace_back(FieldNodes::kPortImfAngle, qp::ports::Value{5.0});
+    REQUIRE(FieldNodes::read_imf_from(graph::InputView{shallow}).angle_degrees == FieldNodes::kMinImfAngleDegrees);
+    graph::PortValues steep;
+    steep.emplace_back(FieldNodes::kPortImfAngle, qp::ports::Value{80.0});
+    REQUIRE(FieldNodes::read_imf_from(graph::InputView{steep}).angle_degrees == FieldNodes::kMaxImfAngleDegrees);
+    // A non-finite angle has no edge to clamp to, so the **bake** refuses it.
+    FieldNodes::ImfSpec broken = spec;
+    broken.angle_degrees = std::nan("");
+    REQUIRE_FALSE(bake_imf(broken, grid, gfield::FieldKey{65, FieldNodes::kPortField}, fields));
+
+    // ---- 3. Polarity flips the vector and leaves its length alone ----------------------------------------------
+    FieldNodes::ImfSpec away = spec;
+    away.polarity = 1.0;
+    REQUIRE(bake_imf(away, grid, gfield::FieldKey{64, FieldNodes::kPortField}, fields));
+    const gfield::FieldValue reversed = fields.view(gfield::FieldKey{64, FieldNodes::kPortField});
+    REQUIRE(gfield::is_readable(reversed));
+    for (std::uint64_t point = 0; point < reversed.point_count(); ++point) {
+        // **Exactly** opposite, component by component: a polarity is one sign in front of one vector, so an
+        // "approximately reversed" field would mean the two sectors are two different models.
+        REQUIRE(gfield::get_component(reversed, point, 0) == -gfield::get_component(imf, point, 0));
+        REQUIRE(gfield::get_component(reversed, point, 1) == -gfield::get_component(imf, point, 1));
+        // The equatorial plane, **exactly**: this model has no clock angle, so `B_z` is zero at every node rather
+        // than a small number that ought to be. That is a real limitation of the reference's model and not a detail
+        // -- no southward field can come out of it, and a southward `B_z` is what opens the magnetopause.
+        REQUIRE(gfield::get_component(reversed, point, 2) == 0.0);
+        REQUIRE(gfield::get_component(imf, point, 2) == 0.0);
+        // And the same vector at every node: a *uniform* field, which is what makes it a magnetosheath rather than a
+        // model of one.
+        REQUIRE(gfield::get_component(imf, point, 0) == gfield::get_component(imf, 0, 0));
+        REQUIRE(gfield::get_component(imf, point, 1) == gfield::get_component(imf, 0, 1));
+    }
+
+    // ---- 4. The declaration ------------------------------------------------------------------------------------
+    const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
+    const graph::NodeDesc& imf_type = type_named(types, FieldNodes::kImfType);
+    REQUIRE(imf_type.has_compute);
+    REQUIRE(imf_type.allow_in_field_domain);
+    REQUIRE_FALSE(imf_type.allow_in_particle_domain);
+    const graph::PortDesc* polarity = imf_type.find_port(FieldNodes::kPortImfPolarity, false);
+    REQUIRE(polarity != nullptr);
+    // An **enum** with two named choices rather than the reference's signed integer: the stored value is the index,
+    // so the order is part of the document format -- which is why it is asserted here rather than left to the panel.
+    REQUIRE(polarity->type == qp::ports::kEnum);
+    REQUIRE_FALSE(polarity->connectable);
+    REQUIRE(polarity->choice_names.size() == 2);
+    REQUIRE(polarity->choice_names.front() == std::string{"toward_sun"});
+    REQUIRE(polarity->choice_names.back() == std::string{"away_from_sun"});
+    REQUIRE(polarity->choice_labels.size() == polarity->choice_names.size());
+    const graph::PortDesc* angle_port = imf_type.find_port(FieldNodes::kPortImfAngle, false);
+    REQUIRE(angle_port != nullptr);
+    REQUIRE(angle_port->has_range);
+    REQUIRE(angle_port->min_value == FieldNodes::kMinImfAngleDegrees);
+    REQUIRE(angle_port->max_value == FieldNodes::kMaxImfAngleDegrees);
+    // The Kp socket: optional, connectable, and after the model ports.
+    const graph::PortDesc* kp_port = imf_type.find_port(FieldNodes::kPortImfKp, false);
+    REQUIRE(kp_port != nullptr);
+    REQUIRE(kp_port->connectable);
+    REQUIRE_FALSE(kp_port->required);
+    REQUIRE(kp_port->type == qp::ports::kScalarF64);
+    // The nine grid ports, so the type is a field node rather than a driver.
+    for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+        const graph::PortDesc* port = imf_type.find_port(FieldNodes::kPortImfOrigin0 + offset, false);
+        REQUIRE(port != nullptr);
+        REQUIRE_FALSE(port->connectable);
+    }
+    const graph::PortDesc* imf_out = imf_type.find_port(FieldNodes::kPortField, true);
+    REQUIRE(imf_out != nullptr);
+    REQUIRE(imf_out->type == qp::ports::kVectorField);
+    REQUIRE(imf_out->unit_symbol == std::string{"T"});
+
+    // ---- 5. In a graph, which is where the resolver earns its keep --------------------------------------------------
+    //
+    // The evaluator branch runs for a node in a graph and not before, and the **lattice has to be discoverable**:
+    // `field.sum`, `field.mix` and the field-line item all ask "where is this field's grid" and walk back through the
+    // combinators, so a field type the resolver did not know would bake a table nobody could place. Summing with a
+    // uniform field measures both at once -- the sum bakes on the IMF's lattice, and its values are the two models'
+    // sum node by node.
+    Scene scene;
+    const graph::PortNumber imf_ports[] = {FieldNodes::kPortImfOrigin0, FieldNodes::kPortImfOrigin0 + 1,
+                                           FieldNodes::kPortImfOrigin0 + 2};
+    const graph::PortNumber uniform_ports[] = {FieldNodes::kPortUniformOrigin0, FieldNodes::kPortUniformOrigin0 + 1,
+                                               FieldNodes::kPortUniformOrigin0 + 2};
+    const graph::NodeId source = scene.add(FieldNodes::kImfType);
+    scene.set(source, FieldNodes::kPortImfAngle, 40.0);
+    scene.set(source, FieldNodes::kPortImfKp, 4.0);
+    const graph::NodeId uniform = scene.add(FieldNodes::kUniformType);
+    scene.set(uniform, FieldNodes::kPortField2, 2.0e-9);       // a northward component the IMF model cannot produce
+    for (graph::PortNumber axis = 0; axis < 3; ++axis) {
+        // The same nine numbers on both nodes, because a sum refuses two lattices that describe different regions --
+        // which is the property `bake_sum` asserts rather than fits.
+        scene.set(source, imf_ports[axis], -4.0 * re);
+        scene.set(source, imf_ports[axis] + 3, 0.5 * re);
+        scene.set(source, imf_ports[axis] + 6, 17.0);
+        scene.set(uniform, uniform_ports[axis], -4.0 * re);
+        scene.set(uniform, uniform_ports[axis] + 3, 0.5 * re);
+        scene.set(uniform, uniform_ports[axis] + 6, 17.0);
+    }
+    const graph::NodeId total = scene.add(FieldNodes::kSumType);
+    for (graph::PortNumber axis = 0; axis < 3; ++axis) {
+        // The sum declares its own grid too, and the plan builder reads **that** one: the three nodes agreeing is
+        // what a caller writes, and a disagreement would be refused by the bakery rather than fitted.
+        scene.set(total, FieldNodes::kPortOrigin0 + axis, -4.0 * re);
+        scene.set(total, FieldNodes::kPortSpacing0 + axis, 0.5 * re);
+        scene.set(total, FieldNodes::kPortCount0 + axis, 17.0);
+    }
+    scene.wire(source, FieldNodes::kPortField, total, FieldNodes::kPortAddendA);
+    scene.wire(uniform, FieldNodes::kPortField, total, FieldNodes::kPortAddendB);
+    REQUIRE(scene.bake().has_value());
+
+    const gfield::FieldValue summed = scene.fields.view(gfield::FieldKey{total.index, FieldNodes::kPortField});
+    REQUIRE(gfield::is_readable(summed));
+    REQUIRE(summed.desc.count[0] == 17);        // the lattice the resolver followed, not a default one
+    // The IMF's own contribution, on the lattice the wire carried: `3 + 0.5 * 4 = 5` nanotesla times the factor, at
+    // forty degrees, plus the uniform field's `z`.
+    const double b_total = 5.0 * FieldNodes::kReferenceMagnitudeFactor * 1.0e-9;
+    const double theta = 40.0 * degrees;
+    REQUIRE(relative_to(gfield::get_component(summed, 0, 0), -b_total * std::cos(theta)) < 1.0e-15);
+    REQUIRE(relative_to(gfield::get_component(summed, 0, 1), b_total * std::sin(theta)) < 1.0e-15);
+    REQUIRE(relative_to(gfield::get_component(summed, 0, 2), 2.0e-9) < 1.0e-15);
+}
+
 TEST_CASE("magnetosphere.field_nodes.a_resample_moves_the_samples_and_adds_no_information",
           "[magnetosphere]") {
     // **The node every other combinator's refusal points at.** A sum, a product and a blend are all defined on the
@@ -1882,21 +2102,20 @@ TEST_CASE("magnetosphere.field_nodes.a_resample_moves_the_samples_and_adds_no_in
     // The declaration: its own numbers, nine grid ports that are typed rather than wired, and a grid of its own --
     // which is what makes it the node a pusher can be pointed at when the field it wants is on another lattice.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 15);
-    REQUIRE(types[11].type_name == FieldNodes::kResampleType);
-    REQUIRE(types[11].has_compute);
-    REQUIRE(types[11].allow_in_field_domain);
-    REQUIRE_FALSE(types[11].allow_in_particle_domain);
-    const graph::PortDesc* source_port = types[11].find_port(FieldNodes::kPortResampleField, false);
+    const graph::NodeDesc& resample_type = type_named(types, FieldNodes::kResampleType);
+    REQUIRE(resample_type.has_compute);
+    REQUIRE(resample_type.allow_in_field_domain);
+    REQUIRE_FALSE(resample_type.allow_in_particle_domain);
+    const graph::PortDesc* source_port = resample_type.find_port(FieldNodes::kPortResampleField, false);
     REQUIRE(source_port != nullptr);
     REQUIRE(source_port->type == qp::ports::kVectorField);
     REQUIRE(source_port->required);
-    const graph::PortDesc* resampled_out = types[11].find_port(FieldNodes::kPortResampleOut, true);
+    const graph::PortDesc* resampled_out = resample_type.find_port(FieldNodes::kPortResampleOut, true);
     REQUIRE(resampled_out != nullptr);
     REQUIRE(resampled_out->type == qp::ports::kVectorField);
     REQUIRE(resampled_out->unit_symbol == std::string{"T"});
     for (graph::PortNumber offset = 0; offset < 9; ++offset) {
-        const graph::PortDesc* port = types[11].find_port(FieldNodes::kPortResampleOrigin0 + offset, false);
+        const graph::PortDesc* port = resample_type.find_port(FieldNodes::kPortResampleOrigin0 + offset, false);
         REQUIRE(port != nullptr);
         REQUIRE_FALSE(port->connectable);
     }
@@ -2054,17 +2273,16 @@ TEST_CASE("magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose",
     REQUIRE(read.width_m == FieldNodes::kDefaultMagnetopauseWidthM);
 
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 15);
-    REQUIRE(types[12].type_name == FieldNodes::kMagnetopauseType);
-    REQUIRE(types[12].has_compute);
-    REQUIRE(types[12].allow_in_field_domain);
-    REQUIRE_FALSE(types[12].allow_in_particle_domain);
-    const graph::PortDesc* boundary = types[12].find_port(FieldNodes::kPortWeight, true);
+    const graph::NodeDesc& magnetopause_type = type_named(types, FieldNodes::kMagnetopauseType);
+    REQUIRE(magnetopause_type.has_compute);
+    REQUIRE(magnetopause_type.allow_in_field_domain);
+    REQUIRE_FALSE(magnetopause_type.allow_in_particle_domain);
+    const graph::PortDesc* boundary = magnetopause_type.find_port(FieldNodes::kPortWeight, true);
     REQUIRE(boundary != nullptr);
     REQUIRE(boundary->type == qp::ports::kScalarField);
     REQUIRE(boundary->unit_symbol == std::string{"1"});
     for (graph::PortNumber offset = 0; offset < 9; ++offset) {
-        const graph::PortDesc* port = types[12].find_port(FieldNodes::kPortMagnetopauseOrigin0 + offset, false);
+        const graph::PortDesc* port = magnetopause_type.find_port(FieldNodes::kPortMagnetopauseOrigin0 + offset, false);
         REQUIRE(port != nullptr);
         REQUIRE_FALSE(port->connectable);
     }
@@ -2278,16 +2496,15 @@ TEST_CASE("magnetosphere.field_nodes.a_mix_blends_the_potentials_not_the_fields"
 
     // The declaration: its own numbers, a scalar weight socket, and the correction typed in rather than wired.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 15);
-    REQUIRE(types[13].type_name == FieldNodes::kMixType);
-    REQUIRE(types[13].has_compute);
-    REQUIRE(types[13].allow_in_field_domain);
-    REQUIRE_FALSE(types[13].allow_in_particle_domain);
-    REQUIRE(types[13].find_port(FieldNodes::kPortMixA, false)->type == qp::ports::kVectorField);
-    REQUIRE(types[13].find_port(FieldNodes::kPortMixB, false)->type == qp::ports::kVectorField);
-    REQUIRE(types[13].find_port(FieldNodes::kPortMixWeight, false)->type == qp::ports::kScalarField);
-    REQUIRE_FALSE(types[13].find_port(FieldNodes::kPortMixCorrection, false)->connectable);
-    const graph::PortDesc* mixed_out = types[13].find_port(FieldNodes::kPortMixOut, true);
+    const graph::NodeDesc& mix_type = type_named(types, FieldNodes::kMixType);
+    REQUIRE(mix_type.has_compute);
+    REQUIRE(mix_type.allow_in_field_domain);
+    REQUIRE_FALSE(mix_type.allow_in_particle_domain);
+    REQUIRE(mix_type.find_port(FieldNodes::kPortMixA, false)->type == qp::ports::kVectorField);
+    REQUIRE(mix_type.find_port(FieldNodes::kPortMixB, false)->type == qp::ports::kVectorField);
+    REQUIRE(mix_type.find_port(FieldNodes::kPortMixWeight, false)->type == qp::ports::kScalarField);
+    REQUIRE_FALSE(mix_type.find_port(FieldNodes::kPortMixCorrection, false)->connectable);
+    const graph::PortDesc* mixed_out = mix_type.find_port(FieldNodes::kPortMixOut, true);
     REQUIRE(mixed_out != nullptr);
     REQUIRE(mixed_out->unit_symbol == std::string{"T"});
 }
@@ -2549,17 +2766,16 @@ TEST_CASE("magnetosphere.field_nodes.the_shield_suppresses_convection_inside_its
 
     // The declaration: its own numbers, a scalar output, and nine grid ports that are typed rather than wired.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 15);
-    REQUIRE(types[14].type_name == FieldNodes::kShieldType);
-    REQUIRE(types[14].has_compute);
-    REQUIRE(types[14].allow_in_field_domain);
-    REQUIRE_FALSE(types[14].allow_in_particle_domain);
-    const graph::PortDesc* coefficient = types[14].find_port(FieldNodes::kPortShieldOut, true);
+    const graph::NodeDesc& shield_type = type_named(types, FieldNodes::kShieldType);
+    REQUIRE(shield_type.has_compute);
+    REQUIRE(shield_type.allow_in_field_domain);
+    REQUIRE_FALSE(shield_type.allow_in_particle_domain);
+    const graph::PortDesc* coefficient = shield_type.find_port(FieldNodes::kPortShieldOut, true);
     REQUIRE(coefficient != nullptr);
     REQUIRE(coefficient->type == qp::ports::kScalarField);
     REQUIRE(coefficient->unit_symbol == std::string{"1"});
     for (graph::PortNumber offset = 0; offset < 9; ++offset) {
-        const graph::PortDesc* port = types[14].find_port(FieldNodes::kPortShieldOrigin0 + offset, false);
+        const graph::PortDesc* port = shield_type.find_port(FieldNodes::kPortShieldOrigin0 + offset, false);
         REQUIRE(port != nullptr);
         REQUIRE_FALSE(port->connectable);
     }

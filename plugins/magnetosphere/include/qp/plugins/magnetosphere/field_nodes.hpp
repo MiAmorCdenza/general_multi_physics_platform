@@ -223,6 +223,82 @@ public:
     /// @brief The uniform grid's node count along `z`.
     static constexpr qp::graph::PortNumber kPortUniformCount2 = 12;
 
+    /// @brief The IMF: the reference's `imf_source`, the **third** of the three sources and the only one that
+    ///        publishes a field.
+    ///
+    /// ## What it is
+    ///
+    /// A **uniform** field whose direction is the Parker spiral angle and whose magnitude grows with the activity
+    /// index: where `field.uniform` takes three typed components, this one computes them from a model of the solar
+    /// wind. That is why it is a field node and not a third scalar driver: what a magnetosheath needs is a table,
+    /// and the reference arranges it the same way -- its `imf_source` fills a lattice and hands back
+    /// `Field("vector", data, lat)`.
+    ///
+    /// The arithmetic is the reference's, verbatim, with its two constants named here so that the paragraph below
+    /// has something to point at:
+    ///
+    ///     b_ref   = 3.0 + 0.5 Kp            (nT -- the reference's own 3 and 0.5)
+    ///     b_total = b_ref * kReferenceMagnitudeFactor
+    ///     B       = ( sign b_total cos(theta), -sign b_total sin(theta), 0 )    theta = the spiral angle
+    ///
+    /// ## The factor of the square root of two, and the comment that disagrees with it
+    ///
+    /// The reference carries `b_total = b_ref * sqrt(2)` with the comment "preserve magnitude at 45 degrees". The
+    /// comment is true of the **components** and not of the magnitude: at the canonical 45 degrees each component
+    /// is `b_total/sqrt(2) = b_ref`, while `|B| = b_total = sqrt(2) b_ref` at *every* angle -- the components are
+    /// a rotation of one vector, so the angle cannot change its length. So the reading that makes the reference's
+    /// own sentence true is "`b_ref` is the component scale at the canonical spiral angle", and that is what this
+    /// port bakes: the factor is a **named constant** (`kReferenceMagnitudeFactor`) rather than a written-out
+    /// `1.414`, so that a future experiment can choose between the two readings and measure the difference, which
+    /// is a forty-one percent change in `|B|`.
+    ///
+    /// ## What is deliberately **not** ported: the zero field
+    ///
+    /// The reference emits `(0, 0, 0)` unless a `parker_custom` flag is set, and its own docstring calls that a
+    /// property of the legacy product rather than of the model. It is not ported, and the reason is the rule this
+    /// platform applies everywhere else: **a zero field is a legal physical state**, so "nobody configured the
+    /// IMF" and "the IMF is zero" must be distinguishable, and a node that answers the first with the second is
+    /// reporting an unmeasured value as a measurement. The node therefore always computes, and the angle it uses
+    /// is the reference's own default for the enabled case.
+    ///
+    /// ## `B_z` is exactly zero, and that is a statement about the model
+    ///
+    /// The reference's IMF has no clock angle: the field lies in the equatorial plane, so its `z` component is
+    /// **exactly** zero at every node rather than a small number that ought to be. That is a real limitation and
+    /// not a detail -- a southward `B_z` is what opens the magnetopause, and no run of this node can show it. The
+    /// negative statement is written here because a reader who assumes a solar-wind driver produces reconnection
+    /// would be assuming something this model does not contain; the porting ledger (`plan-tree` 9.33) records what
+    /// a driver that did carry a clock angle would be.
+    static constexpr const char* kImfType = "field.imf";
+
+    /// @brief The polarity: which way the spiral's field points along the Sun-Earth line.
+    ///
+    /// An **enum** port with two named choices rather than a signed number, because the reference's `-1`/`+1` is a
+    /// label in disguise and a parameter panel that offers "toward the Sun" and "away from it" cannot be typed
+    /// wrong. Choice order is frozen: the stored value is the index, so swapping the two names would silently
+    /// reverse every saved document's field.
+    static constexpr qp::graph::PortNumber kPortImfPolarity = 1;
+    /// @brief The spiral angle, in degrees from the Sun-Earth line.
+    static constexpr qp::graph::PortNumber kPortImfAngle = 2;
+    /// @brief The activity index, as an **optional socket** -- the fourth consumer of that shape.
+    static constexpr qp::graph::PortNumber kPortImfKp = 3;
+    /// @brief Where the IMF node's grid starts: after the three model ports.
+    static constexpr qp::graph::PortNumber kPortImfOrigin0 = 4;
+
+    /// @brief The reference's two magnitude constants, named.
+    static constexpr double kReferenceImfBaseNt = 3.0;
+    static constexpr double kReferenceImfPerKpNt = 0.5;
+    /// @brief The reference's `sqrt(2)`, kept as a name because its meaning is argued above.
+    ///
+    /// Written as a constant rather than as `1.4142135...` so that the case can talk about the reading rather than
+    /// about the digits: `std::sqrt(2.0)` is also what the reference computes.
+    static constexpr double kReferenceMagnitudeFactor = 1.41421356237309504880;
+    /// @brief The angle's default, in degrees: the reference's own, and the classic Parker value.
+    static constexpr double kDefaultImfAngleDegrees = 40.0;
+    /// @brief The spiral's observed range, in degrees. The reference clamps into it and so does this reader.
+    static constexpr double kMinImfAngleDegrees = 25.0;
+    static constexpr double kMaxImfAngleDegrees = 55.0;
+
     /// @brief The magnetic latitude of the dipole axis, in degrees.
     /// @brief The dipole's **tilt**, in degrees: the parameter a user types.
     static constexpr qp::graph::PortNumber kPortTiltDegrees = 1;
@@ -642,6 +718,68 @@ public:
     /// @frozen      no
     /// @tests       magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_implies
     [[nodiscard]] static SheetSpec read_sheet(const graph::Node& node) noexcept;
+
+    /**
+     * @brief What an IMF node's ports say.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   `angle_degrees` lies in `[kMinImfAngleDegrees, kMaxImfAngleDegrees]` and `kp` in
+     *              `[SourceNodes::kMinKp, SourceNodes::kMaxKp]`, because the reader clamps both
+     * @errors      noexcept
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.the_imf_is_a_parker_spiral
+     */
+    struct ImfSpec final {
+        /// The activity index the magnitude follows: the reference's `3 + 0.5 Kp`.
+        double kp = 2.0;
+        /// The spiral angle, in degrees from the Sun-Earth line.
+        double angle_degrees = kDefaultImfAngleDegrees;
+        /// `-1` for the standard sector (the field pointing sunward along the spiral), `+1` for the reverse.
+        ///
+        /// A **number** rather than the enum index it is read from, because the sign is what the arithmetic
+        /// wants: the spec is the model's vocabulary, and the panel's vocabulary stops at `read_imf_from`.
+        double polarity = -1.0;
+    };
+
+    /**
+     * @brief An IMF node's ports, read from the node itself.
+     *
+     * @param node The node. Borrowed.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        The three values the node carries, or the defaults for the ones it does not -- including the
+     *              quiet-time index, because the socket is not a parameter and a node read on its own has no wire
+     * @invariant   One reader, two sources, as every other parameter reader in this kit
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.the_imf_is_a_parker_spiral
+     */
+    [[nodiscard]] static ImfSpec read_imf(const graph::Node& node) noexcept;
+
+    /**
+     * @brief The same reader for an evaluator's own inputs -- the one through which the Kp socket is seen.
+     *
+     * @param inputs The evaluator's inputs. Borrowed for the call.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        The same values `read_imf` gives for the same ports, plus the index when one is wired
+     * @invariant   One reader, two sources
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.the_imf_is_a_parker_spiral
+     */
+    [[nodiscard]] static ImfSpec read_imf_from(const graph::InputView& inputs) noexcept;
 
     /// @brief The same reader for an evaluator's own inputs.
     ///
@@ -1662,6 +1800,44 @@ public:
  */
 [[nodiscard]] bool bake_current_sheet(const FieldNodes::SheetSpec& spec, const GridSpec& grid,
                                       qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
+
+/**
+ * @brief Bakes the reference's Parker-spiral IMF onto `grid`: one uniform vector, the same at every node.
+ *
+ * The model, its two constants and the factor whose meaning is argued are on `kImfType`; what belongs here is what
+ * the arithmetic decides:
+ *
+ *   - the magnitude is `(3 + 0.5 Kp)` nanotesla times that factor, converted to tesla **here**, because the port
+ *     says `T` and a table in nanotesla would be a table whose dimension lies;
+ *   - the direction is a rotation of that one vector in the equatorial plane, so the field's magnitude cannot
+ *     depend on the angle. That is asserted by the case as an angle-independence, which is the property that
+ *     distinguishes "rotate the vector" from "scale its components";
+ *   - `B_z` is written as an **exact zero**, not as an expression that ought to vanish. The reference's model has no
+ *     clock angle, so zero is what it says, and a `1e-30` in a table is a number that is not the model.
+ *
+ * The angle is expected already clamped by the reader; a **non-finite** one is refused here instead, for the same
+ * reason the hinge's is: there is no edge to clamp it to.
+ *
+ * @param spec  The activity index, the spiral angle in degrees and the polarity sign.
+ * @param grid  Where to bake. At least two nodes an axis and a positive spacing.
+ * @param key   Who is publishing it.
+ * @param fields The store. Borrowed; the samples are moved into it on success.
+ *
+ * @ownership   owns the samples it publishes on success
+ * @thread      main
+ * @pre         none
+ * @post        On true, `fields.view(key)` is a readable vector volume in tesla whose every node carries
+ *              `(sign b_total cos theta, -sign b_total sin theta, 0)`
+ * @invariant   On false the store is unchanged
+ * @errors      Returns false -- never throws -- for a non-finite index, angle or polarity, or a grid that cannot
+ *              be baked
+ * @complexity  O(points)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.the_imf_is_a_parker_spiral
+ */
+[[nodiscard]] bool bake_imf(const FieldNodes::ImfSpec& spec, const GridSpec& grid, qp::graph::field::FieldKey key,
+                            qp::graph::field::FieldSet& fields);
 
 /**
  * @brief Blends two fields along `x` with the correction that keeps the result divergence-free.

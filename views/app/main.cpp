@@ -250,8 +250,8 @@ int main(int argc, char** argv) {
     // right when it was written and nothing tied it to the kit it was counting, which is the same shape as the
     // stale expectations this repository keeps finding in tests -- a number that describes another module's
     // inventory does not live in this one.
-    if (mounted_field_types != 15 || mounted_pushers != 2 || mounted_emitters != 1 || mounted_drivers != 2) {
-        qWarning().noquote() << "magnetosphere: mounted" << mounted_field_types << "of 15 field types,"
+    if (mounted_field_types != 16 || mounted_pushers != 2 || mounted_emitters != 1 || mounted_drivers != 2) {
+        qWarning().noquote() << "magnetosphere: mounted" << mounted_field_types << "of 16 field types,"
                              << mounted_pushers << "of 2 pushers," << mounted_emitters << "of 1 emitter and"
                              << mounted_drivers << "of 2 drivers";
     }
@@ -310,11 +310,17 @@ int main(int argc, char** argv) {
         const std::size_t sum = node(FieldNodes::kSumType, "dipole + sheet");
         grid(sum, FieldNodes::kPortOrigin0);
 
-        const std::size_t sheath = node(FieldNodes::kUniformType, "magnetosheath");
-        set(sheath, FieldNodes::kPortField0, qp::ports::Value{0.0});
-        set(sheath, FieldNodes::kPortField1, qp::ports::Value{0.0});
-        set(sheath, FieldNodes::kPortField2, qp::ports::Value{5.0e-9});
-        grid(sheath, FieldNodes::kPortUniformOrigin0);
+        // The external field: **the modelled IMF rather than three typed numbers.** This is the porting ledger's
+        // reopen condition for `imf_source`, and it makes the composition the reference's "magnetopause + uniform
+        // IMF" arrangement with the solar wind's own spiral angle instead of a vector somebody chose. Its magnitude
+        // rides the same Kp index the boundary does, so one number now strengthens the field *and* pulls the
+        // magnetopause in -- which is the physical coupling the reference's `imf_source` exists to express.
+        //
+        // `field.uniform` is still in the palette -- it is the field a course checks a pusher against, and its place
+        // in this demo is what has been replaced, not the type.
+        const std::size_t sheath = node(FieldNodes::kImfType, "IMF");
+        set(sheath, FieldNodes::kPortImfAngle, qp::ports::Value{FieldNodes::kDefaultImfAngleDegrees});
+        grid(sheath, FieldNodes::kPortImfOrigin0);
 
         const std::size_t boundary = node(FieldNodes::kMagnetopauseType, "magnetopause");
         set(boundary, FieldNodes::kPortMagnetopauseStandoff, qp::ports::Value{10.0 * re});
@@ -390,6 +396,9 @@ int main(int argc, char** argv) {
         // The driver: one index that decides the boundary's standoff and flaring, rather than two numbers typed into
         // the boundary. This is what source.kp exists for, and the demo shows the wire.
         wire(driver, SourceNodes::kPortKpOut, boundary, FieldNodes::kPortMagnetopauseKp);
+        // ... and the same index into the IMF's magnitude socket, so the storm that pulls the boundary in also
+        // strengthens the field it is standing in.
+        wire(driver, SourceNodes::kPortKpOut, sheath, FieldNodes::kPortImfKp);
         // The tilt socket, which is optional by construction: `field.dipole` bakes its table from
         // `tilt_degrees` when nothing is wired there and from the socket when something is.
         wire(date, SourceNodes::kPortDayOut, dipole, FieldNodes::kPortTiltDriver);
