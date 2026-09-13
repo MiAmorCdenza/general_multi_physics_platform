@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "**三处修正，全部关于「一句话说得对不对」。（一）参考实现能跑，而套件的两处注释说它不能。** `views/CMakeLists.txt` 与 `views/app/main.cpp` 都写着「按 Run 会告诉你跑不了」，理由是「第二条运行通路（provider）还没写」——而那条通路早已写好（控制器在算子通路拒绝后询问挂载的 `IGraphRunProvider`，`run.hpp` 给出自己的节奏，main.cpp 就在节点类型上方挂载了它）。按用户的方式实测：新建文档 → Demos → magnetosphere → Run，窗口报 **「boris: 4096 steps, 24 of 24 live」**，粒子与场线分别画在两个场景里（`nodes 16 | edges 21 | graph v154`）。第一次尝试看起来像「跑不了」，是因为 `Demos → magnetosphere` 是把蓝图**加进**当前文档（3 + 16 = 19 个节点），演示的振子还在，于是算子通路抢先成功——这正是控制器明文规定的顺序。两处注释改写，并新增用例 `run.controller.a_content_graph_runs_through_the_provider` 把这条通路钉住（39 条断言：未挂载时被拒绝且账本为空、挂载后提供者名字、16 个粒子、四个通道且 `radius` 是长度量纲、场的键、账本可按 id 找到）——与上一轮「应用里根本没有拟合器」是同一类缺陷，只是方向相反。（二）**台账一处误记**：§9.44 把参考实现的 `render_item_diagnostics` 记成「置信度面板就是那个表面」，而参考实现自己的说明是「**标量场**在诊断点处采样为标记点集」——两件不同的事，唯一联系是名字里都有 diagnostic；我没有看它的输入端口（`data: scalar_field`）就下了结论。现改为**未移植**，重新开启条件写在 §9.50。（三）**GUI 自查量到一条具名缺口**：磁层运行后置信度面板报「能量漂移无法测量（二次势需要位移与速度）」——这句话是对的（能量守恒是振子的诊断），而磁层轨迹里真正守恒的是磁矩 μ = m v⊥²/(2B)；重新开启条件是有人问「这条轨迹守不守恒」，届时正确的形状是按内容选诊断表。用例 191→192；GCC 与 MSVC 双绿。",
+  "updated": "**置信度面板按内容选诊断，补上上一轮量到的缺口。** 旗舰磁层图跑完后面板原本只说「能量漂移无法测量：轨迹缺少位移与速度」——对，但没用：那条轨迹有两条自己的守恒律，而且是两类不同的陈述：`speed`（磁场不做功，速率被运动精确守恒，漂移全是积分器的）与 `mu`（第一绝热不变量，只在场于回旋轨道尺度上变化很慢时守恒，漂移是**配置的性质**）。旧形状「一个诊断」是只有一种运行时的最小形状；完整形状是**一张检查表**：名字、首末值、相对漂移与漂移率，加一个布尔量 `measures_error`——**这次漂移是算术还是物理**（面板若把两者放进同一列，就是在实验只是不够绝热时告诉学生「你的物理错了」）。模型按内容选律：有位移+速度是振子，否则有速率是洛伦兹运行，`mu` 只要在轨迹里就总加进来（独立一问）。首值为零的检查**仍然记录**但不给相对漂移——「读到了但无法归一」与「轨迹里没有这个量」是两句不同的话，旧的单字段形状只能说「缺席」。**实测**（GUI 自查，旗舰图）：`speed drift 0.000386969`，注解说「the method gains speed ... not trustworthy at this resolution」；`mu changed by -5.452% ... a property of the configuration rather than an error -- the run says how adiabatic this experiment is`——两个数字都在说话，而面板以前对这次运行什么都不说。面板行改为每条检查两行 + 三行常驻，标签把数量与性质写进去（`mu drift (of the physics, not the step)`）。用例 192→193；GCC 855 / MSVC 857 双绿。",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -81,7 +81,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 854,
+    "ctest_registered": 855,
     "compilers_green": [
       "gcc-15.2.0-i686",
       "msvc-19.51-x64"

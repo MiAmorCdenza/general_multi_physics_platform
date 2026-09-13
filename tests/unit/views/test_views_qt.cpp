@@ -1071,12 +1071,31 @@ TEST_CASE("qt.views.confidence.unmeasurable_is_not_zero", "[views][qt]") {
     qp::views::model::ConfidenceModel confidence{measurements.trace()};
     qp::views::ConfidencePanel panel{confidence};
 
-    const QString shown = panel.row_text(QStringLiteral("energy drift"));
-    REQUIRE(shown == qp::views::ConfidencePanel::unavailable_text());
-    REQUIRE(shown != QStringLiteral("0"));
+    // **"Not measurable" is now the absence of a row rather than a row saying so.** The panel shows one pair of
+    // rows per conservation law the trace carries, and this trace carries none of the laws the model knows, so
+    // there is no quantity to name and nothing to print -- `row_text` answers with an empty string for a row that is
+    // not there, and the note below says which channels would have made one. A `0` in a drift row was the mistake
+    // C8 exists to prevent; a row for a quantity this run never had would have been the same mistake wearing a
+    // label.
+    REQUIRE(panel.row_text(QStringLiteral("energy drift")).isEmpty());
+    REQUIRE(panel.row_text(QStringLiteral("speed drift")).isEmpty());
+    REQUIRE(panel.row_text(QStringLiteral("mu drift")).isEmpty());
+    // The standing rows are still there, and the one that depends on a measurement says so in words.
+    REQUIRE(panel.row_text(QStringLiteral("samples")) == QStringLiteral("2"));
+    REQUIRE(panel.row_text(QStringLiteral("time span")) == qp::views::ConfidencePanel::unavailable_text());
+    REQUIRE(panel.row_text(QStringLiteral("clamped values")) == QStringLiteral("0"));
 
-    // And the model explains which channel is missing rather than only that something is.
+    // And the model explains which channels are missing rather than only that something is: both ways a run could
+    // have been measurable are named, because a student who added a velocity and still sees nothing needs to know
+    // that a magnetic run would have been judged by its speed instead.
     REQUIRE_FALSE(panel.note_lines().isEmpty());
+    bool named_both = false;
+    for (const QString& line : panel.note_lines()) {
+        if (line.contains(QStringLiteral("displacement")) && line.contains(QStringLiteral("speed"))) {
+            named_both = true;
+        }
+    }
+    REQUIRE(named_both);
 }
 
 TEST_CASE("qt.views.fit.shows_the_models_report", "[views][qt]") {

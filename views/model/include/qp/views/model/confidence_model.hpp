@@ -67,6 +67,51 @@
 namespace qp::views::model {
 
 /**
+ * @brief One conservation law, read off the endpoints of a trace.
+ *
+ * **The confidence panel used to have exactly one diagnostic -- the harmonic oscillator's energy -- and that was the
+ * minimal shape while one kind of run existed.** A magnetosphere run records `speed`, `energy`, `mu` and `radius`,
+ * and the panel said "energy drift cannot be measured: the trace is missing displacement and velocity" about it,
+ * which is true and useless: that run has two conservation laws of its own, and they are not the same kind of
+ * statement.
+ *
+ *   - **`measures_error` is true** when a drift in this quantity is the **integrator's**: a magnetic force does no
+ *     work, so a particle's speed is conserved by the *motion* and any change in it came from the step. The
+ *     oscillator's energy is the same statement about a quadratic potential.
+ *   - **`measures_error` is false** when a drift is a **property of the configuration**: the first adiabatic
+ *     invariant `m v_perp^2 / 2B` holds only while the field varies slowly over a gyro-orbit, so its drift says how
+ *     adiabatic *this experiment* is. A panel that showed the two in one column would be telling a student their
+ *     physics is wrong when their experiment is simply not adiabatic -- which is why the distinction is a field
+ *     rather than a word in a label.
+ *
+ * @ownership   owns
+ * @thread      ui
+ * @pre         none
+ * @post        none
+ * @invariant   `relative_drift` is absent exactly when `first` gives no scale to divide by
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       confidence.a_magnetic_run_is_judged_by_speed_and_mu
+ */
+struct InvariantCheck final {
+    /// Stable name of the quantity, as a report or a table quotes it: `energy`, `speed`, `mu`.
+    const char* name = "";
+    /// Whether a drift here is arithmetic or physics. See the type's comment.
+    bool measures_error = true;
+    /// The quantity at the first and the last sample.
+    double first = 0.0;
+    double last = 0.0;
+    /// `(last - first) / |first|`. **Signed**, so dissipation and blow-up are different findings.
+    ///
+    /// Absent when the first value is zero or non-finite: a relative change needs a scale, and `(x - 0) / 0` is not
+    /// a large drift but an undefined one. A state at rest conserves trivially and there is nothing to report.
+    std::optional<double> relative_drift{};
+    /// The same per unit time, so runs of different lengths can be compared. Present exactly when
+    /// `relative_drift` is.
+    std::optional<double> relative_rate{};
+};
+
+/**
  * @brief How much of one run is trustworthy, in the terms C8 names.
  *
  * @ownership   owns
@@ -76,23 +121,23 @@ namespace qp::views::model {
  * @invariant   Every optional is absent exactly when the corresponding quantity is unknowable
  * @errors      noexcept
  * @frozen      no
- * @tests       confidence.energy_drift_is_measured, confidence.absent_is_not_zero
+ * @tests       confidence.energy_drift_is_measured, confidence.absent_is_not_zero,
+ *              confidence.a_magnetic_run_is_judged_by_speed_and_mu
  */
 struct ConfidenceReport final {
     /// Number of samples the trace holds.
     std::size_t samples = 0;
-    /// Relative change in total energy from the first sample to the last, as a fraction:
-    /// `(E_last - E_first) / |E_first|`.
+    /// Every conservation law this trace can be judged by, in the order the model looks for them.
     ///
-    /// **Signed**, so the direction is visible: dissipation and blow-up are different findings, and
-    /// a student comparing RK4 against a symplectic integrator is looking at the sign.
+    /// Empty when the trace carries no channel this model knows, and the notes say which channel was missing --
+    /// the rule the single field had, generalised: **absent is not zero**, and a report with no checks is a
+    /// statement about the trace rather than about the run.
     ///
-    /// Absent when there is no usable energy pair -- see the file comment on why absent is not zero.
-    std::optional<double> energy_drift{};
-    /// Relative change per unit time, so runs of different lengths can be compared. Present exactly
-    /// when `energy_drift` is.
-    std::optional<double> energy_drift_rate{};
-    /// The time span the drift was measured over, in seconds.
+    /// At most two entries today: the energy of a quadratic potential (when the trace carries a displacement and a
+    /// velocity) or the speed of a charged particle in a magnetic field (when it carries a speed), plus the first
+    /// adiabatic invariant whenever the trace carries `mu`.
+    std::vector<InvariantCheck> checks{};
+    /// The time span the drifts were measured over, in seconds. Present whenever any check is.
     std::optional<double> span{};
     /// How many times the operator's clamp fired. Zero is a real answer meaning "never"; there is no
     /// absent case, because the model is told the count rather than discovering it.
@@ -117,6 +162,11 @@ public:
     static constexpr const char* kPositionChannel = "displacement";
     /// @brief Channel name carrying the corresponding velocity.
     static constexpr const char* kVelocityChannel = "velocity";
+    /// @brief Channel name carrying a **speed** whose change is the integrator's: the Lorentz force does no work.
+    static constexpr const char* kSpeedChannel = "speed";
+    /// @brief Channel name carrying the first adiabatic invariant, whose change is the configuration's.
+    static constexpr const char* kMuChannel = "mu";
+
     /// @brief Angular frequency assumed when the caller does not supply one.
     ///
     /// One radian per second, which is a real value rather than a sentinel -- a sentinel would make

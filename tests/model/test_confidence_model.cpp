@@ -106,6 +106,15 @@ void fill_with_rk4(TracedRun& run, double omega, double dt, int steps) {
     run.add(static_cast<double>(steps) * dt, state[0], state[1], 1.0e-9);
 }
 
+/// @brief The check named `name`, or null when the trace carries no such law.
+[[nodiscard]] const qp::views::model::InvariantCheck* check_named(
+    const qp::views::model::ConfidenceReport& report, const char* name) {
+    for (const qp::views::model::InvariantCheck& check : report.checks) {
+        if (std::string_view{check.name} == std::string_view{name}) return &check;
+    }
+    return nullptr;
+}
+
 }  // namespace
 
 TEST_CASE("confidence.energy_drift_is_measured", "[confidence][model]") {
@@ -128,19 +137,128 @@ TEST_CASE("confidence.energy_drift_is_measured", "[confidence][model]") {
     const ConfidenceReport r = model.report();
 
     REQUIRE(r.samples == static_cast<std::size_t>(steps) + 1);
-    REQUIRE(r.energy_drift.has_value());
+    // **One check, and it is the energy**: a displacement with a velocity is what an oscillator is, and this trace
+    // carries both, so the model has exactly one law to judge it by.
+    REQUIRE(r.checks.size() == 1);
+    const InvariantCheck& energy = r.checks.front();
+    REQUIRE(std::string_view{energy.name} == std::string_view{"energy"});
+    // ... and it is arithmetic, not physics: a drift here is the step's.
+    REQUIRE(energy.measures_error);
+    REQUIRE(energy.relative_drift.has_value());
+    REQUIRE(energy.relative_rate.has_value());
     REQUIRE(r.span.has_value());
     REQUIRE(r.span.value() > 0.0);
-    REQUIRE(r.energy_drift_rate.has_value());
 
     // Dissipative, so the sign is negative. This is the assertion that stops a student attributing
     // the loss to damping they never added -- C8's reason for existing.
-    REQUIRE(r.energy_drift.value() < 0.0);
+    REQUIRE(energy.relative_drift.value() < 0.0);
     // Small, because RK4 is accurate: a drift of a percent over eighty periods would mean the
     // operator is wrong rather than that the method is dissipative.
-    REQUIRE(std::abs(r.energy_drift.value()) < 1.0e-2);
+    REQUIRE(std::abs(energy.relative_drift.value()) < 1.0e-2);
     // And not zero: a diagnostic that always reported "conserve" would satisfy the bound above.
-    REQUIRE(std::abs(r.energy_drift.value()) > 0.0);
+    REQUIRE(std::abs(energy.relative_drift.value()) > 0.0);
+    // The rate is the drift spread over the run's own span, not a second measurement.
+    REQUIRE(energy.relative_rate.value() == energy.relative_drift.value() / r.span.value());
+}
+
+
+TEST_CASE("confidence.a_magnetic_run_is_judged_by_speed_and_mu", "[confidence][model]") {
+    // **The gap this case closes was found in the window, not in a test.** After a magnetosphere run the confidence
+    // panel said "energy drift cannot be measured: the trace is missing displacement and velocity (a quadratic
+    // potential needs both)" -- true, and useless: that trace carries `speed`, which a magnetic field conserves
+    // *exactly* (so its drift is the integrator's), and `mu`, the first adiabatic invariant, which is conserved
+    // only while the field varies slowly over a gyro-orbit (so its drift is the configuration's). Two conservation
+    // laws, two different kinds of statement, and the panel knew about neither.
+    //
+    // The trace is built here rather than taken from a magnetosphere run, because what is under test is the
+    // *decision*: which channel makes a run an oscillator, which makes it a Lorentz run, and what each drift means.
+    // The end-to-end half -- that a run of the kit's own provider produces such a trace -- is
+    // `run.controller.a_content_graph_runs_through_the_provider`.
+    qp::runtime::Trace trace{qp::runtime::RunId{9}};
+    REQUIRE(trace.add_channel(qp::runtime::Channel{"speed", qp::units::dims::velocity}).has_value());
+    REQUIRE(trace.add_channel(qp::runtime::Channel{"mu", qp::units::dims::energy / qp::units::dims::magnetic_flux_density}).has_value());
+    // A speed that falls by a part in ten thousand, and an invariant that wanders by a percent: the first is the
+    // step's error, the second is the experiment's adiabaticity, and the case asserts that the report says so.
+    REQUIRE(trace.append(0.0, {rt::UncertainValue::exact(1.0e6), rt::UncertainValue::exact(2.0e-8)}).has_value());
+    REQUIRE(trace.append(1.0, {rt::UncertainValue::exact(1.0e6), rt::UncertainValue::exact(2.0e-8)}).has_value());
+    REQUIRE(trace.append(2.0, {rt::UncertainValue::exact(9.999e5), rt::UncertainValue::exact(2.02e-8)}).has_value());
+
+    ConfidenceModel model(trace);
+    const ConfidenceReport r = model.report();
+
+    // Two checks, in the model's order: the error first, the physics second.
+    REQUIRE(r.checks.size() == 2);
+    const InvariantCheck* speed = check_named(r, "speed");
+    const InvariantCheck* mu = check_named(r, "mu");
+    REQUIRE(speed != nullptr);
+    REQUIRE(mu != nullptr);
+    // **The distinction the panel renders**: one of these is a bug if it drifts, the other is not.
+    REQUIRE(speed->measures_error);
+    REQUIRE_FALSE(mu->measures_error);
+
+    // The speed's drift is the relative change of the endpoints, and it is negative (the step lost speed).
+    REQUIRE(speed->relative_drift.has_value());
+    REQUIRE(speed->relative_drift.value() < 0.0);
+    REQUIRE(std::abs(speed->relative_drift.value() - (9.999e5 - 1.0e6) / 1.0e6) < 1.0e-12);
+    REQUIRE(speed->relative_rate.has_value());
+    REQUIRE(std::abs(speed->relative_rate.value() - speed->relative_drift.value() / 2.0) < 1.0e-12);
+    REQUIRE(mu->relative_drift.has_value());
+    REQUIRE(mu->relative_drift.value() > 0.0);
+
+    // The notes say which is which, in words a student can act on. The energy sentence must **not** appear: this
+    // run has no potential, and a note about omega would be noise about a quantity nobody computed.
+    const std::vector<std::string> notes = model.notes();
+    REQUIRE_FALSE(notes.empty());
+    bool said_error = false;
+    bool said_physics = false;
+    bool said_omega = false;
+    for (const std::string& note : notes) {
+        if (note.find("speed changed by") != std::string::npos) {
+            said_error = note.find("integrator") != std::string::npos;
+        }
+        if (note.find("mu changed by") != std::string::npos) {
+            said_physics = note.find("adiabatic") != std::string::npos;
+        }
+        if (note.find("omega") != std::string::npos) said_omega = true;
+    }
+    REQUIRE(said_error);
+    REQUIRE(said_physics);
+    REQUIRE_FALSE(said_omega);
+
+    // A trace with neither pair nor speed is still the "cannot be measured" case, and the sentence now names both
+    // ways a run could have been measurable.
+    qp::runtime::Trace bare{qp::runtime::RunId{10}};
+    REQUIRE(bare.add_channel(qp::runtime::Channel{"mass", qp::units::dims::mass}).has_value());
+    REQUIRE(bare.append(0.0, {rt::UncertainValue::exact(1.0)}).has_value());
+    REQUIRE(bare.append(1.0, {rt::UncertainValue::exact(1.0)}).has_value());
+    ConfidenceModel bare_model(bare);
+    REQUIRE(bare_model.report().checks.empty());
+    const std::vector<std::string> bare_notes = bare_model.notes();
+    REQUIRE(bare_notes.size() == 1);
+    REQUIRE(bare_notes.front().find("displacement") != std::string::npos);
+    REQUIRE(bare_notes.front().find("speed") != std::string::npos);
+
+    // An oscillator's trace keeps its energy check even when it also carries a mu -- the two are independent
+    // questions, and a caller that recorded both gets both answers.
+    qp::runtime::Trace both{qp::runtime::RunId{11}};
+    REQUIRE(both.add_channel(qp::runtime::Channel{"displacement", qp::units::dims::length}).has_value());
+    REQUIRE(both.add_channel(qp::runtime::Channel{"velocity", qp::units::dims::velocity}).has_value());
+    REQUIRE(both.add_channel(qp::runtime::Channel{"mu", qp::units::dims::energy / qp::units::dims::magnetic_flux_density}).has_value());
+    REQUIRE(both.append(0.0, {rt::UncertainValue::exact(1.0), rt::UncertainValue::exact(2.0),
+                              rt::UncertainValue::exact(3.0)}).has_value());
+    REQUIRE(both.append(1.0, {rt::UncertainValue::exact(1.0), rt::UncertainValue::exact(2.0),
+                              rt::UncertainValue::exact(3.0)}).has_value());
+    ConfidenceModel both_model(both);
+    both_model.set_omega(1.0);
+    const ConfidenceReport both_report = both_model.report();
+    REQUIRE(both_report.checks.size() == 2);
+    REQUIRE(check_named(both_report, "energy") != nullptr);
+    REQUIRE(check_named(both_report, "mu") != nullptr);
+    // Both conserved exactly here, so neither has a drift worth a note.
+    for (const InvariantCheck& check : both_report.checks) {
+        REQUIRE(check.relative_drift.has_value());
+        REQUIRE(check.relative_drift.value() == 0.0);
+    }
 }
 
 TEST_CASE("confidence.absent_is_not_zero", "[confidence][model]") {
@@ -166,7 +284,7 @@ TEST_CASE("confidence.absent_is_not_zero", "[confidence][model]") {
         ConfidenceModel model(positional);
         const ConfidenceReport r = model.report();
         REQUIRE(r.samples == 2);
-        REQUIRE_FALSE(r.energy_drift.has_value());
+        REQUIRE(r.checks.empty());
         REQUIRE_FALSE(r.span.has_value());
 
         // And the notes say which channel is missing rather than that something is wrong.
@@ -185,19 +303,41 @@ TEST_CASE("confidence.absent_is_not_zero", "[confidence][model]") {
         one.add(0.0, 1.0, 0.0);
         ConfidenceModel model(one.trace());
         model.set_omega(1.0);
-        REQUIRE_FALSE(model.report().energy_drift.has_value());
+        REQUIRE(model.report().checks.empty());
     }
 
-    // A state at rest at the origin conserves trivially, and a **relative** change from zero energy
-    // is undefined rather than infinite. The model reports no figure, which is the honest answer:
-    // there is nothing that could have drifted.
+    // A state at rest at the origin conserves trivially, and a **relative** change from zero energy is undefined
+    // rather than infinite. The honest answer is not "no figure" but a figure that says which of the two situations
+    // this is: the law **was read** and has no scale to be a fraction of, which is a different statement from the
+    // law not being in the trace at all. That distinction is what the checks table made room for, and this block is
+    // where it is asserted -- the old shape could only say "absent".
     {
         TracedRun still;
         still.add(0.0, 0.0, 0.0);
         still.add(1.0, 0.0, 0.0);
         ConfidenceModel model(still.trace());
         model.set_omega(1.0);
-        REQUIRE_FALSE(model.report().energy_drift.has_value());
+        const ConfidenceReport r = model.report();
+        REQUIRE(r.checks.size() == 1);
+        const InvariantCheck& energy = r.checks.front();
+        REQUIRE(std::string_view{energy.name} == std::string_view{"energy"});
+        REQUIRE(energy.measures_error);
+        // Its two values are there, and the drift is **absent rather than zero**: a zero would claim the energy was
+        // measured and found not to change, which is a claim about a quantity that starts at zero.
+        REQUIRE(energy.first == 0.0);
+        REQUIRE(energy.last == 0.0);
+        REQUIRE_FALSE(energy.relative_drift.has_value());
+        REQUIRE_FALSE(energy.relative_rate.has_value());
+        // ... and the note says so, in the terms a student can act on.
+        const std::vector<std::string> notes = model.notes();
+        REQUIRE_FALSE(notes.empty());
+        bool explained = false;
+        for (const std::string& note : notes) {
+            if (note.find("energy") != std::string::npos && note.find("zero") != std::string::npos) {
+                explained = true;
+            }
+        }
+        REQUIRE(explained);
     }
 }
 
@@ -244,8 +384,8 @@ TEST_CASE("confidence.notes_name_the_mechanism", "[confidence][model]") {
     ConfidenceModel model(run.trace());
     model.set_omega(omega);
     const ConfidenceReport r = model.report();
-    REQUIRE(r.energy_drift.has_value());
-    REQUIRE(r.energy_drift.value() < 0.0);
+    REQUIRE(check_named(r, "energy") != nullptr);
+    REQUIRE(check_named(r, "energy")->relative_drift.value() < 0.0);
 
     bool names_the_method = false;
     for (const std::string& n : model.notes()) {

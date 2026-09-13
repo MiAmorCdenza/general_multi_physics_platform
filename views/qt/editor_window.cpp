@@ -1040,9 +1040,11 @@ void EditorWindow::seed_demo_measurement() {
     //
     // **Two channels, and the velocity is not optional.** The confidence panel's energy diagnostic
     // needs a position and a velocity: a quadratic potential is `0.5 w^2 x^2 + 0.5 v^2`, and with
-    // only the first the panel reports "energy drift cannot be measured: the trace is missing
-    // velocity". That is the honest answer and it was the demo's answer until this channel was
-    // added -- which meant the demo showed C8's **refusal** path and never its diagnostic.
+    // only the first the panel has no law it can judge this trace by. It says so, and the sentence
+    // now names both ways a run could have been measurable -- a displacement with a velocity, or a
+    // speed, which a magnetic field conserves exactly. That is the honest answer and it was the
+    // demo's answer until this channel was added -- which meant the demo showed C8's **refusal**
+    // path and never its diagnostic.
     //
     // The velocity is the analytic derivative of the position rather than a second independent
     // series, so the two channels describe one motion. The functions are
