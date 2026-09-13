@@ -6,7 +6,8 @@
 
 add_library(qp_graph_domain STATIC
     src/declaration.cpp
-    src/build.cpp)
+    src/build.cpp
+    src/view_items.cpp)
 
 add_library(qp::graph_domain ALIAS qp_graph_domain)
 

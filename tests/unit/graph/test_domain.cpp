@@ -10,6 +10,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <qp/graph/domain.hpp>
+#include <qp/graph/domain/view_items.hpp>
 
 #include <deque>
 #include <string>
@@ -559,4 +560,97 @@ TEST_CASE("graph.domain.plan_ignores_stale_declarations", "[graph][domain]") {
     const ExecutionPlan p = s.plan();
     REQUIRE(p.field.size() == 1);
     REQUIRE(p.field.order().front() == a);
+}
+
+
+namespace {
+
+/// @brief An item that answers with a fixed scene, so the contract can be checked without a toolkit.
+class StubItem final : public IViewItem {
+public:
+    [[nodiscard]] std::string_view name() const noexcept override { return "stub item"; }
+    [[nodiscard]] bool draws(std::string_view type_name) const noexcept override {
+        return type_name == "render.particles";
+    }
+    [[nodiscard]] ViewScene scene(const ViewRequest& request) override {
+        ++calls;
+        last_valid = request.valid();
+        ViewScene out;
+        if (request.positions == nullptr) return out;
+        const std::vector<double>& positions = *request.positions;
+        for (std::size_t i = 0; i + 2 < positions.size(); i += 3) {
+            out.points.push_back(ViewScene::Point{positions[i], positions[i + 1]});
+        }
+        out.x_min = -8.0;
+        out.x_max = 8.0;
+        out.y_min = -8.0;
+        out.y_max = 8.0;
+        out.has_bounds = true;
+        return out;
+    }
+    int calls = 0;
+    bool last_valid = false;
+};
+
+}  // namespace
+
+TEST_CASE("graph.domain.a_scene_is_a_value_not_a_widget", "[domain]") {
+    // The render domain's **other end**: a declaration is what the graph says it wants drawn, and a view item
+    // turns it into a value -- points in the item's own units plus the bounds it wants fitted -- from which a
+    // host decides how to paint. The split is what keeps the decision testable: an item that painted would put
+    // the drawing where no case can reach it.
+    //
+    // It lives in this module and this partition because a **plugin** implements `IViewItem`, and the interface
+    // a plugin implements may not live in `views/` -- see the header's own note on the cycle that rule came
+    // from.
+    StubItem item;
+    clear_view_items();
+    REQUIRE(view_items().empty());
+
+    mount_view_item(&item);
+    REQUIRE(view_items().size() == 1);
+    // Mounting twice is not two entries: a window that mounted an item in two places would offer every
+    // declaration to it twice.
+    mount_view_item(&item);
+    REQUIRE(view_items().size() == 1);
+    mount_view_item(nullptr);
+    REQUIRE(view_items().size() == 1);
+
+    // The type gate: an item is offered **declarations**, and it answers for the type names it draws. A
+    // declaration of another type is not this item's, which is how several items coexist without a registry.
+    REQUIRE(item.draws("render.particles"));
+    REQUIRE_FALSE(item.draws("render.field_lines"));
+
+    // A request whose run produced no positions -- a graph that has not been run, which is a window's ordinary
+    // state -- is still a valid request, and it produces a scene with nothing in it rather than an error. The
+    // graph is the empty one: this layer has no session and no fixture graph, and an item that needed one would
+    // be an item with a dependency it should not have.
+    const Graph empty_graph;
+    const std::vector<double> no_positions;
+    ViewRequest request{&empty_graph, nullptr, &no_positions, 0};
+    REQUIRE(request.valid());
+    const ViewScene nothing = item.scene(request);
+    REQUIRE(nothing.empty());
+    REQUIRE(nothing.has_bounds);
+    REQUIRE(item.last_valid);
+
+    // And with positions: three doubles per particle become one point each, and the bounds are the item's own
+    // rather than the extent of the points -- an inferred fit jumps when a particle leaves the box.
+    const std::vector<double> positions{1.0, 2.0, 3.0, -4.0, 5.0, 6.0, 7.0};
+    const ViewScene drawn = item.scene(ViewRequest{&empty_graph, nullptr, &positions, 4096});
+    REQUIRE(drawn.points.size() == 2);
+    REQUIRE(drawn.points[0].x == 1.0);
+    REQUIRE(drawn.points[0].y == 2.0);
+    REQUIRE(drawn.points[1].x == -4.0);
+    REQUIRE(drawn.points[1].y == 5.0);
+    REQUIRE(drawn.x_min == -8.0);
+    REQUIRE(drawn.x_max == 8.0);
+    REQUIRE_FALSE(drawn.empty());
+
+    // A request with no run at all is refused by `valid()`, which is what a host checks before asking.
+    const ViewRequest absent{&empty_graph, nullptr, nullptr, 0};
+    REQUIRE_FALSE(absent.valid());
+
+    clear_view_items();
+    REQUIRE(view_items().empty());
 }

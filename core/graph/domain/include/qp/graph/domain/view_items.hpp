@@ -1,15 +1,20 @@
 /**
  * @file view_items.hpp
- * @brief What draws a render declaration: the third list, and the value a drawer answers with.
+ * @brief What draws a render declaration: the render domain's other end, and the value a drawer answers with.
  *
- * ## The last gap in the render story
+ * ## The last gap in the render story, and why it lives here
  *
- * `graph/domain` says a render node is a **declaration**, not a computation, and `build_plan` puts one into
+ * This module says a render node is a **declaration**, not a computation, and `build_plan` puts one into
  * `plan.render.declared` instead of into an evaluation plan. The magnetosphere kit now has such a node
- * (`render.particles`). What was missing is the other end: something that reads a declaration and produces
+ * (`render.particles`). What was missing is the **other end**: something that reads a declaration and produces
  * something drawable. A search of `core/`, `views/` and `plugins/` finds "view slot" in exactly one place -- the
- * capability bit's own documentation -- with no registry, no interface and no host. So this file is the
- * interface, and `views/qt` gains the host.
+ * capability bit's own documentation -- with no registry, no interface and no host.
+ *
+ * **It is here rather than in `views/model`, and that is a correction.** The first version lived in the view
+ * layer carrying a `const RunResult*`; a plugin implementing it would then have depended on `views/`, and
+ * `execution_binders.hpp` already records what that costs -- `views -> plugins -> views` was a cycle, and the
+ * lesson written there is that **the interface a plugin implements belongs in `core/`**. The declarations
+ * themselves are this module's own vocabulary, so this is the module whose subject it is.
  *
  * ## Why the drawing is a value and not a widget
  *
@@ -34,7 +39,7 @@
  * @invariant   A mounted item outlives the list
  * @errors      See each declaration
  * @frozen      no
- * @tests       views.items.a_scene_is_a_value_not_a_widget
+ * @tests       graph.domain.a_scene_is_a_value_not_a_widget
  */
 #pragma once
 
@@ -46,7 +51,7 @@
 #include <string_view>
 #include <vector>
 
-namespace qp::views::model {
+namespace qp::graph {
 
 /**
  * @brief What a view item is asked to draw with.
@@ -65,7 +70,7 @@ namespace qp::views::model {
  * @invariant   `declared` is the render plan's own list, never a copy
  * @errors      See each declaration
  * @frozen      no
- * @tests       views.items.a_scene_is_a_value_not_a_widget
+ * @tests       graph.domain.a_scene_is_a_value_not_a_widget
  */
 struct ViewRequest final {
     /// The graph the declarations came from. Borrowed.
@@ -92,7 +97,7 @@ struct ViewRequest final {
     /// @complexity  O(1)
     /// @nondet      none
     /// @frozen      no
-    /// @tests       views.items.a_scene_is_a_value_not_a_widget
+    /// @tests       graph.domain.a_scene_is_a_value_not_a_widget
     [[nodiscard]] bool valid() const noexcept { return graph != nullptr && positions != nullptr; }
 };
 
@@ -111,7 +116,7 @@ struct ViewRequest final {
  * @invariant   `has_bounds` is false exactly when the scene has nothing to fit
  * @errors      See each declaration
  * @frozen      no
- * @tests       views.items.a_scene_is_a_value_not_a_widget
+ * @tests       graph.domain.a_scene_is_a_value_not_a_widget
  */
 struct ViewScene final {
     /// One 2-D point in the item's own units.
@@ -143,7 +148,7 @@ struct ViewScene final {
     /// @complexity  O(1)
     /// @nondet      none
     /// @frozen      no
-    /// @tests       views.items.a_scene_is_a_value_not_a_widget
+    /// @tests       graph.domain.a_scene_is_a_value_not_a_widget
     [[nodiscard]] bool empty() const noexcept { return points.empty() && trail.empty(); }
 };
 
@@ -161,7 +166,7 @@ struct ViewScene final {
  * @invariant   `name` and `draws` are constant for the object's lifetime
  * @errors      See each declaration
  * @frozen      no
- * @tests       views.items.a_scene_is_a_value_not_a_widget
+ * @tests       graph.domain.a_scene_is_a_value_not_a_widget
  */
 class IViewItem {
 public:
@@ -181,7 +186,7 @@ public:
     /// @complexity  O(1)
     /// @nondet      none
     /// @frozen      no
-    /// @tests       views.items.a_scene_is_a_value_not_a_widget
+    /// @tests       graph.domain.a_scene_is_a_value_not_a_widget
     [[nodiscard]] virtual std::string_view name() const noexcept = 0;
 
     /// @brief Whether this item draws a render node of `type_name`.
@@ -201,7 +206,7 @@ public:
     /// @complexity  O(1)
     /// @nondet      none
     /// @frozen      no
-    /// @tests       views.items.a_scene_is_a_value_not_a_widget
+    /// @tests       graph.domain.a_scene_is_a_value_not_a_widget
     [[nodiscard]] virtual bool draws(std::string_view type_name) const noexcept = 0;
 
     /// @brief Produces the scene for one declaration.
@@ -220,7 +225,7 @@ public:
     /// @complexity  O(particles)
     /// @nondet      none
     /// @frozen      no
-    /// @tests       views.items.a_scene_is_a_value_not_a_widget
+    /// @tests       graph.domain.a_scene_is_a_value_not_a_widget
     [[nodiscard]] virtual ViewScene scene(const ViewRequest& request) = 0;
 };
 
@@ -235,7 +240,7 @@ public:
 /// @complexity  O(1)
 /// @nondet      none
 /// @frozen      no
-/// @tests       views.items.a_scene_is_a_value_not_a_widget
+/// @tests       graph.domain.a_scene_is_a_value_not_a_widget
 [[nodiscard]] const std::vector<IViewItem*>& view_items() noexcept;
 
 /// @brief Adds a view item to the list the window offers declarations to.
@@ -251,7 +256,7 @@ public:
 /// @complexity  O(items)
 /// @nondet      none
 /// @frozen      no
-/// @tests       views.items.a_scene_is_a_value_not_a_widget
+/// @tests       graph.domain.a_scene_is_a_value_not_a_widget
 void mount_view_item(IViewItem* item) noexcept;
 
 /// @brief Forgets every view item, for a test that wants a clean list.
@@ -265,7 +270,7 @@ void mount_view_item(IViewItem* item) noexcept;
 /// @complexity  O(1)
 /// @nondet      none
 /// @frozen      no
-/// @tests       views.items.a_scene_is_a_value_not_a_widget
+/// @tests       graph.domain.a_scene_is_a_value_not_a_widget
 void clear_view_items() noexcept;
 
-}  // namespace qp::views::model
+}  // namespace qp::graph
