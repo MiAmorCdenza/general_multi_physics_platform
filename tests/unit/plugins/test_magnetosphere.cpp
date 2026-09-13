@@ -684,6 +684,26 @@ TEST_CASE("magnetosphere.baked_field.the_view_describes_the_storage", "[magnetos
     REQUIRE(view.dimension().I == -1);
     REQUIRE(view.dimension().L == 0);
 
+    // **The dimension is a parameter, and that is a correction with a case behind it.** Every model this kit
+    // shipped until now was magnetic, so `view()` could hardcode tesla; an electric field broke that -- and a
+    // description that lied about its dimension would be worse than none, because `field::is_valid_field` is
+    // entitled to be asked what a buffer holds and to get a true answer.
+    const gfield::FieldValue as_electric = table.view(volt_per_metre_dimension());
+    REQUIRE(gfield::is_readable(as_electric));
+    REQUIRE(as_electric.dimension().M == 1);
+    REQUIRE(as_electric.dimension().L == 1);
+    REQUIRE(as_electric.dimension().T == -3);
+    REQUIRE(as_electric.dimension().I == -1);
+    // The same storage, described two ways: the counts, the element type and the samples do not move.
+    REQUIRE(as_electric.desc.count[0] == view.desc.count[0]);
+    REQUIRE(as_electric.data == view.data);
+    REQUIRE(as_electric.required_bytes() == view.required_bytes());
+    REQUIRE(view.dimension().L == 0);
+    REQUIRE(view.dimension().T == -2);
+    // And the default is still the magnetic one, which is what every existing caller reads.
+    REQUIRE(table.view(tesla_dimension()).desc.element == view.desc.element);
+    REQUIRE(table.view(tesla_dimension()).desc.kind == view.desc.kind);
+
     // The node positions, which are the other half of what the view cannot say: the counts are in the description
     // and the grid's geometry is in the parameter block, so the two have to agree with `node_position`.
     const Vec3 node = table.node_position(2, 3, 4);

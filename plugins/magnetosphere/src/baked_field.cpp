@@ -210,6 +210,12 @@ void BakedField::set_node(std::uint32_t i, std::uint32_t j, std::uint32_t k, con
 }
 
 gfield::FieldValue BakedField::view() const noexcept {
+    // A field's dimension is the **same seven exponents as the quantity**: a magnetic field is kg / (A s^2),
+    // which in this unit system is M = 1, T = -2, I = -1.
+    return view(tesla_dimension());
+}
+
+gfield::FieldValue BakedField::view(const abi::FieldDim dimension) const noexcept {
     gfield::FieldValue out;
     if (empty() || nx_ < 2 || ny_ < 2 || nz_ < 2) {
         // An empty or degenerate table has no valid description: `abi::is_consistent` refuses a volume with a
@@ -217,12 +223,7 @@ gfield::FieldValue BakedField::view() const noexcept {
         // stops a kernel from being handed a table it would read incorrectly rather than not at all.
         return out;
     }
-    // A field's dimension is the **same seven exponents as the quantity**: a magnetic field is
-    // kg / (A s^2), which in this unit system is M = 1, T = -2, I = -1.
-    abi::FieldDim tesla;
-    tesla.M = 1;
-    tesla.T = -2;
-    tesla.I = -1;
+    const abi::FieldDim& tesla = dimension;
     out.desc = abi::make_lattice(abi::LatticeKind::volume, abi::ComponentKind::vector,
                                  abi::ElementType::f64, tesla, nx_, ny_, nz_);
     out.data = data_.data();

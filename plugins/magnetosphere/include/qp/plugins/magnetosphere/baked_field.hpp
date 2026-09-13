@@ -211,6 +211,32 @@ public:
     [[nodiscard]] qp::graph::field::FieldValue view() const noexcept;
 
     /**
+     * @brief The same view, describing **another physical quantity**.
+     *
+     * A table is a table: the samples are `f64` triples on a lattice, and what they *mean* is a `FieldDim`. The
+     * magnetic view is the default because every model this kit shipped until now was magnetic; an electric field
+     * is the case that made the dimension a parameter rather than a constant.
+     *
+     * A description that lied about the dimension would be worse than none at all: `field::is_valid_field` is
+     * entitled to be asked what a buffer holds and to get a true answer, and a report that labelled volts per
+     * metre as tesla would be wrong in a way nobody could see.
+     *
+     * @param dimension The exponents the samples carry.
+     *
+     * @ownership   borrows from this object
+     * @thread      eval
+     * @pre         none
+     * @post        A readable view for a non-empty table, and an invalid one for an empty table
+     * @invariant   `view()` equals `view(tesla_dimension())`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.baked_field.the_view_describes_the_storage
+     */
+    [[nodiscard]] qp::graph::field::FieldValue view(qp::abi::FieldDim dimension) const noexcept;
+
+    /**
      * @brief The field at `point`, by trilinear interpolation, clamping outside the grid.
      *
      * @param point Where to evaluate, in **metres**.
@@ -265,6 +291,55 @@ private:
     /// the count a property of a non-const caller, and every caller here holds a `const` view.
     mutable std::uint64_t clamped_ = 0;
 };
+
+/**
+ * @brief The dimension of a magnetic field: kg / (A s^2), which is M = 1, T = -2, I = -1.
+ *
+ * Beside the table rather than beside the models, because it is a property of **what a table can hold**: the same
+ * `BakedField` publishes a magnetic field, an electric field, or anything else whose samples are three f64 per
+ * node, and the dimension is the only thing that tells them apart.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        The exponents of a tesla
+ * @invariant   Constant
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.baked_field.the_view_describes_the_storage
+ */
+[[nodiscard]] inline qp::abi::FieldDim tesla_dimension() noexcept {
+    qp::abi::FieldDim dim;
+    dim.M = 1;
+    dim.T = -2;
+    dim.I = -1;
+    return dim;
+}
+
+/**
+ * @brief The dimension of an electric field: kg m / (A s^3) -- one length, one less inverse time than tesla.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        The exponents of a volt per metre
+ * @invariant   Differs from `tesla_dimension()` in `L` and `T`
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.baked_field.the_view_describes_the_storage
+ */
+[[nodiscard]] inline qp::abi::FieldDim volt_per_metre_dimension() noexcept {
+    qp::abi::FieldDim dim;
+    dim.M = 1;
+    dim.L = 1;
+    dim.T = -3;
+    dim.I = -1;
+    return dim;
+}
 
 /**
  * @brief The trilinear read of a table somebody else owns, in **SI**.
