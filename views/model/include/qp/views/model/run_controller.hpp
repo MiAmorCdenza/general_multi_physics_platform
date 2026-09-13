@@ -44,6 +44,7 @@
 #pragma once
 
 #include <qp/graph/execution/execution.hpp>
+#include <qp/graph/domain/declaration.hpp>
 
 #include <qp/authoring/commands/session.hpp>
 #include <qp/runtime/run/run.hpp>
@@ -115,6 +116,16 @@ struct RunReport final {
  */
 struct RunResult final {
     RunReport report{};
+    /// What the graph asked to have **drawn**, as the render domain declared it.
+    ///
+    /// `graph::ViewRequest` needs this and nothing produced it: a view item is handed the render plan's own
+    /// list, and until now nothing in the view layer computed a plan at all -- the operator loop and the run
+    /// providers each work from a single node. So the controller computes it here, from the same catalog the
+    /// rest of the pre-flight uses, and hands it to whoever draws.
+    ///
+    /// It is filled whether or not a run succeeded, because what a graph declares is a property of the graph:
+    /// a refused run still has something to draw once there is a previous result to draw.
+    std::vector<qp::graph::DeclaredOutput> render_declared{};
     /// Where the particles ended up, as `x, y, z` triples, for a run a **provider** produced.
     ///
     /// Empty for the operator loop's own runs. It is here rather than in `RunReport` because a report
@@ -249,7 +260,8 @@ public:
      *              run.controller.damping_is_reported_not_hidden,
      *              run.controller.runs_a_node_and_records_its_trace,
      *              run.controller.a_second_run_is_a_second_entry,
-     *              run.controller.reports_validation_without_refusing
+     *              run.controller.reports_validation_without_refusing,
+     *              run.controller.carries_what_the_graph_wants_drawn
      */
     [[nodiscard]] RunResult run() const;
 

@@ -6,6 +6,7 @@
 
 #include <cmath>
 #include <qp/views/model/run_providers.hpp>
+#include <qp/graph/domain/build.hpp>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -86,6 +87,36 @@ RunResult RunController::run() const {
     };
 
     const qp::graph::Graph& graph = session_->graph();
+
+    // -- 0. What the graph wants drawn ---------------------------------------------------------------
+    //
+    // A **declaration** is a node with no compute: `graph/domain`'s render domain is exactly that, and
+    // `build_plan` puts such a node into `plan.render.declared` instead of into an evaluation plan. The wanted
+    // set is therefore "every declaration-only node, on its first output port" -- the port is the node's own
+    // name for the thing it declares, and a node that declares nothing cannot be asked for.
+    //
+    // Computed before the run rather than after it, and left in place even when the run is refused: what a
+    // graph declares is a property of the graph, not of this run.
+    {
+        qp::graph::Declarations wanted;
+        for (const qp::graph::NodeSlot& slot : graph.slots()) {
+            if (!slot.occupied) continue;
+            const qp::graph::NodeDesc* desc =
+                resolve_.catalog == nullptr ? nullptr : resolve_.catalog->find(slot.node.type_name);
+            // Three conditions, and the case for this feature is what separated them. A node is a drawing
+            // declaration when it **has no compute** (nothing evaluates it), is **not bake content** and is
+            // **not step content** -- that is `graph/domain`'s render domain, spelled out. The first version
+            // asked only for "no compute", which swept in every node type whose descriptor left the flag
+            // defaulted: the demonstrator library's spring-damper among them, so a graph with nothing to draw
+            // reported one thing to draw.
+            if (desc == nullptr || desc->has_compute || desc->outputs.empty()) continue;
+            if (desc->allow_in_field_domain || desc->allow_in_particle_domain) continue;
+            wanted.add(qp::graph::DeclaredOutput{slot.node.id, desc->outputs.front().number});
+        }
+        const qp::graph::ExecutionPlan declared_plan =
+            qp::graph::build_plan(graph, qp::graph::PlanContext{resolve_.catalog}, wanted);
+        out.render_declared = declared_plan.render.declared();
+    }
     const execution::RunReadiness ready = execution::check_run(graph, resolve_, binders_,
                                                                execution::StateView::zeroed(1));
     if (!ready.ok()) {

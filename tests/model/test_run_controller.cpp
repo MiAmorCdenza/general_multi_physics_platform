@@ -406,3 +406,64 @@ TEST_CASE("views.binders.a_provider_runs_a_graph_the_operators_declined", "[run]
     clear_run_providers();
     REQUIRE(run_providers().empty());
 }
+
+
+namespace {
+
+/// @brief A catalog holding a declaration-only type, so the render list has something to find.
+class DeclarationCatalog final : public qp::graph::INodeCatalog {
+public:
+    DeclarationCatalog() {
+        desc_.type_name = "render.stub_item";
+        desc_.has_compute = false;
+        desc_.allow_in_field_domain = false;
+        desc_.allow_in_particle_domain = false;
+        qp::graph::PortDesc out;
+        out.number = 1;
+        out.name = "item";
+        out.type = qp::ports::kParticleBuffer;
+        desc_.outputs.push_back(out);
+    }
+    [[nodiscard]] const qp::graph::NodeDesc* find(std::string_view name) const noexcept override {
+        return name == desc_.type_name ? &desc_ : nullptr;
+    }
+    [[nodiscard]] std::size_t size() const noexcept override { return 1; }
+
+private:
+    qp::graph::NodeDesc desc_{};
+};
+
+}  // namespace
+
+TEST_CASE("run.controller.carries_what_the_graph_wants_drawn", "[run]") {
+    // The render declarations need a producer and had none: `ViewRequest` is handed the render plan's own list,
+    // and until now nothing in the view layer computed a plan -- the operator loop works from one node and the
+    // run providers work from the graph themselves. So the controller computes it, and this case is what says
+    // it does.
+    Fixture fixture{Shape::ready};
+    RunController plain{fixture.session(), binders(), fixture.resolve()};
+    const RunResult without = plain.run();
+    // The fixture's graph is a spring-damper: step content, not a declaration, so there is nothing to draw and
+    // the list is empty rather than missing. **This assertion is what found the defect**: the first rule was
+    // "no compute", and the demonstrator library's types leave that flag defaulted, so a graph with nothing to
+    // draw reported one thing to draw.
+    REQUIRE(without.render_declared.empty());
+
+    // A graph holding a declaration-only node: it lands in the list, with the node's own output port as the
+    // name of the thing being declared, and it is **not** something the operator loop will run -- the run still
+    // refuses for the reason it did before.
+    qp::authoring::Session session{};
+    const auto reserved = session.reserve_node();
+    REQUIRE(reserved.has_value());
+    const auto added = session.apply(qp::graph::AddNode{reserved.value(), "render.stub_item", "item"});
+    REQUIRE(added.has_value());
+    DeclarationCatalog catalog;
+    const qp::graph::ResolveContext resolve{&catalog, &qp::ports::builtin_registry()};
+    RunController controller{session, {}, resolve};
+    const RunResult result = controller.run();
+    REQUIRE(result.render_declared.size() == 1);
+    REQUIRE(result.render_declared.front().node == reserved.value());
+    REQUIRE(result.render_declared.front().port == 1);
+    // Declared and not run: the refusal is unchanged, because a render node is not an operator.
+    REQUIRE_FALSE(result.report.ok);
+}
