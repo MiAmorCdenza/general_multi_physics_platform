@@ -16,6 +16,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include <qp/runtime/io.hpp>
+#include <qp/units/dimensions.hpp>
 
 #include <string>
 #include <string_view>
@@ -61,6 +62,16 @@ ExportCapabilities full_capabilities() {
     c.keeps_time = true;
     c.is_text = true;
     c.keeps_dimension = true;
+    // The sixth capability, and the fixture that claims everything claims this too: a format that keeps the
+    // uncertainty, the time, the dimension and the text is a format that can write either table.
+    c.keeps_readings = true;
+    return c;
+}
+
+/// @brief Everything the platform can carry **except** a readings table, for the subject's refusal.
+ExportCapabilities full_capabilities_no_readings() {
+    ExportCapabilities c = full_capabilities();
+    c.keeps_readings = false;
     return c;
 }
 
@@ -228,6 +239,74 @@ TEST_CASE("io.registry.duplicate_is_refused", "[io]") {
         REQUIRE(registry.size() == 1);
         REQUIRE(registry.find_by_name("qp.empty") == nullptr);
     }
+}
+
+TEST_CASE("io.export.a_readings_table_is_not_a_series", "[io]") {
+    // **Two subjects, because a format writes one table per file.** A trace is a series -- one row per sample, one
+    // column per channel -- and the readings are one row per measurement with its own uncertainty and no time axis.
+    // A request that carried both would leave the choice to the writer, which is the format quietly deciding what the
+    // user asked for; the subject says it instead, and a subject with nothing behind it is refused rather than
+    // written as an empty table.
+    const FakeExporter series{"qp.series", {"series"}, full_capabilities()};
+    ExportCapabilities readings_only{};
+    readings_only.keeps_uncertainty = true;
+    readings_only.keeps_readings = true;
+    const FakeExporter table{"qp.table", {"table"}, readings_only};
+    const FakeExporter neither{"qp.neither", {"neither"}, full_capabilities_no_readings()};
+
+    Dataset readings{"length", qp::units::dims::length};
+    readings.add(UncertainValue::measured(0.5, 0.01, qp::units::dims::length));
+
+    ExportRequest request;
+    request.subject = ExportSubject::readings;
+    request.readings = &readings;
+    REQUIRE(check_export(table, request) == ExportRefusal::ok);
+    // A format with no shape for a readings table is refused **by name**, which is what tells a caller to choose
+    // another format rather than another policy -- and it is refused before the data is even looked at.
+    REQUIRE(check_export(neither, request) == ExportRefusal::readings_not_supported);
+    Dataset empty{"length", qp::units::dims::length};
+    request.readings = &empty;
+    REQUIRE(check_export(neither, request) == ExportRefusal::readings_not_supported);
+    REQUIRE(check_export(table, request) == ExportRefusal::nothing_to_write);
+
+    // A subject with nothing behind it is a caller's bug, and the two are different findings: a missing pointer is
+    // not a format's limitation.
+    request.readings = nullptr;
+    REQUIRE(check_export(table, request) == ExportRefusal::subject_missing);
+
+    // ... and the labels, when present, must name **every** reading: a source column that silently empties for the
+    // last rows is worse than one that was never written, because the reader trusts what is there.
+    request.readings = &readings;
+    const std::vector<std::string> short_labels;
+    request.reading_labels = &short_labels;
+    REQUIRE(check_export(table, request) == ExportRefusal::ok);      // empty means "nobody named the rows"
+    const std::vector<std::string> one_label{"a"};
+    request.reading_labels = &one_label;
+    REQUIRE(check_export(table, request) == ExportRefusal::ok);      // one reading, one label
+    readings.add(UncertainValue::measured(0.7, 0.01, qp::units::dims::length));
+    REQUIRE(check_export(table, request) == ExportRefusal::shape_mismatch);
+    request.reading_labels = nullptr;
+    REQUIRE(check_export(table, request) == ExportRefusal::ok);
+
+    // The names are stable, because a refusal reaches a user and a log line.
+    REQUIRE(std::string{to_string(ExportRefusal::readings_not_supported)} == "readings_not_supported");
+    REQUIRE(std::string{to_string(ExportRefusal::subject_missing)} == "subject_missing");
+    REQUIRE(std::string{to_string(ExportSubject::trace)} == "trace");
+    REQUIRE(std::string{to_string(ExportSubject::readings)} == "readings");
+
+    // **The trace's request is unchanged**, which is the other half of the claim: a subject defaults to the trace,
+    // so every request written before this existed means what it meant.
+    const Trace trace = make_trace(1, 1);
+    ExportRequest as_series;
+    as_series.trace = &trace;
+    REQUIRE(as_series.subject == ExportSubject::trace);
+    REQUIRE(check_export(series, as_series) == ExportRefusal::ok);
+    // ... and a request that names the readings while carrying a trace is refused rather than written: the subject
+    // is what the writer reads.
+    ExportRequest mismatched;
+    mismatched.subject = ExportSubject::readings;
+    mismatched.trace = &trace;
+    REQUIRE(check_export(series, mismatched) == ExportRefusal::subject_missing);
 }
 
 TEST_CASE("io.registry.filters_by_capability", "[io]") {

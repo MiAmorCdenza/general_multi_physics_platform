@@ -473,6 +473,28 @@ public:
         const qp::runtime::IExporter& format) const;
 
     /**
+     * @brief Whether this session's **readings** may be written by `format`, asked before any dialog.
+     *
+     * Delegated to `check_export` for the reason the trace's readiness is: a panel that computed this itself could
+     * pass a format that the exporter then refuses, and the user's experience would be a button that raises an error
+     * dialog. The labels are left out because whether a format can write this table does not depend on what the rows
+     * are called.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         none
+     * @post        The same answer `check_export` gives for `readings_export_request`
+     * @invariant   Never writes and never touches the filesystem
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.a_readings_request_names_the_table
+     */
+    [[nodiscard]] qp::runtime::ExportRefusal readings_readiness(
+        const qp::runtime::IExporter& format) const;
+
+    /**
      * @brief The request an export of this session would run, ready for `check_export` or an exporter.
      *
      * The **policy** an export carries lives here, in one place, and the reason is the same one that made
@@ -499,6 +521,35 @@ public:
      * @tests       measurement.model.export_request_carries_the_policy
      */
     [[nodiscard]] qp::runtime::ExportRequest export_request(std::string path) const;
+
+    /**
+     * @brief The same policy, for the **readings** table.
+     *
+     * A second request rather than a flag on the first, because the two tables are different artifacts of the same
+     * session and the subject is what says which one is being written: the trace is the run's samples, the readings
+     * are the numbers the student wrote down. Everything that made `export_request` a member applies here too --
+     * the dataset is this session's, borrowed for the call, and the uncertainty is required exactly when the session
+     * has quantified any -- so the two functions cannot drift about the policy while differing about the table.
+     *
+     * @param path   Where the export would go. Not read here; carried so the request is complete.
+     * @param labels One label per reading, naming the node each came from, or null. **Resolved by the caller**,
+     *               because turning a reading's `(index, generation)` source into a name needs the graph and this
+     *               layer is the one that has it. Borrowed for the call; the request does not outlive it.
+     *
+     * @ownership   observes `path` and `labels` for the call; the returned request borrows this model's dataset
+     * @thread      ui
+     * @pre         `labels` is null, or names every reading
+     * @post        `subject` is `readings`, `readings` is this session's dataset, and `require_uncertainty` is the
+     *              policy the trace request uses
+     * @invariant   `readings_readiness(format)` equals `check_export(format, readings_export_request(path, labels))`
+     * @errors      May allocate (the path is copied); allocation failure terminates
+     * @complexity  O(path)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.a_readings_request_names_the_table
+     */
+    [[nodiscard]] qp::runtime::ExportRequest readings_export_request(
+        std::string path, const std::vector<std::string>* labels) const;
 
     /**
      * @brief Empties the session: no readings, no samples, and a trace belonging to `run`.

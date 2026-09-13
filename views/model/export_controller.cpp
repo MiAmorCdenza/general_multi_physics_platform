@@ -45,6 +45,36 @@ std::string describe_export_refusal(rt::ExportRefusal refusal) {
     return "the export was refused";
 }
 
+ExportReport export_readings(const MeasurementModel& model, rt::IExporter& format,
+                            const std::vector<std::string>& labels, const std::string& path) {
+    ExportReport report;
+    report.path = path;
+    report.format_name = format.format().name;
+
+    // One request, built once and used twice, exactly as the trace path does it: the pre-flight and the write must
+    // not be able to disagree about what is being exported.
+    const rt::ExportRequest request = model.readings_export_request(path, &labels);
+
+    const rt::ExportRefusal ready = rt::check_export(format, request);
+    if (ready != rt::ExportRefusal::ok) {
+        report.refusal = ready;
+        report.message = describe_export_refusal(ready);
+        return report;
+    }
+
+    const rt::ExportRefusal written = format.write(request);
+    report.refusal = written;
+    if (written != rt::ExportRefusal::ok) {
+        report.message = describe_export_refusal(written);
+        return report;
+    }
+
+    report.ok = true;
+    report.message = "exported " + std::to_string(model.dataset().readings().size()) + " readings as " +
+                     report.format_name + " to " + path;
+    return report;
+}
+
 ExportReport export_trace(const MeasurementModel& model, rt::IExporter& format,
                           const std::string& path) {
     ExportReport report;

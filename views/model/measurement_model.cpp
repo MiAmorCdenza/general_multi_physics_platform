@@ -182,6 +182,28 @@ store::ExportRequest MeasurementModel::export_request(std::string path) const {
     return request;
 }
 
+store::ExportRequest MeasurementModel::readings_export_request(std::string path,
+                                                              const std::vector<std::string>* labels) const {
+    store::ExportRequest request;
+    // **The subject first**, because it is what decides which pointer the writer reads: a request that carried both
+    // tables would leave the choice to the format, which is the writer quietly deciding what the user asked for.
+    request.subject = store::ExportSubject::readings;
+    request.readings = &dataset_;
+    request.reading_labels = labels;
+    request.path = std::move(path);
+    // The same policy as the trace's, deliberately not a second copy of it: a session that has quantified any
+    // uncertainty exports only to a format that keeps them, and one that has quantified none is not refused
+    // everywhere for a rule nobody could act on. Two requests, one policy.
+    request.require_uncertainty = dataset_.quantified_count() > 0;
+    return request;
+}
+
+store::ExportRefusal MeasurementModel::readings_readiness(const store::IExporter& format) const {
+    // Delegated for the same reason `export_readiness` delegates -- and with the labels left out, because whether a
+    // format can write this table does not depend on what the rows are called.
+    return store::check_export(format, readings_export_request("unused", nullptr));
+}
+
 store::ExportRefusal MeasurementModel::export_readiness(const store::IExporter& format) const {
     // Delegated, not re-derived. If the panel computed this itself then a format could pass
     // the panel's check and fail the exporter's, and the user's experience would be an

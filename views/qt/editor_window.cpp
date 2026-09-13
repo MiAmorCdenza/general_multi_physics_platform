@@ -423,6 +423,10 @@ void EditorWindow::build_file_menu() {
     export_action_->setIcon(qt::to_icon(qt::icons::Glyph::export_trace));
     connect(export_action_, &QAction::triggered, this, &EditorWindow::file_export);
 
+    readings_action_ = file->addAction(tr("Export &readings..."));
+    readings_action_->setToolTip(tr("Write the session's readings, with their uncertainties and their sources"));
+    connect(readings_action_, &QAction::triggered, this, &EditorWindow::file_export_readings);
+
     // Greyed out rather than hidden when nothing is mounted: a menu entry that disappears teaches the
     // user nothing, and one that is present but unavailable says "this build has no format for that".
     const bool has_format = document_controller_.default_format() != nullptr;
@@ -686,6 +690,69 @@ void EditorWindow::file_export() {
         return;
     }
     (void)export_document(path.toStdString());
+}
+
+void EditorWindow::file_export_readings() {
+    // The same shape as the trace's export, for the same reasons: the format list first, the pre-flight **before**
+    // the dialog -- a user who picks a file name and only then learns that the table cannot be written has wasted the
+    // choice -- and the refusal reported as a sentence.
+    const std::vector<qp::runtime::IExporter*> formats = qp::views::model::export_formats().all();
+    if (formats.empty() || formats.front() == nullptr) {
+        status_->setText(tr("no export format is available in this build"));
+        return;
+    }
+    qp::runtime::IExporter* format = formats.front();
+    const qp::runtime::ExportRefusal ready = measurements_.readings_readiness(*format);
+    if (ready != qp::runtime::ExportRefusal::ok) {
+        status_->setText(QString::fromStdString(qp::views::model::describe_export_refusal(ready)));
+        return;
+    }
+
+    const qp::runtime::FormatDesc& desc = format->format();
+    QStringList patterns;
+    for (const std::string& extension : desc.extensions) {
+        patterns << QStringLiteral("*.") + QString::fromStdString(extension);
+    }
+    const QString filter = QString::fromStdString(desc.label) + QStringLiteral(" (") +
+                           patterns.join(QStringLiteral(" ")) + QStringLiteral(")");
+    const QString path = QFileDialog::getSaveFileName(this, tr("Export readings"), QString{}, filter);
+    if (path.isEmpty()) {
+        status_->setText(tr("export cancelled"));
+        return;
+    }
+    (void)export_readings_document(path.toStdString());
+}
+
+std::vector<std::string> EditorWindow::reading_labels() const {
+    const qp::runtime::Dataset& dataset = measurements_.dataset();
+    std::vector<std::string> labels;
+    labels.reserve(dataset.readings().size());
+    for (std::size_t index = 0; index < dataset.readings().size(); ++index) {
+        const std::optional<qp::runtime::Measurement::Source> source = measurements_.source_of(index);
+        // **Empty rather than guessed.** A reading with no source is a number somebody typed in, which is a
+        // legitimate kind of reading in a lab session; naming it after whatever node happens to be selected would be
+        // a provenance that cannot be followed back. A source that no longer resolves -- the node was deleted after
+        // the reading was taken -- is the same case, and the reading is still a reading.
+        if (!source.has_value()) {
+            labels.emplace_back();
+            continue;
+        }
+        const qp::graph::Node* node = session_.graph().find_node(qp::graph::NodeId{source->index, source->generation});
+        labels.push_back(node != nullptr ? node->name : std::string{});
+    }
+    return labels;
+}
+
+bool EditorWindow::export_readings_document(const std::string& path) {
+    const std::vector<qp::runtime::IExporter*> formats = qp::views::model::export_formats().all();
+    if (formats.empty() || formats.front() == nullptr) {
+        status_->setText(tr("no export format is available in this build"));
+        return false;
+    }
+    const qp::views::model::ExportReport report =
+        qp::views::model::export_readings(measurements_, *formats.front(), reading_labels(), path);
+    status_->setText(QString::fromStdString(report.message));
+    return report.ok;
 }
 
 void EditorWindow::seed_blueprint(const qp::views::model::GraphBlueprint& blueprint) {

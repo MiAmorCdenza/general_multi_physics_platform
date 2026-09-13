@@ -306,6 +306,14 @@ public:
     /// is refused in the status line rather than after the user has chosen a file name.
     void file_export();
 
+    /// @brief Exports the session's **readings** table, asking the format first.
+    ///
+    /// The second Export entry, and the artifact the platform's loop ends in: one row per measurement with its
+    /// standard uncertainty, its kind and the node it came from. Same rule as the trace's about the pre-flight --
+    /// refused in the status line before the dialog rather than after a file name was chosen -- and no keyboard
+    /// shortcut, because one `Ctrl+E` is a habit and two are a coin toss.
+    void file_export_readings();
+
     /// @brief The document controller: what a save writes and what an open installs.
     [[nodiscard]] qp::views::model::DocumentController& document_controller() noexcept {
         return document_controller_;
@@ -326,6 +334,20 @@ public:
 
     /// @brief Exports the trace to `path` without asking anything, after the pre-flight.
     bool export_document(const std::string& path);
+
+    /// @brief Exports the **readings** table to `path` without asking anything, after the pre-flight.
+    ///
+    /// The other half of the Export entry: a trace is the run's series and the readings are the numbers the session
+    /// recorded, each with its uncertainty and its source. The labels are resolved here -- this is the layer that has
+    /// both the dataset and the graph, and `runtime/io` may not know what a node is -- and a reading whose source is
+    /// not a node in this graph gets an empty label rather than a guess.
+    bool export_readings_document(const std::string& path);
+
+    /// @brief One label per reading: the name of the node it came from, or empty when it came from nowhere.
+    ///
+    /// A hand-entered reading has no source, which is a legitimate kind of reading in a lab session; the file says so
+    /// by leaving the field empty rather than by inventing a device.
+    [[nodiscard]] std::vector<std::string> reading_labels() const;
 
 private:
     class StatusBridge;
@@ -419,6 +441,8 @@ private:
     QAction* save_action_ = nullptr;
     QAction* save_as_action_ = nullptr;
     QAction* export_action_ = nullptr;
+    /// The readings export, beside the trace's: two tables of one session, two files, one menu.
+    QAction* readings_action_ = nullptr;
 
     // The View menu's actions, kept for the same reason: a test drives the same path the menu does.
     QAction* fit_action_ = nullptr;

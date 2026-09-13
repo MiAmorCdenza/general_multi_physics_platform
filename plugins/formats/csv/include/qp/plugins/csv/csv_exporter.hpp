@@ -114,6 +114,58 @@ public:
     [[nodiscard]] const qp::runtime::FormatDesc& format() const noexcept override;
 
     /**
+     * @brief The readings table: one row per measurement, with its uncertainty and where it came from.
+     *
+     * **The platform's own loop ends in a report, and until this existed the artifact that report quotes could not be
+     * written.** A trace is a *series* -- one row per sample, one column per channel -- while the product of
+     * the platform's loop -- measure, record, quantify an uncertainty -- is a *table of readings*: no time axis, one
+     * its own standard uncertainty and its own provenance. A student who has taken five readings of a length has five
+     * numbers and five error bars, and had no way to get them out of the session.
+     *
+     * The columns are
+     *
+     * ```
+     * index,value [m],uncertainty [m],kind,source,valid
+     * 0,0.01010,1.4e-06,standard,n3,true
+     * 1,0.01020,,unknown,n3,true
+     * 2,0.00980,,exact,hand,false
+     * ```
+     *
+     * and every one of them is a decision rather than a decoration:
+     *
+     *   - **`kind` is a column, and the uncertainty of an `unknown` reading is an empty field.** The platform's central
+     *     rule is that unquantified is not zero; a table that wrote `0` for both would destroy that distinction in the
+     *     export step, after which every reader believes the error was measured and found to be zero. `exact` writes
+     *     `0`, because that one really is zero.
+     *   - **`valid` is a column, because rejection is a judgement and the store keeps it.** A dataset marks a rejected
+     *     reading rather than deleting it -- "a reader could not tell an outlier that was rejected from one that was
+     *     never taken" -- and an export that dropped the flag would lose exactly what that decision preserved.
+     *   - **`source` is a label supplied by the caller.** The dataset records a reading's origin as a graph
+     *     `(index, generation)` pair, and this module may not know what a graph is; the window resolves node names and
+     *     passes them in. Rows whose label is missing are written with an empty field rather than a guess.
+     *   - **`index` is the row's identity in the session**, which is what a reader needs to follow a number back.
+     *
+     * @param readings The dataset. Borrowed.
+     * @param labels   One label per reading, or null. Borrowed.
+     * @param out      Receives the table on success.
+     *
+     * @ownership   owns the text it appends
+     * @thread      main
+     * @pre         none
+     * @post        On ok, `out` holds a header line and one line per reading
+     * @invariant   `out` is untouched when the call is refused
+     * @errors      `nothing_to_write` for an empty dataset; `shape_mismatch` for a label vector that is present, not
+     *              empty, and shorter than the dataset
+     * @complexity  O(readings)
+     * @nondet      none
+     * @frozen      no
+     * @tests       csv.export.a_readings_table_carries_the_kind_and_the_source
+     */
+    [[nodiscard]] qp::runtime::ExportRefusal to_readings_text(const qp::runtime::Dataset& readings,
+                                                              const std::vector<std::string>* labels,
+                                                              std::string& out);
+
+    /**
      * @brief Renders `trace` as the table's text, without touching the filesystem.
      *
      * Separated from `write` so the content can be asserted without a temporary file, and so a caller

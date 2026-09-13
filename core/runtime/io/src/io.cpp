@@ -97,6 +97,32 @@ std::vector<IExporter*> FormatRegistry::with_uncertainty() const noexcept {
 }
 
 ExportRefusal check_export(const IExporter& exporter, const ExportRequest& request) noexcept {
+    const ExportCapabilities& capabilities = exporter.format().capabilities;
+
+    // **Which table, first.** A request whose subject and pointers disagree is a caller's bug, and it is refused
+    // before anything else is looked at: the alternative is a writer that finds no data, writes an empty table and
+    // reports success, which is the failure mode every other code here exists to prevent.
+    if (request.subject == ExportSubject::readings) {
+        if (request.readings == nullptr) return ExportRefusal::subject_missing;
+        if (!capabilities.keeps_readings) return ExportRefusal::readings_not_supported;
+        const Dataset& readings = *request.readings;
+        if (readings.readings().empty()) return ExportRefusal::nothing_to_write;
+        // The labels are optional, but a vector that is present and **short** is a caller who believes it named
+        // every reading: a table whose source column silently empties for its last rows is worse than one that
+        // never had the column, because the reader trusts what is there.
+        if (request.reading_labels != nullptr && !request.reading_labels->empty() &&
+            request.reading_labels->size() < readings.readings().size()) {
+            return ExportRefusal::shape_mismatch;
+        }
+        // A readings table carries uncertainties by construction -- that is what a reading *is* -- so the policy
+        // flag means the same thing here as it does for a series, and a format with no place for the error bars
+        // cannot write this table honestly either.
+        if (request.require_uncertainty && !capabilities.keeps_uncertainty) {
+            return ExportRefusal::uncertainty_not_supported;
+        }
+        return ExportRefusal::ok;
+    }
+
     if (request.trace == nullptr) return ExportRefusal::nothing_to_write;
 
     const Trace& trace = *request.trace;
@@ -110,7 +136,7 @@ ExportRefusal check_export(const IExporter& exporter, const ExportRequest& reque
     // The check this module exists for. Refused before anything touches the
     // filesystem, so a caller learns that the format cannot keep the error bars
     // rather than discovering it in a published table.
-    if (request.require_uncertainty && !exporter.format().capabilities.keeps_uncertainty) {
+    if (request.require_uncertainty && !capabilities.keeps_uncertainty) {
         return ExportRefusal::uncertainty_not_supported;
     }
 

@@ -13,6 +13,7 @@
 #include <qp/runtime/file/file.hpp>
 #include <qp/units/unit_symbol.hpp>
 
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstddef>
@@ -163,6 +164,10 @@ const rt::FormatDesc& CsvExporter::format() const noexcept {
         d.capabilities.keeps_time = true;
         d.capabilities.is_text = true;
         d.capabilities.keeps_dimension = true;
+    // ... and a readings table, which is the other table this platform produces and the one a lab report quotes.
+    // Declared here so a caller can ask before choosing a format rather than discovering it when the write is
+    // refused -- the argument the uncertainty flag already carries.
+    d.capabilities.keeps_readings = true;
         // One table per file. Two traces in one CSV would need a second header row in the middle, which
         // readers do not agree on and which a spreadsheet shows as data.
         d.capabilities.multi_dataset = false;
@@ -193,6 +198,76 @@ rt::ExportRefusal CsvExporter::to_text(const rt::Trace& trace, std::string& out)
     return rt::ExportRefusal::ok;
 }
 
+rt::ExportRefusal CsvExporter::to_readings_text(const rt::Dataset& readings, const std::vector<std::string>* labels,
+                                                 std::string& out) {
+    if (readings.readings().empty()) return rt::ExportRefusal::nothing_to_write;
+    // **A label vector that is present and short is a caller's bug**, not a table with a hole in it: a source column
+    // that empties for the last rows is worse than one that was never written, because the reader trusts what is
+    // there. So it is refused, with the same code the trace uses for a shape that does not line up.
+    if (labels != nullptr && !labels->empty() && labels->size() < readings.readings().size()) {
+        return rt::ExportRefusal::shape_mismatch;
+    }
+
+    const qp::units::Dim dim = readings.dim();
+    std::string table;
+    // The same header convention as the trace: a name and its unit in brackets, and no brackets for a
+    // dimensionless quantity. `kind` and `valid` carry no unit -- they are words, not quantities -- and the source
+    // column is a name.
+    append_field(table, "index");
+    table += ',';
+    append_field(table, column_header("value", dim));
+    table += ',';
+    append_field(table, column_header("uncertainty", dim));
+    table += ',';
+    append_field(table, "kind");
+    table += ',';
+    append_field(table, "source");
+    table += ',';
+    append_field(table, "valid");
+    table += '\n';
+
+    const auto format_number = [](double value, std::string& target) {
+        // The same shortest-round-trip rule the trace uses, through the same helper: a reading that read back as a
+        // different number than it was taken as would make the table unverifiable against the session.
+        append_number(target, value);
+    };
+
+    const std::vector<rt::Measurement>& rows = readings.readings();
+    for (std::size_t index = 0; index < rows.size(); ++index) {
+        const rt::Measurement& row = rows[index];
+        append_number(table, static_cast<double>(index));
+        table += ',';
+        format_number(row.reading.value, table);
+        table += ',';
+        // The platform's central distinction, in the same place and by the same rule as the trace's uncertainty
+        // column: `unknown` is an empty field, `exact` is `0`, everything else is its standard uncertainty.
+        append_uncertainty(table, row.reading);
+        table += ',';
+        append_field(table, rt::to_string(row.reading.kind));
+        table += ',';
+        if (labels != nullptr && index < labels->size()) {
+            append_field(table, (*labels)[index]);
+        } else {
+            // No label: an empty field rather than a guess. The reading's own source is a graph address, and this
+            // module does not know what a graph is -- inventing text here would be a provenance that cannot be
+            // followed back.
+            append_field(table, "");
+        }
+        table += ',';
+        append_field(table, row.valid ? "true" : "false");
+        table += '\n';
+    }
+
+    // The byte-order mark only when the table holds a byte above ASCII -- the same rule and the same reason as the
+    // trace's, and here the only thing that can carry one is a source label.
+    const bool needs_mark = std::any_of(table.begin(), table.end(),
+                                        [](unsigned char c) { return c >= 0x80; });
+    out.clear();
+    if (needs_mark) out += "\xEF\xBB\xBF";
+    out += table;
+    return rt::ExportRefusal::ok;
+}
+
 rt::ExportRefusal CsvExporter::write(const rt::ExportRequest& request) noexcept {
     // The pre-flight first, and in the caller's own terms: this is the check that refuses an uncertain
     // export before a file exists, and running it here as well is what stops a caller that skipped it
@@ -201,7 +276,9 @@ rt::ExportRefusal CsvExporter::write(const rt::ExportRequest& request) noexcept 
     if (ready != rt::ExportRefusal::ok) return ready;
 
     std::string text;
-    const rt::ExportRefusal rendered = to_text(*request.trace, text);
+    const rt::ExportRefusal rendered = request.subject == rt::ExportSubject::readings
+                                           ? to_readings_text(*request.readings, request.reading_labels, text)
+                                           : to_text(*request.trace, text);
     if (rendered != rt::ExportRefusal::ok) return rendered;
 
     // The bytes reach the disk through `runtime/file`, which is the one place that knows how a UTF-8 path

@@ -70,6 +70,7 @@ namespace qp::runtime {
  * @tests       io.capabilities.uncertainty_is_declared
  */
 struct ExportCapabilities final {
+
     /**
      * Whether the format has a place to put a standard uncertainty.
      *
@@ -87,6 +88,22 @@ struct ExportCapabilities final {
     bool is_text = false;
     /// Whether the format preserves the physical dimension of each column.
     bool keeps_dimension = false;
+
+    /**
+     * Whether the format has a shape for a **table of readings**.
+     *
+     * A readings table is not a series: one row per measurement, each carrying a value, its standard uncertainty and
+     * where it came from, with no time axis at all. A format that writes a trace -- one row per sample, one column
+     * per channel -- cannot express it, and one that writes a table usually can. Declared separately from
+     * `keeps_uncertainty` because the two are independent questions: a CSV keeps both, a plot dump might keep
+     * neither, and a spreadsheet-shaped format could easily have a place for the error bar and no place for the
+     * reading *kind*.
+     *
+     * The platform's own loop ends in a report, and the table this flag is about is the artifact that report quotes:
+     * a student's list of readings with their error bars and the device each came from. It is declared here rather
+     * than discovered when the write fails, which is the same argument the uncertainty flag carries.
+     */
+    bool keeps_readings = false;
 };
 
 /**
@@ -144,6 +161,17 @@ enum class ExportRefusal : std::uint8_t {
     /// the choice was between reporting success on a failed write and reusing a code that means
     /// something else.
     could_not_write = 5,
+    /// The request names a subject the format has no shape for: a readings table, in a format that writes a series.
+    ///
+    /// A separate code from `uncertainty_not_supported` because it is a different problem with a different fix: that
+    /// one says "this format would lose your error bars", this one says "this format cannot write this *kind* of
+    /// table at all" -- the caller picks another format rather than another policy.
+    readings_not_supported = 6,
+    /// The request names a subject and does not carry it: `subject == readings` with no `readings` pointer.
+    ///
+    /// A caller's bug rather than a format's limitation, and it is refused for the reason `shape_mismatch` is: the
+    /// alternative is a writer that writes an empty table and reports success.
+    subject_missing = 7,
 };
 
 /// @brief Stable short name of a refusal, for a message or a log line.
@@ -155,6 +183,8 @@ enum class ExportRefusal : std::uint8_t {
         case ExportRefusal::nothing_to_write: return "nothing_to_write";
         case ExportRefusal::shape_mismatch: return "shape_mismatch";
         case ExportRefusal::could_not_write: return "could_not_write";
+        case ExportRefusal::readings_not_supported: return "readings_not_supported";
+        case ExportRefusal::subject_missing: return "subject_missing";
     }
     return "unknown";
 }
@@ -175,9 +205,64 @@ enum class ExportRefusal : std::uint8_t {
  * @frozen      no
  * @tests       io.export.refuses_a_format_that_cannot_carry_uncertainty
  */
+/**
+ * @brief What a request asks a format to write.
+ *
+ * Two subjects and no third: the platform's loop produces a **series** (a run's samples, over time) and a
+ * **table of readings** (one row per measurement, no time axis), and they are written to different files because
+ * they are different tables. See `ExportRequest::subject`.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        none
+ * @invariant   A value of this type names exactly one of the two tables
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       io.export.a_readings_table_is_not_a_series
+ */
+enum class ExportSubject : std::uint8_t {
+    /// The run's series: one row per sample, one column per channel.
+    trace = 0,
+    /// The measurements: one row per reading, with its uncertainty and its source.
+    readings = 1,
+};
+
+/// @brief Stable short name of a subject, for a message or a log line.
+[[nodiscard]] constexpr const char* to_string(ExportSubject subject) noexcept {
+    switch (subject) {
+        case ExportSubject::trace: return "trace";
+        case ExportSubject::readings: return "readings";
+    }
+    return "unknown";
+}
+
 struct ExportRequest final {
-    /// The readings, with their times and channels.
+    /// Which of the two tables the caller wants written.
+    ///
+    /// **Two subjects rather than one request that carries everything.** A format writes one table per file -- a CSV
+    /// with two tables in it is not a CSV -- so a request that carried both would leave the choice to the writer,
+    /// which is the format quietly deciding what the user asked for. The subject says it instead, and `check_export`
+    /// refuses a request whose subject and pointers disagree.
+    ExportSubject subject = ExportSubject::trace;
+    /// The series: samples, channels and uncertainties. Set when `subject == trace`.
     const Trace* trace = nullptr;
+    /// The readings: one row per measurement, each with its own value, uncertainty and kind. Set when
+    /// `subject == readings`.
+    ///
+    /// Borrowed, like the trace, and for the same reason: an exporter owns no data. What a reading *is* lives in
+    /// `runtime/store`, which is why this is a `Dataset` and not a list of numbers.
+    const Dataset* readings = nullptr;
+    /// One label per reading, naming where it came from -- a node's name, a device's, a file's. Optional.
+    ///
+    /// **A label rather than a `NodeId`, and this is the layering rule showing up in a signature.** The dataset
+    /// records each reading's source as `(index, generation)` in the graph, and `runtime/io` may not depend on
+    /// `graph`: this module is about turning values into text, and a module that had to know what a node is in
+    /// order to write a column would have made every format's task depend on the graph. So the caller that *does*
+    /// know -- the window, which holds both -- resolves the names and passes them here. When the vector is null or
+    /// too short, the column is written with the reading's index instead, which is still a provenance a reader can
+    /// follow back through the session.
+    const std::vector<std::string>* reading_labels = nullptr;
     /// A destination path. Its meaning is the format's business.
     std::string path{};
     /// Whether the caller insists the uncertainty survives.

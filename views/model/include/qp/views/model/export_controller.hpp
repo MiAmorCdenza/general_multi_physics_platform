@@ -152,4 +152,35 @@ struct ExportReport final {
 [[nodiscard]] ExportReport export_trace(const MeasurementModel& model,
                                         qp::runtime::IExporter& format, const std::string& path);
 
+/**
+ * @brief The same pre-flight and write, for the **readings** table.
+ *
+ * The other half of "export": a trace is a series and the readings are the numbers the student wrote down, and the
+ * platform's loop ends in a report that quotes the second. Everything about the shape of this function is the shape
+ * of `export_trace` -- one request, the pre-flight first, the refusal translated into a sentence -- because a second
+ * export path that behaved differently is how two exports of one session come to disagree.
+ *
+ * @param model  The measurement session whose readings are exported. Its `readings_export_request` supplies the
+ *               dataset and the uncertainty policy.
+ * @param format The format to write with.
+ * @param labels One label per reading, naming where each came from. **Resolved by the caller**, which is the layer
+ *               that has the graph. Borrowed for the call.
+ * @param path   Where to write.
+ *
+ * @ownership   observes `model` and `labels`, owns the result
+ * @thread      main
+ * @pre         `labels` names every reading, or is empty
+ * @post        On success the file at `path` holds the readings table; on any other answer this call created no file
+ * @invariant   `report.refusal == check_export(format, model.readings_export_request(path, &labels))` whenever the
+ *              write did not itself fail
+ * @errors      Never throws except on allocation failure, which terminates; every other failure becomes the refusal
+ *              and the sentence in the report
+ * @complexity  O(readings) plus the write
+ * @nondet      only through the filesystem
+ * @frozen      no
+ * @tests       export.a_readings_table_is_written_with_its_sources
+ */
+[[nodiscard]] ExportReport export_readings(const MeasurementModel& model, qp::runtime::IExporter& format,
+                                           const std::vector<std::string>& labels, const std::string& path);
+
 }  // namespace qp::views::model

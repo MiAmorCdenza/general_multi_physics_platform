@@ -68,12 +68,16 @@ private:
 /// ignored cannot distinguish the two branches it exists to distinguish.
 class DeclaringExporter final : public rt::IExporter {
 public:
-    DeclaringExporter(bool keeps_uncertainty, bool multi_dataset) {
+    DeclaringExporter(bool keeps_uncertainty, bool multi_dataset, bool keeps_readings = false) {
         desc_.name = keeps_uncertainty ? "test.keeps" : "test.drops";
         desc_.label = desc_.name;
         desc_.extensions = {keeps_uncertainty ? "keeps" : "drops"};
         desc_.capabilities.keeps_uncertainty = keeps_uncertainty;
         desc_.capabilities.multi_dataset = multi_dataset;
+        // The third capability, defaulted rather than required: a format that says nothing about a readings table is
+        // the ordinary case -- the trace is the older artifact -- and every existing use of this fixture keeps its
+        // meaning. A case that wants the other answer asks for it.
+        desc_.capabilities.keeps_readings = keeps_readings;
         desc_.capabilities.is_text = true;
     }
 
@@ -451,6 +455,58 @@ TEST_CASE("measurement.model.export_request_carries_the_policy", "[measurement][
     // somewhere would fail here rather than in a user's file.
     REQUIRE(m.export_readiness(drops) == rt::check_export(drops, m.export_request("anything.csv")));
     REQUIRE(m.export_readiness(keeps) == rt::check_export(keeps, m.export_request("anything.csv")));
+}
+
+TEST_CASE("measurement.model.a_readings_request_names_the_table", "[measurement][model]") {
+    // **The other artifact of one session.** A trace is a series and the readings are the numbers written down; the
+    // request says which of the two by its **subject**, because a format writes one table per file and a request that
+    // carried both would leave the choice to the writer -- the format quietly deciding what the user asked for.
+    //
+    // The policy is the trace's policy, and that is the property worth asserting: two exports of one session must
+    // not disagree about whether the error bars can be dropped.
+    Session session;
+    MeasurementModel& m = session.model();
+    m.add_reading(1.0, rt::UncertaintyKind::standard, 0.05);
+    m.add_reading(2.0, rt::UncertaintyKind::unknown, 0.0);
+
+    const std::vector<std::string> labels{"n1", ""};
+    const rt::ExportRequest request = m.readings_export_request("out.csv", &labels);
+
+    REQUIRE(request.subject == rt::ExportSubject::readings);
+    REQUIRE(request.readings == &m.dataset());
+    REQUIRE(request.trace == nullptr);          // one subject, one pointer: the other stays null
+    REQUIRE(request.reading_labels == &labels);
+    REQUIRE(request.path == "out.csv");
+    // One quantified reading in the session, so the uncertainty is required -- exactly as the trace's request
+    // requires it, because it is the same rule rather than a second copy of it.
+    REQUIRE(request.require_uncertainty == m.export_request("out.csv").require_uncertainty);
+    REQUIRE(request.require_uncertainty);
+
+    // ... and a session that quantified nothing does not demand what it does not have, in either table.
+    Session bare;
+    bare.model().add_reading(1.0, rt::UncertaintyKind::unknown, 0.0);
+    REQUIRE_FALSE(bare.model().readings_export_request("out.csv", nullptr).require_uncertainty);
+    REQUIRE_FALSE(bare.model().export_request("out.csv").require_uncertainty);
+
+    // The readiness answer is the exporter's own answer, asserted against `check_export` directly rather than
+    // against a literal: a second request built somewhere else fails here rather than in a user's file.
+    const DeclaringExporter traces_only{true, false};
+    // A format with no shape for a readings table is refused **by name**, which is what tells a caller to pick
+    // another format rather than another policy -- and it is refused **before the data is looked at**, because the
+    // format cannot write this kind of table whatever the session holds.
+    REQUIRE(m.readings_readiness(traces_only) == rt::ExportRefusal::readings_not_supported);
+    Session empty;
+    REQUIRE(empty.model().readings_readiness(traces_only) == rt::ExportRefusal::readings_not_supported);
+
+    // With a format that *can* write the table, the two answers separate: a session with readings is ready, and one
+    // with none has nothing to write -- a different sentence, and the one a user with an empty panel should see.
+    const DeclaringExporter writes_readings{true, false, true};
+    REQUIRE(m.readings_readiness(writes_readings) == rt::ExportRefusal::ok);
+    REQUIRE(empty.model().readings_readiness(writes_readings) == rt::ExportRefusal::nothing_to_write);
+    // The readiness answer is the exporter's own answer, asserted against `check_export` directly rather than against
+    // a literal: a second request built somewhere else fails here rather than in a user's file.
+    REQUIRE(m.readings_readiness(writes_readings) ==
+            rt::check_export(writes_readings, m.readings_export_request("any", &labels)));
 }
 
 TEST_CASE("measurement.model.export_refusal_matches_the_exporter", "[measurement][model]") {

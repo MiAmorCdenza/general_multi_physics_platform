@@ -162,6 +162,70 @@ TEST_CASE("export.writes_the_panels_trace", "[export]") {
     REQUIRE(contents.find("0.05") != std::string::npos);
 }
 
+TEST_CASE("export.a_readings_table_is_written_with_its_sources", "[export]") {
+    // The loop's last link, end to end: the pre-flight answers, the file is written, and what is in it is the
+    // readings -- each with its uncertainty, its kind and the device it came from. The trace's case asserts the
+    // series; this one asserts the table a lab report quotes, and the two are different artifacts of one session.
+    const TempDir dir;
+    const std::string path = dir.path("readings.csv");
+    const Session session;
+
+    // The panel's readiness check and the export's pre-flight are the same question here too.
+    REQUIRE(session.model.readings_readiness(csv_exporter()) == rt::ExportRefusal::ok);
+
+    // The labels are the caller's: this layer has the graph, `runtime/io` may not, and a reading whose source does
+    // not resolve gets an empty field rather than a guess.
+    const std::vector<std::string> labels{"metre rule", "metre rule", ""};
+    const ExportReport report = export_readings(session.model, csv_exporter(), labels, path);
+    REQUIRE(report.ok);
+    REQUIRE(report.refusal == rt::ExportRefusal::ok);
+    REQUIRE(report.format_name == "qp.csv");
+    REQUIRE(report.path == path);
+    REQUIRE(report.message.find("readings") != std::string::npos);
+    REQUIRE(report.message.find(path) != std::string::npos);
+
+    std::string contents;
+    REQUIRE(rt::read_whole_file(path, contents) == rt::FileOutcome::ok);
+    REQUIRE(contents.find("value [m]") != std::string::npos);
+    REQUIRE(contents.find("uncertainty [m]") != std::string::npos);
+    REQUIRE(contents.find("kind") != std::string::npos);
+    REQUIRE(contents.find("metre rule") != std::string::npos);
+    REQUIRE(contents.find("standard") != std::string::npos);
+    // The header is the table's shape, and the reading rows are under it: three readings in this session's fixture.
+    const std::size_t header_end = contents.find('\n');
+    REQUIRE(header_end != std::string::npos);
+    const std::size_t first_row = header_end + 1;
+    REQUIRE(contents.compare(first_row, 2, "0,") == 0);
+
+    // A label vector that is **short** is a caller's bug, and the pre-flight refuses it before a file exists -- the
+    // property that keeps a source column from silently emptying for the last rows. The case owns the shape it
+    // asserts: the fixture's session holds one reading, and one label is not short against one reading, so a session
+    // with three is built here rather than assuming the fixture's size.
+    Session fuller;
+    fuller.model.add_reading(2.0, rt::UncertaintyKind::standard, 0.05);
+    fuller.model.add_reading(3.0, rt::UncertaintyKind::exact, 0.0);
+    REQUIRE(fuller.model.dataset().readings().size() == 3);
+
+    const std::vector<std::string> one_label{"metre rule"};
+    REQUIRE(rt::check_export(csv_exporter(), fuller.model.readings_export_request("x", &one_label)) ==
+            rt::ExportRefusal::shape_mismatch);
+    // ... and a vector of the right length, or none at all, is not refused: the labels are optional, so "nobody
+    // named the rows" is a legitimate request and only a *partial* naming is a bug.
+    REQUIRE(rt::check_export(csv_exporter(), fuller.model.readings_export_request("x", nullptr)) ==
+            rt::ExportRefusal::ok);
+    const std::vector<std::string> all_three{"a", "b", "c"};
+    REQUIRE(rt::check_export(csv_exporter(), fuller.model.readings_export_request("x", &all_three)) ==
+            rt::ExportRefusal::ok);
+
+    const ExportReport refused = export_readings(fuller.model, csv_exporter(), one_label, dir.path("no.csv"));
+    REQUIRE_FALSE(refused.ok);
+    REQUIRE(refused.refusal == rt::ExportRefusal::shape_mismatch);
+    REQUIRE(refused.message.find("disagree") != std::string::npos);
+    // No file, because the refusal came first: the whole point of a pre-flight rather than an error after a write.
+    std::string absent;
+    REQUIRE(rt::read_whole_file(dir.path("no.csv"), absent) != rt::FileOutcome::ok);
+}
+
 TEST_CASE("export.refuses_before_writing", "[export]") {
     // The refusal comes first, and nothing else happens: no file, no write call, no success reported. This
     // is the case the io module's pre-flight exists for, and the one a losing-data defect would hide in.

@@ -130,6 +130,124 @@ namespace rt = qp::runtime;
 
 }  // namespace
 
+TEST_CASE("csv.export.a_readings_table_carries_the_kind_and_the_source", "[csv][export]") {
+    // **The platform's own loop ends in a report, and this is the artifact that report quotes.** A trace is a
+    // series -- one row per sample, one column per channel -- while the product of measurement, record and
+    // uncertainty is a table of readings: one row per measurement, no time axis, each with its own value, its own
+    // standard uncertainty and its own provenance. Until this existed a student could export the trajectory and not
+    // the five numbers they had written down.
+    //
+    // Every column is a decision, and the case asserts each one rather than the table's shape: `kind` distinguishes
+    // the three states of an uncertainty, `valid` keeps a rejection visible, and `source` names the device -- which
+    // the dataset cannot do itself, because it records a graph address and this module is not allowed to know what
+    // a graph is.
+    CsvExporter exporter;
+
+    rt::Dataset readings{"length", qp::units::dims::length};
+    // A measured reading, one nobody quantified, an exact one, and a rejected one: the whole vocabulary the store
+    // has, and a table that lost any of them would be a table about a different session.
+    readings.add(rt::UncertainValue::measured(0.01010, 1.4e-6, qp::units::dims::length));
+    readings.add(rt::UncertainValue::unquantified(0.01020, qp::units::dims::length));
+    readings.add(rt::UncertainValue::exact(0.00980, qp::units::dims::length));
+    readings.add(rt::UncertainValue::measured(0.01040, 1.4e-6, qp::units::dims::length));
+    REQUIRE(readings.reject(3).has_value());
+
+    const std::vector<std::string> labels{"metre rule", "metre rule", "hand", "metre rule"};
+    std::string table;
+    REQUIRE(exporter.to_readings_text(readings, &labels, table) == rt::ExportRefusal::ok);
+
+    const std::vector<std::vector<std::string>> rows = parse_rows(table);
+    REQUIRE(rows.size() == 5);        // a header and four readings, and no trailing empty row
+    // The header names each column and carries the unit where there is one. `kind`, `source` and `valid` are words,
+    // so they get no brackets -- the same rule the trace's header follows.
+    REQUIRE(rows[0].size() == 6);
+    REQUIRE(rows[0][0] == "index");
+    REQUIRE(rows[0][1] == "value [m]");
+    REQUIRE(rows[0][2] == "uncertainty [m]");
+    REQUIRE(rows[0][3] == "kind");
+    REQUIRE(rows[0][4] == "source");
+    REQUIRE(rows[0][5] == "valid");
+
+    // A measured reading: its value, its own standard uncertainty, its kind, its device and its validity.
+    REQUIRE(rows[1][1] == "0.0101");
+    REQUIRE(rows[1][2] == "1.4e-06");
+    REQUIRE(rows[1][3] == "standard");
+    REQUIRE(rows[1][4] == "metre rule");
+    REQUIRE(rows[1][5] == "true");
+    // **The central rule, in this table too**: an unquantified uncertainty is an **empty field**, not a zero.
+    REQUIRE(rows[2][2].empty());
+    REQUIRE(rows[2][3] == "unknown");
+    // ... and an exact one really is zero, so it is written as one. The two are different numbers and the table
+    // says so.
+    REQUIRE(rows[3][2] == "0");
+    REQUIRE(rows[3][3] == "exact");
+    // A rejected reading stays in the table with its flag: the store marks a judgement rather than deleting it,
+    // because a reader could not otherwise tell an outlier that was rejected from one that was never taken. An
+    // export that dropped the flag would lose exactly what that decision preserved.
+    REQUIRE(rows[4][5] == "false");
+    REQUIRE(rows[4][3] == "standard");
+    // The index column is the reading's identity in the session, which is what a reader follows a number back by.
+    REQUIRE(rows[1][0] == "0");
+    REQUIRE(rows[4][0] == "3");
+
+    // ---- The labels, which the caller resolves --------------------------------------------------------------
+    //
+    // With no labels the source column is **empty rather than guessed**: a reading's origin is a graph address in
+    // the dataset, and this module may not know what a graph is.
+    std::string unlabelled;
+    REQUIRE(exporter.to_readings_text(readings, nullptr, unlabelled) == rt::ExportRefusal::ok);
+    const std::vector<std::vector<std::string>> bare = parse_rows(unlabelled);
+    REQUIRE(bare.size() == rows.size());
+    REQUIRE(bare[1][4].empty());
+    REQUIRE(bare[1][1] == rows[1][1]);
+    // A label vector that is present and **short** is refused, not padded: a source column that silently empties
+    // for the last rows is worse than one that was never written, because the reader trusts what is there -- and a
+    // refused call must not have touched the caller's string.
+    const std::vector<std::string> too_few{"metre rule"};
+    std::string refused;
+    REQUIRE(exporter.to_readings_text(readings, &too_few, refused) == rt::ExportRefusal::shape_mismatch);
+    REQUIRE(refused.empty());
+
+    // An empty dataset is nothing to write, which is a different finding from a shape that does not line up.
+    const rt::Dataset empty{"length", qp::units::dims::length};
+    std::string nothing;
+    REQUIRE(exporter.to_readings_text(empty, nullptr, nothing) == rt::ExportRefusal::nothing_to_write);
+    REQUIRE(nothing.empty());
+
+    // ---- The pre-flight, which is what a dialog asks before a file exists -----------------------------------
+    rt::ExportRequest request;
+    request.subject = rt::ExportSubject::readings;
+    request.readings = &readings;
+    request.reading_labels = &labels;
+    REQUIRE(rt::check_export(exporter, request) == rt::ExportRefusal::ok);
+    // The capability that makes it legal, and the flag a caller reads before choosing a format.
+    REQUIRE(exporter.format().capabilities.keeps_readings);
+    // A subject with nothing behind it is a caller's bug and is refused **before** the format is consulted: the
+    // alternative is a writer that writes an empty table and reports success.
+    rt::ExportRequest missing = request;
+    missing.readings = nullptr;
+    REQUIRE(rt::check_export(exporter, missing) == rt::ExportRefusal::subject_missing);
+    // The names are stable, because a refusal reaches a user and a log.
+    REQUIRE(std::string{rt::to_string(rt::ExportRefusal::readings_not_supported)} == "readings_not_supported");
+    REQUIRE(std::string{rt::to_string(rt::ExportRefusal::subject_missing)} == "subject_missing");
+    REQUIRE(std::string{rt::to_string(rt::ExportSubject::readings)} == "readings");
+    REQUIRE(std::string{rt::to_string(rt::ExportSubject::trace)} == "trace");
+
+    // ---- The file, because the bytes are the artifact ------------------------------------------------------
+    //
+    // The string and the file must be the same table: the pre-flight runs twice, once in the caller and once inside
+    // `write`, and the two must not be able to disagree about what was exported.
+    const TempDir dir;
+    request.path = dir.path("readings.csv");
+    REQUIRE(exporter.write(request) == rt::ExportRefusal::ok);
+    REQUIRE(read_file(request.path) == table);
+    // ... and a request that names the readings and leaves the pointer null is refused on the file path too, rather
+    // than falling back to a trace it also does not carry.
+    rt::ExportRequest wrong = missing;
+    wrong.path = dir.path("wrong.csv");
+    REQUIRE(exporter.write(wrong) == rt::ExportRefusal::subject_missing);
+}
+
 TEST_CASE("csv.export.declares_what_it_can_carry", "[csv][export]") {
     // The declaration is what `check_export` reads, so a wrong flag is the difference between a refused
     // export and a published table whose error bars are gone. For CSV the honest answer on uncertainty is
