@@ -229,6 +229,10 @@ int main(int argc, char** argv) {
     // and the window offers every declaration to every item and keeps one panel per item -- which is why there
     // are two here and not one: `render.particles` and `render.field_lines` are different declarations, and an
     // item that claimed both would have to choose which picture to draw.
+    // The demos this build offers, handed to the window at construction. Declared here rather than inside the
+    // plugin guard so the window's constructor has one argument either way.
+    std::vector<qp::views::model::GraphBlueprint> demos;
+
     qp::plugins::magnetosphere::ParticleViewItem particle_item;
     qp::graph::mount_view_item(&particle_item);
     qp::plugins::magnetosphere::FieldLinesViewItem field_lines_item;
@@ -251,13 +255,142 @@ int main(int argc, char** argv) {
     if (mounted_render_items != 2) {
         qWarning().noquote() << "magnetosphere: mounted" << mounted_render_items << "of 2 render items";
     }
+
+    // **The flagship composition, as a blueprint rather than as window code.** Ten nodes: a dipole, the tail's
+    // current sheet, their sum, a magnetosheath field, the magnetopause weight, and the mix that puts them
+    // together -- then an emitter launched against that field, a Boris push, and the two render declarations the
+    // kit's view items claim. It is the picture the reference exists to draw, and it is expressed in the plugin's
+    // own vocabulary here because this file is the composition root: the window is handed the blueprint and knows
+    // none of these names.
+    //
+    // The grid is one earth radius on a forty-one-node box: coarse enough that five field tables cost a few
+    // megabytes, fine enough that the dipole's gradient across a cell is visible in the particles.
+    {
+        const double re = qp::plugins::magnetosphere::kEarthRadiusM;
+        qp::views::model::GraphBlueprint flagship;
+        flagship.label = "magnetosphere";
+        const auto node = [&flagship](const char* type, const char* name) {
+            qp::views::model::BlueprintNode n;
+            n.type_name = type;
+            n.name = name;
+            flagship.nodes.push_back(std::move(n));
+            return flagship.nodes.size() - 1;
+        };
+        const auto set = [&flagship](std::size_t index, qp::graph::PortNumber port, qp::ports::Value value) {
+            flagship.nodes[index].params.emplace_back(port, std::move(value));
+        };
+        const auto grid = [&set](std::size_t index, qp::graph::PortNumber first) {
+            for (qp::graph::PortNumber axis = 0; axis < 3; ++axis) {
+                set(index, first + axis, qp::ports::Value{-20.0 * qp::plugins::magnetosphere::kEarthRadiusM});
+                set(index, first + 3 + axis, qp::ports::Value{1.0 * qp::plugins::magnetosphere::kEarthRadiusM});
+                set(index, first + 6 + axis, qp::ports::Value{41.0});
+            }
+        };
+
+        using qp::plugins::magnetosphere::EmitterNodes;
+        using qp::plugins::magnetosphere::FieldNodes;
+        using qp::plugins::magnetosphere::PusherNodes;
+        using qp::plugins::magnetosphere::RenderNodes;
+
+        const std::size_t dipole = node(FieldNodes::kDipoleType, "dipole");
+        set(dipole, FieldNodes::kPortTiltDegrees, qp::ports::Value{0.0});
+        set(dipole, FieldNodes::kPortMomentAm2, qp::ports::Value{qp::plugins::magnetosphere::kDipoleMomentAm2});
+        grid(dipole, FieldNodes::kPortOrigin0);
+
+        const std::size_t sheet = node(FieldNodes::kCurrentSheetType, "tail sheet");
+        set(sheet, FieldNodes::kPortSheetB0, qp::ports::Value{5.0e-9});
+        set(sheet, FieldNodes::kPortSheetThickness, qp::ports::Value{2.0 * re});
+        grid(sheet, FieldNodes::kPortSheetOrigin0);
+
+        const std::size_t sum = node(FieldNodes::kSumType, "dipole + sheet");
+        grid(sum, FieldNodes::kPortOrigin0);
+
+        const std::size_t sheath = node(FieldNodes::kUniformType, "magnetosheath");
+        set(sheath, FieldNodes::kPortField0, qp::ports::Value{0.0});
+        set(sheath, FieldNodes::kPortField1, qp::ports::Value{0.0});
+        set(sheath, FieldNodes::kPortField2, qp::ports::Value{5.0e-9});
+        grid(sheath, FieldNodes::kPortUniformOrigin0);
+
+        const std::size_t boundary = node(FieldNodes::kMagnetopauseType, "magnetopause");
+        set(boundary, FieldNodes::kPortMagnetopauseStandoff, qp::ports::Value{10.0 * re});
+        set(boundary, FieldNodes::kPortMagnetopauseFlaring, qp::ports::Value{0.58});
+        set(boundary, FieldNodes::kPortMagnetopauseWidth, qp::ports::Value{1.0 * re});
+        grid(boundary, FieldNodes::kPortMagnetopauseOrigin0);
+
+        const std::size_t mix = node(FieldNodes::kMixType, "inside + outside");
+        set(mix, FieldNodes::kPortMixCorrection, qp::ports::Value{1.0});
+
+        const std::size_t emitter = node(EmitterNodes::kRingType, "ring");
+        set(emitter, EmitterNodes::kPortSpecies, qp::ports::Value{std::int64_t{0}});
+        set(emitter, EmitterNodes::kPortLShell, qp::ports::Value{6.6});
+        set(emitter, EmitterNodes::kPortCount, qp::ports::Value{24.0});
+        set(emitter, EmitterNodes::kPortBeta, qp::ports::Value{0.01});
+        set(emitter, EmitterNodes::kPortPitchAngle, qp::ports::Value{90.0});
+        set(emitter, EmitterNodes::kPortFlowAngle, qp::ports::Value{90.0});
+        set(emitter, EmitterNodes::kPortRingSpan, qp::ports::Value{360.0});
+
+        const std::size_t pusher = node(PusherNodes::kBorisType, "boris");
+        set(pusher, PusherNodes::kPortMaxRangeRe, qp::ports::Value{20.0});
+
+        node(RenderNodes::kParticlesType, "particles");
+        node(RenderNodes::kFieldLinesType, "field lines");
+
+        const auto wire = [&flagship](std::size_t from, qp::graph::PortNumber from_port, std::size_t to,
+                                      qp::graph::PortNumber to_port) {
+            qp::views::model::BlueprintWire w;
+            w.from = from;
+            w.from_port = from_port;
+            w.to = to;
+            w.to_port = to_port;
+            flagship.wires.push_back(w);
+        };
+        wire(dipole, FieldNodes::kPortField, sum, FieldNodes::kPortAddendA);
+        wire(sheet, FieldNodes::kPortField, sum, FieldNodes::kPortAddendB);
+        wire(sum, FieldNodes::kPortField, mix, FieldNodes::kPortMixA);
+        wire(sheath, FieldNodes::kPortField, mix, FieldNodes::kPortMixB);
+        wire(boundary, FieldNodes::kPortWeight, mix, FieldNodes::kPortMixWeight);
+        wire(mix, FieldNodes::kPortMixOut, emitter, EmitterNodes::kPortMagnetic);
+        wire(mix, FieldNodes::kPortMixOut, pusher, PusherNodes::kPortMagnetic);
+        wire(emitter, EmitterNodes::kPortState, pusher, PusherNodes::kPortStateIn);
+        wire(pusher, PusherNodes::kPortStateOut, 8, RenderNodes::kPortState);
+        wire(mix, FieldNodes::kPortMixOut, 9, RenderNodes::kPortField);
+
+        // **Checked before it is offered.** A demo this build cannot assemble is reported here, at startup, with
+        // the sentence the check produced -- rather than appearing in the menu and failing halfway through.
+        const qp::views::model::BlueprintCheck offered =
+            qp::views::model::check_blueprint(content_host.node_types(), qp::ports::builtin_registry(), flagship);
+        if (!offered.ok) {
+            qWarning().noquote() << "magnetosphere demo cannot be offered:" << offered.refusal.c_str();
+        }
+        demos.push_back(std::move(flagship));
+    }
 #endif
 
-    qp::views::EditorWindow window(content_host);
+    qp::views::EditorWindow window(content_host, demos);
     // The application decides to seed itself; the window does not. One call, so the graph and
     // the measurement session cannot be seeded in the wrong order by a caller that only
     // remembered one of them.
-    window.seed_demo();
+    //
+    // `--demo <label>` opens a demo this build offers instead of the default experiment. It exists for two
+    // reasons: a course can launch straight into the kit it cares about, and the flagship composition below can be
+    // verified without a synthetic click -- a window that has to be clicked is a window whose screenshots prove
+    // less.
+    const QStringList arguments = QCoreApplication::arguments();
+    const int demo_index = arguments.indexOf(QStringLiteral("--demo"));
+    bool seeded_a_demo = false;
+    if (demo_index >= 0 && demo_index + 1 < arguments.size()) {
+        const QString wanted = arguments.at(demo_index + 1);
+        for (const qp::views::model::GraphBlueprint& blueprint : demos) {
+            if (QString::fromStdString(blueprint.label) != wanted) continue;
+            window.seed_blueprint(blueprint);
+            seeded_a_demo = true;
+            break;
+        }
+        if (!seeded_a_demo) {
+            qWarning().noquote() << "no demo named" << wanted << "-- this build offers" << demos.size();
+        }
+    }
+    if (!seeded_a_demo) window.seed_demo();
     window.show();
     // The host outlives the window: it owns the catalog the window resolved types against, and a plugin
     // unloaded while the window still held a descriptor pointer would be the dangling case the host's own

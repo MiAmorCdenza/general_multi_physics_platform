@@ -90,8 +90,9 @@ private:
     EditorWindow* window_;
 };
 
-EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexcept
-    : QMainWindow(parent), content_(&content) {
+EditorWindow::EditorWindow(qp::host::PluginHost& content, std::vector<qp::views::model::GraphBlueprint> demos,
+                           QWidget* parent)
+    : QMainWindow(parent), content_(&content), demos_(std::move(demos)) {
     setWindowTitle(QStringLiteral("qp -- experiment editor"));
     // The built-in demonstrators, registered through the host rather than into a catalog of our own. They are
     // this build's content, so they are attributed and removable like anything else: a type that existed
@@ -313,6 +314,25 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
     measure_action_->setShortcut(QKeySequence(QStringLiteral("Ctrl+M")));
     measure_action_->setIcon(qt::to_icon(qt::icons::Glyph::measure));
     connect(measure_action_, &QAction::triggered, this, &EditorWindow::measure_selection);
+
+    // **The demos this build offers.** One action per blueprint the application supplied, and the window does not
+    // know what any of them contain: a demo whose types this catalog lacks is reported in the menu's tooltip and
+    // refused when it is asked for, rather than offered and then failing halfway.
+    if (!demos_.empty()) {
+        QMenu* demos = menuBar()->addMenu(tr("&Demos"));
+        for (const qp::views::model::GraphBlueprint& blueprint : demos_) {
+            const QString label = QString::fromStdString(blueprint.label);
+            QAction* action = demos->addAction(label);
+            const qp::views::model::BlueprintCheck offered =
+                qp::views::model::check_blueprint(catalog(), qp::ports::builtin_registry(), blueprint);
+            action->setEnabled(offered.ok);
+            if (!offered.ok) {
+                action->setToolTip(tr("this build cannot offer it: %1")
+                                       .arg(QString::fromStdString(offered.refusal)));
+            }
+            connect(action, &QAction::triggered, this, [this, blueprint] { seed_blueprint(blueprint); });
+        }
+    }
 
     build_file_menu();
     build_view_menu();
@@ -655,6 +675,19 @@ void EditorWindow::file_export() {
         return;
     }
     (void)export_document(path.toStdString());
+}
+
+void EditorWindow::seed_blueprint(const qp::views::model::GraphBlueprint& blueprint) {
+    const qp::views::model::BlueprintReport report = qp::views::model::apply_blueprint(session_, catalog(), blueprint);
+    if (!report.ok) {
+        on_mutation_failed(QString::fromStdString(report.refusal));
+        return;
+    }
+    refresh_status();
+    status_->setText(QStringLiteral("%1: %2 nodes, %3 wires")
+                         .arg(QString::fromStdString(blueprint.label))
+                         .arg(report.nodes.size())
+                         .arg(report.wires_connected));
 }
 
 void EditorWindow::seed_demo() {

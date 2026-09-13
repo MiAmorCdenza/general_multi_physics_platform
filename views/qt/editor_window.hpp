@@ -48,6 +48,7 @@
 #include <qp/graph/ir/node_type_registry.hpp>
 #include <qp/host/host.hpp>
 #include <qp/runtime/run/run.hpp>
+#include <qp/views/model/blueprint.hpp>
 #include <qp/views/model/confidence_model.hpp>
 #include <qp/views/model/document_controller.hpp>
 #include <qp/views/model/fit_session.hpp>
@@ -97,6 +98,10 @@ public:
      *
      *                The window registers its demonstrator types through `add_builtin_node_type`, so they are
      *                attributed and removable like anything else rather than being a hole in the record.
+     * @param demos   The demos this build offers, as blueprints. **The window does not name a plugin's types**:
+     *                the application pairs a kit with a demo, because the application is the composition root and
+     *                the only place in the build that knows both. Each entry becomes one menu action, and an entry
+     *                whose blueprint this catalog cannot offer is reported rather than offered.
      * @param parent  The Qt parent, as usual.
      *
      * @ownership   observes the host and its catalog
@@ -104,13 +109,17 @@ public:
      * @pre         `content` outlives this window
      * @post        The demonstrator types are in the catalog, attributed to `PluginHost::kBuiltinOrigin`
      * @invariant   The catalog is not modified after construction
-     * @errors      noexcept; a type the host refuses is skipped rather than fatal
-     * @complexity  O(types)
+     * @errors      A type the host refuses is skipped rather than fatal. The constructor itself may throw: it takes
+     *              the demos **by value**, so building the window copies a vector of blueprints, and a copy
+     *              allocates. The contract used to claim it could not throw, from when the parameter was absent --
+     *              and the gate comparing the claim with the signature is what noticed.
+     * @complexity  O(types + demos)
      * @nondet      none
      * @frozen      no
      * @tests       qt.views.editor_window.shares_one_session
      */
-    explicit EditorWindow(qp::host::PluginHost& content, QWidget* parent = nullptr) noexcept;
+    explicit EditorWindow(qp::host::PluginHost& content,
+                          std::vector<qp::views::model::GraphBlueprint> demos = {}, QWidget* parent = nullptr);
     ~EditorWindow() override;
 
     /// @brief The session both panels edit through. Exposed so a test can drive it.
@@ -162,6 +171,28 @@ public:
     /// exists to demonstrate: a window that wrote to the graph directly would
     /// produce an edit the canvas is never told about.
     [[nodiscard]] qp::graph::NodeId add_node(const std::string& type_name);
+
+    /**
+     * @brief Seeds a demo the application supplied, through the same edits a user would make.
+     *
+     * A refused blueprint leaves the graph alone and says why on the status line: the check runs first, so the
+     * canvas never shows half a demo.
+     *
+     * @param blueprint The demo. Borrowed for the call.
+     *
+     * @ownership   observes
+     * @thread      ui
+     * @pre         none
+     * @post        On success the session's graph holds the demo's nodes and wires
+     * @invariant   Every edit goes through the session, so the demo is undoable
+     * @errors      A refused blueprint is reported on the status line and the graph is left alone; the seeding path
+     *              itself may allocate (the report holds the ids it added), so it does not claim otherwise.
+     * @complexity  O(nodes + wires)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.editor_window.a_supplied_blueprint_becomes_a_graph
+     */
+    void seed_blueprint(const qp::views::model::GraphBlueprint& blueprint);
 
     /// @brief Seeds the window with a small graph and a matching measurement session.
     ///
@@ -339,6 +370,9 @@ private:
     // whatever is there. A window that named a plugin by type could not be built without that plugin,
     // which would make the plugin split a claim rather than a property.
     std::unique_ptr<qp::views::model::RunController> run_controller_{};
+    /// The demos this build offers, in the order the menu shows them.
+    std::vector<qp::views::model::GraphBlueprint> demos_;
+
     QAction* run_action_ = nullptr;
     // The measure action, kept for the same reason the others are: a test drives the path the button does.
     QAction* measure_action_ = nullptr;

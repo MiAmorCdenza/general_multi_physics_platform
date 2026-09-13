@@ -19,6 +19,7 @@
 # Qt-free component whose header says "qt" misleads the next reader.
 
 add_library(qp_views_model STATIC
+    blueprint.cpp
     catalog.cpp
     demo_library.cpp
     editor_choice.cpp

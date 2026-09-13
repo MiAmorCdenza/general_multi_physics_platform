@@ -55,6 +55,7 @@
 #include <QPixmap>
 
 #include <qp/graph/execution/run_provider.hpp>
+#include <qp/views/model/blueprint.hpp>
 #include <qp/graph/mutate/command.hpp>
 #if defined(QP_HAS_QPJSON_FORMAT)
 #include <qp/plugins/csv/csv_exporter.hpp>
@@ -219,6 +220,56 @@ TEST_CASE("qt.views.nodegraph.drag_moves_the_node_once", "[views][qt]") {
     const std::string& slot = document.layouts().get("graph");
     const auto occurrences = std::count(slot.begin(), slot.end(), '=');
     REQUIRE(occurrences == 1);
+}
+
+TEST_CASE("qt.views.editor_window.a_supplied_blueprint_becomes_a_graph", "[views][qt]") {
+    // **The window stopped knowing a plugin's vocabulary.** A demo arrives as a blueprint -- type names, starting
+    // parameters, wires by index -- and this case supplies one built from the demonstrator types the window itself
+    // registers, which is exactly what the application does with a content kit it mounts. Two claims: the
+    // blueprint's nodes and wires arrive through the session, and a blueprint this catalog cannot offer is refused
+    // with the graph untouched.
+    qp::views::model::GraphBlueprint demo;
+    demo.label = "test demo";
+    const auto node = [&demo](const char* type, const char* name) {
+        qp::views::model::BlueprintNode n;
+        n.type_name = type;
+        n.name = name;
+        demo.nodes.push_back(std::move(n));
+        return demo.nodes.size() - 1;
+    };
+    const std::size_t source = node("demo.signal", "src");
+    node("demo.spring_damper", "model");
+    qp::views::model::BlueprintWire wire;
+    wire.from = source;
+    wire.from_port = 1;
+    wire.to = 1;
+    wire.to_port = 1;
+    demo.wires.push_back(wire);
+
+    qp::host::PluginHost window_content{qp::plugin::Capability::node_types};
+    qp::views::EditorWindow window{window_content, {demo}};
+    REQUIRE(window.session().graph().node_count() == 0);
+
+    window.seed_blueprint(demo);
+    REQUIRE(window.session().graph().node_count() == 2);
+    REQUIRE(window.session().graph().edge_count() == 1);
+    // The names the blueprint asked for are the names in the graph.
+    bool named = false;
+    for (const qp::graph::NodeSlot& slot : window.session().graph().slots()) {
+        if (slot.occupied && slot.node.name == "src") named = true;
+    }
+    REQUIRE(named);
+    // Undoable like any other edit: the wire came back off first, because it was applied last.
+    REQUIRE(window.session().undo().has_value());
+    REQUIRE(window.session().graph().edge_count() == 0);
+
+    // A blueprint naming a type this build does not have: refused, with nothing added.
+    qp::views::model::GraphBlueprint absent = demo;
+    absent.label = "absent demo";
+    absent.nodes[1].type_name = "demo.nonexistent";
+    const std::size_t before = window.session().graph().node_count();
+    window.seed_blueprint(absent);
+    REQUIRE(window.session().graph().node_count() == before);
 }
 
 TEST_CASE("qt.views.editor_window.shares_one_session", "[views][qt]") {

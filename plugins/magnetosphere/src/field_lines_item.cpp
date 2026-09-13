@@ -79,8 +79,6 @@ graph::ViewScene FieldLinesViewItem::scene(const graph::ViewRequest& request) {
         if (render_node == nullptr || !draws(render_node->type_name)) continue;
 
         const Wire wire = field_behind(g, declaration.node);
-        const graph::Node* field_node = g.find_node(wire.node);
-        if (field_node == nullptr) continue;
 
         // The samples, by the pair the bake published them under. `is_readable` rather than a null check, for the
         // reason `field_set.hpp` gives: an absent field and a field of zeros are the same force and different
@@ -88,10 +86,15 @@ graph::ViewScene FieldLinesViewItem::scene(const graph::ViewRequest& request) {
         const gfield::FieldValue table = request.fields->view(gfield::FieldKey{wire.node.index, wire.port});
         if (!gfield::is_readable(table)) continue;
 
-        // Where the samples **are**, which the table cannot say: `abi::LatticeDesc` carries counts and not
-        // positions, so the geometry comes from the field node's own parameters -- the same `read_from` the bake
-        // used, which is what keeps the two from disagreeing about the box.
-        const GridSpec grid = FieldNodes::read_from(*field_node);
+        // **Where the samples are, asked of the node that baked them.** This used to read the grid off the node the
+        // wire names -- `FieldNodes::read_from(*field_node)` -- which works for a dipole and fails, silently, for
+        // every combinator: `field.mul`, `field.blend` and `field.mix` declare **no grid ports at all**, so the
+        // read produced a default grid, `tracer.usable()` was false, and the panel said "nothing to draw yet --
+        // press Run" about a run that had just baked the field. Found by running the application with a graph wired
+        // through `field.mix`; the case wires one through `field.mul`, so the fix is asserted rather than intended.
+        // `resolve_field_origin` is the resolver the plan builder uses, and it follows the combinators back.
+        GridSpec grid;
+        if (!resolve_field_origin(g, declaration.node, RenderNodes::kPortField, grid)) continue;
 
         TraceSpec spec;
         spec.tolerance = std::max(1.0e-9, real_or(*render_node, RenderNodes::kPortTolerance, spec.tolerance));

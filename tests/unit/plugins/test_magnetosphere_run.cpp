@@ -1033,6 +1033,53 @@ TEST_CASE("magnetosphere.render.a_field_becomes_a_family_of_curves", "[magnetosp
         graph::DeclaredOutput{dipole, FieldNodes::kPortField}};
     const graph::ViewRequest wrong_declaration{&scene.g, &other, &no_particles, 0, &built.run->fields()};
     REQUIRE(item.scene(wrong_declaration).empty());
+
+    // **And the declaration may be wired to a combinator**, which is the failure this case was extended for after
+    // running the application: the item used to read the grid off the node the wire named, and `field.mul`,
+    // `field.blend` and `field.mix` declare **no grid ports at all** -- so it read a default grid, decided the
+    // tracer was unusable, and drew nothing while the panel said "press Run" about a run that had baked the field.
+    // A dipole through a mask and a multiplier is the cheapest graph with that shape, and it is the one asserted.
+    {
+        Scene composed;
+        const graph::NodeId field = composed.add_dipole(0.0);
+        const graph::NodeId mask = composed.add(FieldNodes::kMaskType);
+        // A sphere that **contains the seeds**: a mask whose weight is zero where the lines start would trace a null
+        // field, and this case would then be measuring the mask instead of the grid resolution it is about.
+        composed.set(mask, FieldNodes::kPortMaskRegion, std::int64_t{0});
+        composed.set(mask, FieldNodes::kPortMaskR0, 8.0 * kEarthRadiusM);
+        composed.set(mask, FieldNodes::kPortMaskR1, 8.0 * kEarthRadiusM);
+        // Its own nine grid ports, on the dipole's box: the one-lattice rule wants both on one lattice, and the
+        // multiplier is defined on the lattice its inputs share.
+        for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+            const double value = offset < 3 ? -8.0 * kEarthRadiusM
+                                            : (offset < 6 ? 0.25 * kEarthRadiusM : 65.0);
+            composed.set(mask, FieldNodes::kPortMaskOrigin0 + offset, value);
+        }
+        const graph::NodeId product = composed.add(FieldNodes::kMulType);
+        composed.wire(field, FieldNodes::kPortField, product, FieldNodes::kPortMulField);
+        composed.wire(mask, FieldNodes::kPortWeight, product, FieldNodes::kPortMulWeight);
+        const graph::NodeId lines = composed.add(RenderNodes::kFieldLinesType);
+        composed.set(lines, RenderNodes::kPortLineCount, 3.0);
+        composed.set(lines, RenderNodes::kPortSeedStart, 2.0);
+        composed.set(lines, RenderNodes::kPortSeedEnd, 4.0);
+        composed.wire(product, FieldNodes::kPortMulOut, lines, RenderNodes::kPortField);
+
+        MagnetosphereRunProvider provider_again;
+        qp::graph::execution::RunBuildResult composed_build =
+            provider_again.build(composed.g, composed.host.node_types());
+        REQUIRE(composed_build.ok());
+        REQUIRE(composed_build.run->advance(10, 0.01).has_value());
+        REQUIRE(composed_build.run->fields().contains(gfield::FieldKey{product.index, FieldNodes::kPortMulOut}));
+
+        const std::vector<graph::DeclaredOutput> composed_declared{
+            graph::DeclaredOutput{lines, RenderNodes::kPortFieldItem}};
+        const graph::ViewRequest composed_request{&composed.g, &composed_declared, &no_particles, 10,
+                                                  &composed_build.run->fields()};
+        REQUIRE(composed_request.valid());
+        const graph::ViewScene through_a_combinator = item.scene(composed_request);
+        REQUIRE(through_a_combinator.polylines.size() == 3);
+        REQUIRE(through_a_combinator.has_bounds);
+    }
 }
 
 TEST_CASE("magnetosphere.run.the_recorded_channels_are_the_ones_a_report_names", "[magnetosphere]") {

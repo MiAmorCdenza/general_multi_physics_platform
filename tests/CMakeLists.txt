@@ -767,7 +767,8 @@ qp_add_test(qp_test_runtime_instrument
 # for both targets converts that into "these tests need a plugin", which is the truth.
 if(TARGET qp::views_model AND TARGET qp::plugins::mechanics)
     qp_add_test(qp_test_views_model
-        SOURCES model/test_views_model.cpp
+        SOURCES model/test_blueprint.cpp
+                model/test_views_model.cpp
                 model/test_measurement_model.cpp
                 model/test_confidence_model.cpp
                 model/test_fit_session.cpp
