@@ -115,6 +115,12 @@ struct RunReport final {
  */
 struct RunResult final {
     RunReport report{};
+    /// Where the particles ended up, as `x, y, z` triples, for a run a **provider** produced.
+    ///
+    /// Empty for the operator loop's own runs. It is here rather than in `RunReport` because a report
+    /// is the numbers a status line quotes and this is the one thing a canvas draws; and it is a
+    /// snapshot rather than a trail, which is the decision `IGraphRun::positions` argues.
+    std::vector<double> particle_positions{};
     qp::runtime::Trace trace{qp::runtime::RunId{}};
 };
 

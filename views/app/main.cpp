@@ -42,6 +42,7 @@
 #include <qp/host/host.hpp>
 #include <qp/views/model/document_controller.hpp>
 #include <qp/views/model/execution_binders.hpp>
+#include <qp/views/model/run_providers.hpp>
 #include <qp/views/model/export_controller.hpp>
 
 #if defined(QP_HAS_MECHANICS_PLUGIN)
@@ -216,6 +217,11 @@ int main(int argc, char** argv) {
     // The count is reported rather than asserted, for the reason the instruments' is: a name clash is one
     // palette entry missing, not a build that cannot open a window.
 #if defined(QP_HAS_MAGNETOSPHERE_PLUGIN)
+    // The kit's whole-graph run provider. The operator loop drives one operator over a state of a few doubles
+    // per particle; this kit's graph has to be baked and launched first, so pressing Run on it goes through
+    // `IGraphRunProvider` instead -- see `views/model/run_providers.hpp`.
+    qp::views::model::mount_run_provider(&magnetosphere_run);
+        qp::plugins::magnetosphere::MagnetosphereRunProvider magnetosphere_run;
     const std::size_t mounted_field_types = qp::plugins::magnetosphere::FieldNodes::mount(content_host);
     const std::size_t mounted_pushers = qp::plugins::magnetosphere::PusherNodes::mount(content_host);
     const std::size_t mounted_emitters = qp::plugins::magnetosphere::EmitterNodes::mount(content_host);

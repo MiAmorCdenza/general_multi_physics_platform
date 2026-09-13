@@ -5,6 +5,7 @@
 #include <qp/views/model/run_controller.hpp>
 
 #include <cmath>
+#include <qp/views/model/run_providers.hpp>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -88,6 +89,32 @@ RunResult RunController::run() const {
     const execution::RunReadiness ready = execution::check_run(graph, resolve_, binders_,
                                                                execution::StateView::zeroed(1));
     if (!ready.ok()) {
+        // **The second kind of run.** `GraphRun` drives one operator over a state of a few doubles per particle;
+        // a graph whose *setup* is a computation -- a field to bake, particles to launch -- is run by **content**
+        // instead, through a provider the application mounted. Asked only here, after the operator path has
+        // declined, so a graph both could run keeps the answer it had before providers existed.
+        for (execution::IGraphRunProvider* provider : run_providers()) {
+            if (provider == nullptr || !provider->claims(graph)) continue;
+            execution::RunBuildResult built = provider->build(graph, *resolve_.catalog);
+            if (!built.ok()) {
+                // The provider's own sentence, passed through unchanged: it names what is missing, and this
+                // layer has no vocabulary for "a magnetic socket nobody wired".
+                out.report.message = built.refusal;
+                return out;
+            }
+            const auto advanced = built.run->advance(kSteps, kDt);
+            if (!advanced.has_value()) {
+                out.report.message = std::string{provider->name()} + " refused a step";
+                return out;
+            }
+            const execution::GraphRunReport summary = built.run->report();
+            out.report.ok = true;
+            out.report.steps = summary.steps;
+            out.report.operator_name = std::string{provider->name()};
+            out.report.message = summary.note;
+            out.particle_positions = built.run->positions();
+            return out;
+        }
         out.report.message = ready.detail;
         out.report.node_type = ready.type_name;
         return out;
