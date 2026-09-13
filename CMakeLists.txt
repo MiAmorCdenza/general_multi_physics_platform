@@ -279,11 +279,17 @@ if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/views/model")
 endif()
 # **Plugins before views, and the order is a correctness requirement rather than a preference.** `views/CMakeLists.txt`
 # links the analysis plugin and sets `QP_HAS_ANALYSIS_PLUGIN` behind `if(TARGET qp::plugins::analysis)`, and a `TARGET`
-# test can only be true for a target that has already been added. With the two the other way round the guard was
-# always false: the Qt application shipped with **no fitter** -- the fit panel said "this build has no fit plugin" in
-# every build -- and the cases asserting that a coefficient arrives with its uncertainty were compiled into the branch
-# for a build without one, where they passed by asserting exactly that. A green test that cannot fail is worse than a
-# missing one, and this order is what made three of them unfailable.
+# test is evaluated **immediately**, when only the targets added so far exist. With the two the other way round the
+# guard was always false: the Qt application shipped with **no fitter** -- the fit panel said "this build has no fit
+# plugin" in every build -- and the cases asserting that a coefficient arrives with its uncertainty were compiled into
+# the branch for a build without one, where they passed by asserting exactly that. A green test that cannot fail is
+# worse than a missing one, and this order is what made three of them unfailable.
+#
+# **Why it stayed invisible for so long**, which is the part worth remembering: `target_link_libraries` resolves its
+# names at *generate* time, after every directory has been processed. So the shell's own mounts in the same file --
+# `qp::plugins::mechanics`, `qp::plugins::instruments`, `qp::plugins::magnetosphere`, and so on -- linked correctly
+# and the palette was full of their node types, while the one capability decided by an `if(TARGET ...)` test came out
+# false. The two mechanisms look alike in a CMakeLists and are evaluated a whole configure apart.
 #
 # The direction is safe by the layer rule the gate enforces: plugins depend on core, never on views.
 if(QP_BUILD_PLUGINS AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/plugins")
