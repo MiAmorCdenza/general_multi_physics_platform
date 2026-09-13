@@ -89,6 +89,14 @@ public:
     /// @brief The relativistic Boris push, as a particle-domain node.
     static constexpr const char* kBorisType = "particle.boris";
 
+    /// @brief The classical fourth-order Runge-Kutta push, as a particle-domain node.
+    ///
+    /// **The same sockets and the same parameters as `kBorisType`**, because that is what the reference
+    /// implementation's four integrators are: one question -- which scheme advances my particles -- with four
+    /// answers. The kernel behind this name samples the field four times a sub-step instead of once and promises
+    /// nothing about `|v|`; `rk4.hpp` argues the pair, and the case measures it.
+    static constexpr const char* kRk4Type = "particle.rk4";
+
     /// @brief The magnetic field socket. `kVectorField`; what lands here becomes `SlotName::magnetic`.
     static constexpr qp::graph::PortNumber kPortMagnetic = 1;
     /// @brief The electric field socket, in volts per metre. Optional.
@@ -141,6 +149,30 @@ public:
      * @tests       magnetosphere.pusher_nodes.the_type_declares_the_ports_the_builder_reads
      */
     [[nodiscard]] static std::vector<qp::graph::NodeDesc> node_types();
+
+    /**
+     * @brief Whether a type name is one of this kit's pushers.
+     *
+     * The plan builder asks this instead of comparing against one name, and that is the whole reason it exists: a
+     * **family** of integrators shares this node's sockets and parameters, so "is this a step?" has one answer
+     * here and the builder does not grow a branch per scheme. A scheme added without this list would be a node a
+     * user can place, wire and configure that the plan silently skips -- which is exactly the failure the mount
+     * count in the cases is written to catch.
+     *
+     * @param type_name The type name to test. Borrowed.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        True exactly for the names this kit's `node_types` produces
+     * @invariant   Agrees with `node_types` entry by entry -- the case asserts both
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.pusher_nodes.the_type_declares_the_ports_the_builder_reads
+     */
+    [[nodiscard]] static bool is_pusher(const std::string& type_name) noexcept;
 
     /**
      * @brief Registers the pusher type with `host` as a built-in.
@@ -238,20 +270,22 @@ enum class PlanBuildRefusal : std::uint8_t {
     grid_mismatch = 4,
 };
 
-/// @brief Stable short name of a refusal, for a message or a log line.
-///
-/// @param refusal The refusal to name.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        One of the names in this enumerator's list, never null
-/// @invariant   Total: every enumerator has a name
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       magnetosphere.plan.a_grid_it_cannot_ask_about_is_refused
+/**
+ * @brief Stable short name of a refusal, for a message or a log line.
+ *
+ * @param refusal The refusal to name.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        One of the names in this enumerator's list, never null
+ * @invariant   Total: every enumerator has a name
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.plan.a_grid_it_cannot_ask_about_is_refused
+ */
 [[nodiscard]] const char* to_string(PlanBuildRefusal refusal) noexcept;
 
 /**
@@ -278,18 +312,20 @@ public:
     BuiltPlan(BuiltPlan&&) = delete;
     BuiltPlan& operator=(BuiltPlan&&) = delete;
 
-    /// @brief Forgets everything, so a second build is reported as its own.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        `steps` and `kernels` are empty and every count is zero
-    /// @invariant   No step is left pointing at a kernel that has been released
-    /// @errors      noexcept
-    /// @complexity  O(steps)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.plan.a_field_node_binds_to_the_slot_the_pusher_reads
+    /**
+     * @brief Forgets everything, so a second build is reported as its own.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        `steps` and `kernels` are empty and every count is zero
+     * @invariant   No step is left pointing at a kernel that has been released
+     * @errors      noexcept
+     * @complexity  O(steps)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.plan.a_field_node_binds_to_the_slot_the_pusher_reads
+     */
     void clear() noexcept {
         steps.clear();
         kernels.clear();

@@ -16,6 +16,7 @@
 
 #include <qp/plugins/magnetosphere/boris.hpp>
 #include <qp/plugins/magnetosphere/field_nodes.hpp>
+#include <qp/plugins/magnetosphere/rk4.hpp>
 
 #include <cmath>
 #include <cstddef>
@@ -210,7 +211,24 @@ std::vector<graph::NodeDesc> PusherNodes::node_types() {
     state_out.required = false;
     boris.outputs.push_back(state_out);
 
-    return {std::move(boris)};
+    // **The family.** The reference implementation declares four integrators with identical sockets and identical
+    // parameters, and a copy is how that fact is spelled here: a scheme that needed a different socket would be a
+    // different family, and one that needed a different *default* would be a different node. What changes is the
+    // name, the label and the sentence a user reads in the panel -- which is where the difference actually lives.
+    graph::NodeDesc rk4 = boris;
+    rk4.type_name = kRk4Type;
+    rk4.label = "RK4 push";
+    rk4.description = "Advances charged particles with the classical fourth-order Runge-Kutta method: the same "
+                      "sockets, the same parameters and the same sub-step control as the Boris push, four field "
+                      "samples a step, and no promise that |v| survives. The pair exists so a run can be asked "
+                      "both questions: Boris is second order and conserves the speed exactly, this one is fourth "
+                      "order and slowly spirals a particle in, and the case measures both.";
+
+    return {std::move(boris), std::move(rk4)};
+}
+
+bool PusherNodes::is_pusher(const std::string& type_name) noexcept {
+    return type_name == kBorisType || type_name == kRk4Type;
 }
 
 PlanBuildRefusal resolve_field(const graph::Graph& graph, const graph::NodeId consumer,
@@ -241,7 +259,7 @@ PlanBuildRefusal build_particle_plan(const graph::Graph& graph, const std::vecto
             out.clear();
             return PlanBuildRefusal::stale_order;
         }
-        if (node->type_name != PusherNodes::kBorisType) {
+        if (!PusherNodes::is_pusher(node->type_name)) {
             ++out.skipped;
             continue;
         }
@@ -309,12 +327,21 @@ PlanBuildRefusal build_particle_plan(const graph::Graph& graph, const std::vecto
 
         step.param = params;
         // The step declares what it cannot run without, and this is the line that makes
-        // `ParticleExecutor::prepare` refuse an unwired pusher by name instead of running it in a zero field.
-        step.required_slots = BorisAdvancer::kRequiredFields;
+        // `ParticleExecutor::prepare` refuse an unwired pusher by name instead of running it in a zero field. The
+        // mask is the family's -- both schemes need the same socket -- so it is read from the shared declaration.
+        step.required_slots = PusherParams::kRequiredFields;
 
-        auto kernel = std::make_unique<BorisAdvancer>();
-        step.kernel = kernel.get();
-        out.kernels.push_back(std::move(kernel));
+        // **Which scheme, by type name**, and that is the only place in the plan where the two differ: everything
+        // else about a step -- its sockets, its parameters, its required slots -- is the family's.
+        if (node->type_name == PusherNodes::kRk4Type) {
+            auto kernel = std::make_unique<Rk4Advancer>();
+            step.kernel = kernel.get();
+            out.kernels.push_back(std::move(kernel));
+        } else {
+            auto kernel = std::make_unique<BorisAdvancer>();
+            step.kernel = kernel.get();
+            out.kernels.push_back(std::move(kernel));
+        }
         out.steps.push_back(step);
         ++out.pushers;
     }

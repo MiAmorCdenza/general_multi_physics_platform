@@ -86,6 +86,8 @@
 #include <qp/graph/kernels/kernel.hpp>
 #include <qp/graph/particles/executor.hpp>
 
+#include <qp/plugins/magnetosphere/pusher.hpp>
+
 #include <cstddef>
 #include <cstdint>
 
@@ -103,7 +105,7 @@ namespace qp::plugins::magnetosphere {
  * @frozen      no
  * @tests       magnetosphere.boris.a_uniform_field_gives_the_relativistic_gyrofrequency
  */
-class BorisAdvancer final : public qp::graph::kernels::IBatchAdvancer {
+class BorisAdvancer final : public PusherAdvancer {
 public:
     /// @brief The kernel's stable name, as it appears in the registry and in a run's record.
     static constexpr const char* kName = "boris";
@@ -112,55 +114,45 @@ public:
     static constexpr const char* kSummary =
         "Relativistic Boris push: q(u/c x B), adaptive sub-stepping on the rotation angle";
 
-    // -- The parameter block's slots, named because a literal index in two files is two chances to disagree ---
+    // -- The parameter block, declared once for the family in `pusher.hpp` and aliased here so that a reader of
+    // -- this header still sees the names this scheme is written in. Two kernels agreeing by convention about a
+    // -- slot index would be two chances to disagree; there is one declaration and these are its other spelling.
     /// @brief The radius at which a particle is retired as having left the region, in earth radii.
-    static constexpr std::size_t kIndexMaxRange = 0;
+    static constexpr std::size_t kIndexMaxRange = PusherParams::kIndexMaxRange;
     /// @brief The gravity multiplier. `0` disables gravity; `1` is the Earth's own field.
-    static constexpr std::size_t kIndexGravity = 1;
+    static constexpr std::size_t kIndexGravity = PusherParams::kIndexGravity;
     /// @brief The largest number of sub-steps one `advance` may take. A cap, so a pathological field cannot hang.
-    static constexpr std::size_t kIndexSubstepCap = 2;
+    static constexpr std::size_t kIndexSubstepCap = PusherParams::kIndexSubstepCap;
     /// @brief The speed limit as a fraction of `c`. Defaults to just below `1`.
-    static constexpr std::size_t kIndexSpeedLimit = 3;
+    static constexpr std::size_t kIndexSpeedLimit = PusherParams::kIndexSpeedLimit;
     /// @brief Where the field grid's first node is, in metres: `x`, then `y`, then `z`.
-    ///
-    /// A `field::FieldValue` describes a lattice's **counts**, its element type and its dimension, and says
-    /// nothing about **where the lattice sits**. A kernel that interpolates between samples therefore has to be
-    /// told the grid's origin and spacing, and this block is where they go: it already exists, `prepare` already
-    /// receives it, and the alternative -- carrying physical geometry beside the value -- would be a new type in
-    /// `core/graph/field`, a module that exists precisely because it has no opinion about physics.
-    ///
-    /// Six doubles here plus four scalars above is ten, which is why `ParamBlock::kDoubles` is twelve rather than
-    /// the eight it was. That is not a coincidence to be tidied away later: the number is what the widest scheme
-    /// the platform ships needs, and this kernel is that scheme.
-    static constexpr std::size_t kIndexGridOrigin0 = 4;
+    static constexpr std::size_t kIndexGridOrigin0 = PusherParams::kIndexGridOrigin0;
     /// @brief The grid origin's `y`, in metres.
-    static constexpr std::size_t kIndexGridOrigin1 = 5;
+    static constexpr std::size_t kIndexGridOrigin1 = PusherParams::kIndexGridOrigin1;
     /// @brief The grid origin's `z`, in metres.
-    static constexpr std::size_t kIndexGridOrigin2 = 6;
+    static constexpr std::size_t kIndexGridOrigin2 = PusherParams::kIndexGridOrigin2;
     /// @brief The grid's node spacing along `x`, in metres.
-    static constexpr std::size_t kIndexGridSpacing0 = 7;
+    static constexpr std::size_t kIndexGridSpacing0 = PusherParams::kIndexGridSpacing0;
     /// @brief The grid's node spacing along `y`, in metres.
-    static constexpr std::size_t kIndexGridSpacing1 = 8;
+    static constexpr std::size_t kIndexGridSpacing1 = PusherParams::kIndexGridSpacing1;
     /// @brief The grid's node spacing along `z`, in metres.
-    static constexpr std::size_t kIndexGridSpacing2 = 9;
+    static constexpr std::size_t kIndexGridSpacing2 = PusherParams::kIndexGridSpacing2;
     /// @brief How many double slots this kernel reads, checked against the block's own width by `static_assert`.
     ///
     /// A kernel that documented slot 11 and read it would get the block's zero for an out-of-range index rather
     /// than a compile error, and a silent zero is a parameter the user set and the run ignored. The assertion is
     /// what makes the block's width and this list one fact instead of two.
-    static constexpr std::size_t kDoublesUsed = 10;
+    static constexpr std::size_t kDoublesUsed = PusherParams::kDoublesUsed;
     /// @brief Whether the drag slot is read. `0` or `1`; the reference implementation has the same switch.
-    static constexpr std::size_t kIndexUseDrag = 0;
+    static constexpr std::size_t kIndexUseDrag = PusherParams::kIndexUseDrag;
 
     /// @brief The fields this kernel cannot run without, as a mask for `StepPlan::required_slots`.
     ///
-    /// Declared here rather than guessed by the plan builder, because "a Boris push needs a magnetic field" is
-    /// knowledge that lives in exactly one place and this is it. A plan that carries this mask and binds no
-    /// magnetic field is refused by `ParticleExecutor::prepare` with `slot_unbound` instead of being run: a
-    /// particle in an absent field travels in a straight line, and a straight line is indistinguishable from a
-    /// field model that is broken.
-    static constexpr std::uint32_t kRequiredFields =
-        qp::graph::particles::slot_bit(qp::graph::particles::SlotName::magnetic);
+    /// Declared once for the family in `pusher.hpp`: "a push needs a magnetic field" is knowledge that lives in
+    /// exactly one place. A plan that carries this mask and binds no magnetic field is refused by
+    /// `ParticleExecutor::prepare` with `slot_unbound` instead of being run: a particle in an absent field travels
+    /// in a straight line, and a straight line is indistinguishable from a field model that is broken.
+    static constexpr std::uint32_t kRequiredFields = PusherParams::kRequiredFields;
 
     static_assert(kDoublesUsed <= qp::graph::kernels::ParamBlock::kDoubles,
                   "the parameter block is narrower than this kernel's documented slots");
@@ -170,13 +162,13 @@ public:
     /// Just below `c` rather than at it, because a `gamma` computed from `|u|^2` exactly equal to `c^2` divides by
     /// zero. The margin is a floating-point necessity and not a physical claim, which is why it is a named
     /// constant with that sentence beside it.
-    static constexpr double kDefaultSpeedLimit = 0.999999;
+    static constexpr double kDefaultSpeedLimit = PusherParams::kDefaultSpeedLimit;
 
     /// @brief The default rotation angle a sub-step is allowed to turn through, in radians.
     ///
     /// `0.5`, the reference implementation's threshold, kept because it is a reasonable working point and changed
     /// only in **how** it is measured -- as an angle rather than as `omega dt`.
-    static constexpr double kDefaultMaxRotation = 0.5;
+    static constexpr double kDefaultMaxRotation = PusherParams::kDefaultMaxRotation;
 
     BorisAdvancer() = default;
 
@@ -228,31 +220,10 @@ public:
     [[nodiscard]] bool is_time_reversible() const noexcept override { return false; }
 
     /**
-     * @brief Validates the parameters before any step runs.
-     *
-     * @param params The block. The step size is **not** here -- it arrives with `AdvanceContext`, and a slot for
-     *               it would be a parameter the user could set and the run ignore. The rest must be usable: a
-     *               non-positive range, a negative gravity multiplier, a speed limit outside `(0, 1]`, a sub-step
-     *               cap below one and a grid spacing that cannot be divided by are all refused here, while the
-     *               user is still editing the graph rather than in the middle of a run.
-     *
-     * @ownership   observes
-     * @thread      main
-     * @pre         none
-     * @post        On success `advance` can run with this block
-     * @invariant   Calling twice with equal arguments has the same effect as once
-     * @errors      `invalid_argument` for a range that is not positive, a negative gravity multiplier, a speed
-     *              limit outside `(0, 1]`, a sub-step cap below one, or a grid origin or spacing that is not
-     *              finite or not positive
-     * @complexity  O(1)
-     * @nondet      none
-     * @frozen      no
-     * @tests       magnetosphere.boris.a_bad_batch_is_refused
-     */
-    [[nodiscard]] qp::diag::Result<void> prepare(const qp::graph::kernels::ParamBlock& params) override;
-
-    /**
      * @brief Advances every particle by `ctx.dt`.
+     *
+     * The prologue and the epilogue are the family's -- `PusherAdvancer::load` and `finish` -- and what is here is
+     * the sub-step loop: half impulse, rotation, half impulse, drag, drift.
      *
      * @param batch The state, in **SI**, which is what `particle_state.hpp` declares its slots to hold and what
      *              every report quotes. `batch.count` is `kBatchSlotCount`: the four state buffers in `BatchSlot`
@@ -285,34 +256,22 @@ public:
     [[nodiscard]] qp::diag::Result<void> advance(const qp::graph::kernels::BatchView& batch,
                                                  qp::graph::kernels::AdvanceContext& ctx) override;
 
-    /// @brief How many particles have had their speed limited since construction.
-    ///
-    /// The evidence for a statement a report has to make. Zero is a real answer meaning "no step was ever
-    /// throttled"; a growing count on a run that is also being sub-stepped says the field is stronger than the
-    /// step can resolve, which is a configuration finding rather than a numerical one.
-    [[nodiscard]] std::uint64_t speed_clamps() const noexcept { return speed_clamps_; }
-
-    /// @brief How many particles have been retired, by the body or by the boundary.
-    [[nodiscard]] std::uint64_t retirements() const noexcept { return retirements_; }
-
-    /// @brief How many sub-steps the last `advance` took, summed over every particle.
-    ///
-    /// The number that says whether the sub-stepping is doing anything. A run whose count equals its particle
-    /// count is taking one sub-step each, which is the common case and the cheap one.
-    [[nodiscard]] std::uint64_t last_substeps() const noexcept { return last_substeps_; }
-
-    /// @brief Forgets the counters, so a second run is reported as its own.
-    void reset_counts() noexcept {
-        speed_clamps_ = 0;
-        retirements_ = 0;
-        last_substeps_ = 0;
-    }
-
 private:
-    qp::graph::kernels::ParamBlock params_{};
-    std::uint64_t speed_clamps_ = 0;
-    std::uint64_t retirements_ = 0;
-    std::uint64_t last_substeps_ = 0;
+    /// @brief One particle's sub-step loop, which is the whole of what this scheme adds to the family.
+    ///
+    /// @ownership   mutates `loaded`
+    /// @thread      eval
+    /// @pre         `loaded.usable`, and the fields the batch carries are on the parameters' grid
+    /// @post        `loaded.position` and `loaded.velocity` hold the state after `loaded.substeps` sub-steps
+    /// @invariant   The rotation's two shears are constructed so that the scale factors cancel, so `|u|` survives
+    ///              the magnetic part to the rounding
+    /// @errors      noexcept
+    /// @complexity  O(substeps)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.boris.a_magnetic_field_does_no_work
+    void push(PusherAdvancer::Loaded& loaded, const qp::graph::kernels::BatchView& batch,
+              const qp::graph::kernels::AdvanceContext& ctx) noexcept;
 };
 
 }  // namespace qp::plugins::magnetosphere

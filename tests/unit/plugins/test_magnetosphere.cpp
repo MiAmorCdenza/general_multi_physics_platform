@@ -41,6 +41,7 @@
 #include <qp/plugins/magnetosphere/dipole.hpp>
 #include <qp/plugins/magnetosphere/geomagnetic.hpp>
 #include <qp/plugins/magnetosphere/geometry.hpp>
+#include <qp/plugins/magnetosphere/rk4.hpp>
 #include <qp/plugins/magnetosphere/units.hpp>
 
 #include <cmath>
@@ -117,13 +118,13 @@ using pp::SlotName;
 }
 
 /// @brief The plan a one-kernel run uses, with the magnetic field bound and declared required.
-[[nodiscard]] std::vector<pp::StepPlan> boris_plan(BorisAdvancer& kernel, const BakedField& table,
+[[nodiscard]] std::vector<pp::StepPlan> boris_plan(pk::IBatchAdvancer& kernel, const BakedField& table,
                                                    const pk::ParamBlock& params) {
     std::vector<pp::StepPlan> steps(1);
     steps[0].kernel = &kernel;
     steps[0].param = params;
     steps[0].fields[static_cast<std::size_t>(SlotName::magnetic)] = table.view();
-    steps[0].required_slots = BorisAdvancer::kRequiredFields;
+    steps[0].required_slots = PusherParams::kRequiredFields;
     return steps;
 }
 
@@ -154,8 +155,13 @@ struct RunOutcome final {
     double max_speed_drift = 0.0;
 };
 
-/// @brief Runs one particle through the whole bridge: state, table, plan, executor, steps.
+/// @brief Runs one particle through the whole bridge, with the scheme the caller chose.
 ///
+/// One body for every scheme, and it takes the **family's** base class rather than Boris: a pusher is one question
+/// with several answers, and a harness that could only ask one of them would make every comparison a comparison of
+/// two harnesses instead of two schemes.
+///
+/// @param kernel       The scheme to drive.
 /// @param table        The magnetic field. Its grid metadata must be in `params`, which `boris_params` does.
 /// @param params       The kernel's parameter block.
 /// @param start_re     Where the particle starts, in earth radii.
@@ -164,8 +170,9 @@ struct RunOutcome final {
 ///                     particle state holds.
 /// @param steps        How many host steps to take.
 /// @param dt           The step, in normalized time.
-[[nodiscard]] RunOutcome run_pusher(const BakedField& table, const pk::ParamBlock& params, const Vec3& start_re,
-                                    const Vec3& velocity_c, double charge_mass, std::size_t steps, double dt) {
+[[nodiscard]] RunOutcome run_pusher(PusherAdvancer& kernel, const BakedField& table, const pk::ParamBlock& params,
+                                    const Vec3& start_re, const Vec3& velocity_c, double charge_mass,
+                                    std::size_t steps, double dt) {
     ParticleState state{1};
     state.set(0, 0, ParticleState::Slot::position, start_re.x * kEarthRadiusM);
     state.set(0, 1, ParticleState::Slot::position, start_re.y * kEarthRadiusM);
@@ -175,7 +182,6 @@ struct RunOutcome final {
     state.set(0, 2, ParticleState::Slot::velocity, velocity_c.z * kSpeedOfLightSI);
     state.set(0, 0, ParticleState::Slot::charge_mass, charge_mass);
 
-    BorisAdvancer kernel;
     pp::ParticleExecutor executor{state, boris_plan(kernel, table, params)};
     REQUIRE(executor.prepare() == pp::PlanRefusal::ok);
 
@@ -224,6 +230,21 @@ struct RunOutcome final {
     outcome.retirements = kernel.retirements();
     outcome.last_substeps = kernel.last_substeps();
     return outcome;
+}
+
+/// @brief The same run with the kit's default scheme, for the cases that only need one answer.
+///
+/// @param table        The magnetic field.
+/// @param params       The kernel's parameter block.
+/// @param start_re     Where the particle starts, in earth radii.
+/// @param velocity_c   Its initial velocity, in units of `c`.
+/// @param charge_mass  Its charge-to-mass ratio, in **SI**.
+/// @param steps        How many host steps to take.
+/// @param dt           The step, in normalized time.
+[[nodiscard]] RunOutcome run_pusher(const BakedField& table, const pk::ParamBlock& params, const Vec3& start_re,
+                                    const Vec3& velocity_c, double charge_mass, std::size_t steps, double dt) {
+    BorisAdvancer kernel;
+    return run_pusher(kernel, table, params, start_re, velocity_c, charge_mass, steps, dt);
 }
 
 }  // namespace
@@ -1319,4 +1340,95 @@ TEST_CASE("magnetosphere.baked_field.a_kernel_and_an_emitter_read_the_same_table
     REQUIRE(zero.z == 0.0);
     REQUIRE(sample_baked_scalar(line, table.origin(), table.spacing(), corner) == 0.0);
     REQUIRE(sample_baked_scalar(view, table.origin(), table.spacing(), corner) == 0.0);
+}
+
+TEST_CASE("magnetosphere.rk4.the_stability_function_is_the_amplitude_it_loses", "[magnetosphere]") {
+    // **The pair a course needs to see, measured rather than described.** Boris splits the Lorentz force into two
+    // half impulses around an *exact* rotation, so `|u|` survives the magnetic part to the rounding and a purely
+    // magnetic run loses no energy at all. RK4 integrates the same equation to fourth order and promises nothing:
+    // for a rotation through `y` radians per sub-step its amplification is the stability function `R(i y)`, whose
+    // modulus is the closed form below, so a particle in a magnetic field **spirals inwards** at a rate that can be
+    // written down. Neither is better; they answer different questions, and this case puts both answers in numbers.
+    const double b_norm = 1.0e-3;
+    const BakedField table = uniform_table(Vec3{0.0, 0.0, b_norm * kEquatorialSurfaceFieldT});
+    const pk::ParamBlock params = boris_params(table);
+    const double speed = 0.01;
+    const double gamma0 = 1.0 / std::sqrt(1.0 - speed * speed);
+    const double omega = kProtonNormalizedChargeMass * b_norm / gamma0;
+    const Vec3 start{2.0, 0.0, 0.0};
+    const Vec3 velocity{0.0, speed, 0.0};
+
+    // A rotation of exactly half a radian per step: the largest the sub-step criterion allows one sub-step to
+    // take, so the count below pins that the scheme is being measured and not the controller.
+    const double y = 0.5;
+    const double dt = y / omega;
+    const std::size_t steps = 1000;
+    Rk4Advancer rk4;
+    const RunOutcome out = run_pusher(rk4, table, params, start, velocity, kProtonChargeMassSI, steps, dt);
+    REQUIRE(out.steps == steps);
+    REQUIRE(out.total_substeps == steps);
+    REQUIRE(out.retirements == 0);
+    REQUIRE(out.clamped_by_executor == 0);
+
+    // `|R(i y)|^2 = 1 - y^6/72 + y^8/576`, and the amplitude after `steps` of them is its `steps/2`-th power. The
+    // scheme's stability function describes the **momentum**, `u = gamma v`, and that is what is measured first: the
+    // momentum decays by that factor to a few parts in a million, and the gap that is left is not an implementation
+    // error -- it is the relativistic form of the equation, whose rate carries a `1/gamma` that moves as `|u|`
+    // decays. The linear stability function is exactly this factor for a *linear* rotation, and 2.5e-6 is how far a
+    // nonlinear system sits from it at a tenth of the speed of light.
+    const double modulus2 = 1.0 - std::pow(y, 6.0) / 72.0 + std::pow(y, 8.0) / 576.0;
+    const double predicted = std::pow(modulus2, 0.5 * static_cast<double>(steps));
+    const double final_speed = norm(out.velocity_c);
+    const double final_momentum = final_speed / std::sqrt(1.0 - final_speed * final_speed);
+    const double initial_momentum = speed / std::sqrt(1.0 - speed * speed);
+    REQUIRE(final_speed < speed);
+    REQUIRE(relative(final_momentum / initial_momentum, predicted) < 1.0e-5);
+    // And the velocity, which is what a trace quotes: the same decay divided by a `gamma` that moved with it.
+    REQUIRE(relative(final_speed / speed, predicted) < 2.0e-5);
+
+    // The same run under Boris: the speed is what it was, to the rounding. That is the other half of the pair,
+    // and it is measured on **one cadence** because both schemes share the sub-step control.
+    BorisAdvancer boris;
+    const RunOutcome boris_out =
+        run_pusher(boris, table, params, start, velocity, kProtonChargeMassSI, steps, dt);
+    REQUIRE(relative(norm(boris_out.velocity_c), speed) < 1.0e-12);
+
+    // **And the order, measured the way a course measures it.** One gyration, taken in `n` steps for three values
+    // of `n`: the particle should come back to where it started, and the distance it misses by is the scheme's
+    // error. The prediction is a ratio per halving -- four for a second-order scheme, sixteen for a fourth-order
+    // one -- and the two schemes are driven through the *same* harness so the ratios mean what they say.
+    const double period = 2.0 * 3.14159265358979323846 / omega;
+    const double gyroradius = speed / omega;
+    const int counts[3] = {16, 32, 64};
+    double boris_error[3] = {0.0, 0.0, 0.0};
+    double rk4_error[3] = {0.0, 0.0, 0.0};
+    for (int index = 0; index < 3; ++index) {
+        const std::size_t n = static_cast<std::size_t>(counts[index]);
+        const double step = period / static_cast<double>(n);
+        Rk4Advancer rk4_run;
+        const RunOutcome out_rk4 =
+            run_pusher(rk4_run, table, params, start, velocity, kProtonChargeMassSI, n, step);
+        BorisAdvancer boris_run;
+        const RunOutcome out_boris =
+            run_pusher(boris_run, table, params, start, velocity, kProtonChargeMassSI, n, step);
+        REQUIRE(out_rk4.total_substeps == n);
+        REQUIRE(out_boris.total_substeps == n);
+        rk4_error[index] = norm(out_rk4.position_re - start) / gyroradius;
+        boris_error[index] = norm(out_boris.position_re - start) / gyroradius;
+    }
+    CAPTURE(boris_error[0], boris_error[1], boris_error[2], rk4_error[0], rk4_error[1], rk4_error[2]);
+    REQUIRE(rk4_error[0] > 0.0);
+    REQUIRE(boris_error[0] > 0.0);
+    // Measured: `3.988` and `3.996` for Boris, `15.978` and `15.994` for RK4 -- the orders themselves, read off
+    // three runs each. The numbers have two and a half percent of room around them, because a convergence ratio is
+    // a measurement rather than a constant, and no room at all would be asserting where one machine rounds.
+    REQUIRE(relative(boris_error[0] / boris_error[1], 4.0) < 0.025);
+    REQUIRE(relative(boris_error[1] / boris_error[2], 4.0) < 0.025);
+    REQUIRE(relative(rk4_error[0] / rk4_error[1], 16.0) < 0.025);
+    REQUIRE(relative(rk4_error[1] / rk4_error[2], 16.0) < 0.025);
+    // And at the coarsest cadence measured the fourth-order scheme is sixty-five times closer to where the particle
+    // started -- `0.0804` against `0.00124` of a gyroradius after one gyration in sixteen steps -- which is what its
+    // order buys. The other side of that trade is the four field samples a sub-step, asserted beside it.
+    REQUIRE(rk4_error[0] < boris_error[0]);
+    REQUIRE(Rk4Advancer::kSamplesPerSubstep == 4);
 }

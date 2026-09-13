@@ -126,7 +126,7 @@ struct Scene final {
         // of them could not be composed out of the others: no wiring of sums and products keeps a field
         // divergence-free (the two blends), and none of them moves a field onto another lattice (the resampler).
         REQUIRE(FieldNodes::mount(host) == 14);
-        REQUIRE(PusherNodes::mount(host) == 1);
+        REQUIRE(PusherNodes::mount(host) == 2);
     }
 
     [[nodiscard]] graph::EvalContext ctx() noexcept {
@@ -2161,11 +2161,33 @@ TEST_CASE("magnetosphere.pusher_nodes.the_type_declares_the_ports_the_builder_re
     // The pusher's port layout is what gives a wire its meaning, so it is the thing the binding is checked
     // against: three field sockets with the types that stop a scalar field being wired into a vector one, and the
     // five settings a run needs but a user should not have to wire.
+    //
+    // **Two schemes and one layout.** The kit ships Boris and RK4 as separate node types with identical sockets and
+    // identical parameters, which is what the reference implementation's four integrators are: one question with
+    // several answers. That claim is checked here rather than assumed -- a family whose members had drifted apart
+    // would be a graph that runs under one scheme and refuses under the other.
     const std::vector<graph::NodeDesc> types = PusherNodes::node_types();
-    REQUIRE(types.size() == 1);
+    REQUIRE(types.size() == 2);
     const graph::NodeDesc& boris = types.front();
     REQUIRE(boris.type_name == PusherNodes::kBorisType);
     REQUIRE(boris.valid());
+    const graph::NodeDesc& rk4 = types[1];
+    REQUIRE(rk4.type_name == PusherNodes::kRk4Type);
+    REQUIRE(rk4.valid());
+    REQUIRE(rk4.inputs.size() == boris.inputs.size());
+    REQUIRE(rk4.outputs.size() == boris.outputs.size());
+    for (std::size_t index = 0; index < boris.inputs.size(); ++index) {
+        REQUIRE(rk4.inputs[index].number == boris.inputs[index].number);
+        REQUIRE(rk4.inputs[index].type == boris.inputs[index].type);
+        REQUIRE(rk4.inputs[index].connectable == boris.inputs[index].connectable);
+    }
+    REQUIRE(rk4.outputs.front().number == boris.outputs.front().number);
+    REQUIRE(rk4.outputs.front().type == boris.outputs.front().type);
+    // And the family's own predicate agrees with the list, name by name: a scheme the builder did not recognize
+    // would be a node a user can place, wire and configure that the plan silently skips.
+    for (const graph::NodeDesc& described : types) REQUIRE(PusherNodes::is_pusher(described.type_name));
+    REQUIRE_FALSE(PusherNodes::is_pusher(FieldNodes::kDipoleType));
+    REQUIRE_FALSE(PusherNodes::is_pusher(std::string{"particle.rk45"}));
 
     const graph::PortDesc* magnetic = boris.find_port(PusherNodes::kPortMagnetic, false);
     const graph::PortDesc* electric = boris.find_port(PusherNodes::kPortElectric, false);
@@ -2232,7 +2254,7 @@ TEST_CASE("magnetosphere.pusher_nodes.the_type_declares_the_ports_the_builder_re
             BorisAdvancer::kDefaultSpeedLimit);
 
     qp::host::PluginHost host{qp::plugin::Capability::particle_domain};
-    REQUIRE(PusherNodes::mount(host) == 1);
+    REQUIRE(PusherNodes::mount(host) == 2);
     REQUIRE(host.node_types().find(PusherNodes::kBorisType) != nullptr);
 }
 

@@ -21,6 +21,7 @@
 #include <qp/host/host.hpp>
 
 #include <qp/plugins/magnetosphere/baked_field.hpp>
+#include <qp/plugins/magnetosphere/boris.hpp>
 #include <qp/plugins/magnetosphere/dipole.hpp>
 #include <qp/plugins/magnetosphere/emitter.hpp>
 #include <qp/plugins/magnetosphere/field_lines_item.hpp>
@@ -29,6 +30,8 @@
 #include <qp/plugins/magnetosphere/plan.hpp>
 #include <qp/plugins/magnetosphere/render_nodes.hpp>
 #include <qp/plugins/magnetosphere/run.hpp>
+
+#include <qp/plugins/magnetosphere/rk4.hpp>
 #include <qp/plugins/magnetosphere/view_item.hpp>
 #include <qp/plugins/magnetosphere/units.hpp>
 
@@ -81,7 +84,7 @@ struct Scene final {
         // the multiplier, the convection field, the corotation field, the atmosphere, the current sheet, the blend,
         // the resampler, the magnetopause and the mix.
         REQUIRE(FieldNodes::mount(host) == 14);
-        REQUIRE(PusherNodes::mount(host) == 1);
+        REQUIRE(PusherNodes::mount(host) == 2);
         REQUIRE(EmitterNodes::mount(host) == 1);
         // The render item too, or `build_plan` cannot look its descriptor up and silently records no
         // declaration for it -- which is the failure this case exists to catch, and it caught it here first.
@@ -148,7 +151,7 @@ struct Chain final {
 };
 
 [[nodiscard]] Chain add_chain(Scene& scene, double tilt_degrees, double l_shell, double count, double beta,
-                              double pitch_deg) {
+                              double pitch_deg, const char* pusher_type = PusherNodes::kBorisType) {
     Chain chain;
     chain.field = scene.add_dipole(tilt_degrees);
     chain.emitter = scene.add(EmitterNodes::kRingType);
@@ -158,7 +161,7 @@ struct Chain final {
     scene.set(chain.emitter, EmitterNodes::kPortPitchAngle, pitch_deg);
     scene.set(chain.emitter, EmitterNodes::kPortFlowAngle, 90.0);
     scene.set(chain.emitter, EmitterNodes::kPortRingSpan, 360.0);
-    chain.pusher = scene.add(PusherNodes::kBorisType);
+    chain.pusher = scene.add(pusher_type);
     scene.set(chain.pusher, PusherNodes::kPortMaxRangeRe, 20.0);
     scene.wire(chain.field, FieldNodes::kPortField, chain.emitter, EmitterNodes::kPortMagnetic);
     scene.wire(chain.field, FieldNodes::kPortField, chain.pusher, PusherNodes::kPortMagnetic);
@@ -424,6 +427,62 @@ TEST_CASE("magnetosphere.emitter.a_ring_is_launched_at_the_pitch_angle_it_asks_f
     pp::ParticleState none;
     REQUIRE_FALSE(emit_ring(single, empty_field.view(), empty_grid, none));
     REQUIRE(none.count() == 0);
+}
+
+TEST_CASE("magnetosphere.rk4.a_run_reports_which_scheme_it_used", "[magnetosphere]") {
+    // **The family is one question with several answers, and a report may not name the wrong one.** A comparison
+    // between two integrators whose note said "boris" for both would be a comparison of nothing, and the run is
+    // where the name surfaces: it reads it from the kernel the plan built. So this case drives the same chain the
+    // closed-loop case drives, with the fourth-order node instead, and checks the name -- and the physics that says
+    // the run really happened -- at every place it appears.
+    Scene scene;
+    const Chain chain = add_chain(scene, /*tilt=*/0.0, /*l_shell=*/6.6, /*count=*/4, /*beta=*/0.01,
+                                  /*pitch=*/90.0, PusherNodes::kRk4Type);
+    REQUIRE(scene.bake().has_value());
+    REQUIRE(scene.host.node_types().find(PusherNodes::kRk4Type) != nullptr);
+
+    MagnetosphereRun run;
+    REQUIRE(run.build(scene.g, scene.declared, scene.host.node_types(), scene.fields) == RunRefusal::ok);
+    REQUIRE(run.built());
+    REQUIRE(run.plan().steps.size() == 1);
+    REQUIRE(run.plan().pushers == 1);
+    REQUIRE(run.state().count() == 4);
+    // The kernel the plan built for this step is the fourth-order one, and it says so by name.
+    REQUIRE(run.plan().steps.front().kernel != nullptr);
+    REQUIRE(run.plan().steps.front().kernel->name() == std::string_view{Rk4Advancer::kName});
+    // The required-slot mask is the family's, and the recipe is the same: a step with no magnetic field is refused
+    // by name whatever scheme would have run it.
+    REQUIRE(run.plan().steps.front().required_slots == PusherParams::kRequiredFields);
+
+    const std::size_t steps = 100;
+    REQUIRE(run.advance(steps, 0.01).has_value());
+    REQUIRE(run.advance_report().steps == steps);
+    REQUIRE(run.state().live_count() == 4);
+    // The note names the scheme: `rk4`, not the default. It is the run's own record, which is the sentence a ledger
+    // entry carries.
+    const qp::graph::execution::GraphRunReport record = run.report();
+    REQUIRE(record.note.find(Rk4Advancer::kName) != std::string::npos);
+    REQUIRE(record.note.find(BorisAdvancer::kName) == std::string::npos);
+
+    // And the same graph with the default node names the default, so the two statements above are about the
+    // scheme rather than about the string "rk4" appearing somewhere in a note.
+    Scene boris_scene;
+    const Chain boris_chain = add_chain(boris_scene, 0.0, 6.6, 4.0, 0.01, 90.0);
+    REQUIRE(boris_scene.bake().has_value());
+    MagnetosphereRun boris_run;
+    REQUIRE(boris_run.build(boris_scene.g, boris_scene.declared, boris_scene.host.node_types(),
+                            boris_scene.fields) == RunRefusal::ok);
+    REQUIRE(boris_run.plan().steps.front().kernel->name() == std::string_view{BorisAdvancer::kName});
+    REQUIRE(boris_run.advance(steps, 0.01).has_value());
+    REQUIRE(boris_run.report().note.find(BorisAdvancer::kName) != std::string::npos);
+    // One cadence, two schemes, and a population launched the same way: the speeds differ, because one scheme loses
+    // a little of every rotation and the other does not. That is the pair the kit exists to show.
+    const auto speed_of = [](const pp::ParticleState& state) {
+        return norm(Vec3{state.at(0, 0, pp::ParticleState::Slot::velocity),
+                         state.at(0, 1, pp::ParticleState::Slot::velocity),
+                         state.at(0, 2, pp::ParticleState::Slot::velocity)});
+    };
+    REQUIRE(speed_of(run.state()) < speed_of(boris_run.state()));
 }
 
 TEST_CASE("magnetosphere.run.a_graph_becomes_a_run", "[magnetosphere]") {

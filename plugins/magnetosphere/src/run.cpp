@@ -23,6 +23,7 @@
 
 #include <qp/plugins/magnetosphere/boris.hpp>
 #include <qp/plugins/magnetosphere/field_nodes.hpp>
+#include <qp/plugins/magnetosphere/rk4.hpp>
 
 #include <cstddef>
 #include <utility>
@@ -42,6 +43,12 @@ namespace pp = qp::graph::particles;
     return node != nullptr && node->type_name == type_name;
 }
 
+/// @brief Whether `id` names one of this kit's pushers, whichever scheme it is.
+[[nodiscard]] bool is_pusher_node(const graph::Graph& g, graph::NodeId id) noexcept {
+    const graph::Node* node = g.find_node(id);
+    return node != nullptr && PusherNodes::is_pusher(node->type_name);
+}
+
 /// @brief The node feeding `socket`, or an invalid id when nothing is wired.
 [[nodiscard]] graph::NodeId upstream(const graph::Graph& g, graph::NodeId consumer,
                                      graph::PortNumber socket) noexcept {
@@ -58,7 +65,7 @@ namespace pp = qp::graph::particles;
     graph::NodeId current = upstream(g, pusher, PusherNodes::kPortStateIn);
     for (std::size_t hop = 0; current.valid() && hop <= g.slots().size(); ++hop) {
         if (is_type(g, current, EmitterNodes::kRingType)) return current;
-        if (!is_type(g, current, PusherNodes::kBorisType)) return graph::NodeId{};
+        if (!is_pusher_node(g, current)) return graph::NodeId{};
         current = upstream(g, current, PusherNodes::kPortStateIn);
     }
     return graph::NodeId{};
@@ -75,7 +82,7 @@ namespace pp = qp::graph::particles;
 /// @brief Whether the graph holds a pusher, which is what decides if there is anything to step.
 [[nodiscard]] bool has_pusher(const graph::Graph& g) noexcept {
     for (const graph::NodeSlot& slot : g.slots()) {
-        if (slot.occupied && slot.node.type_name == PusherNodes::kBorisType) return true;
+        if (slot.occupied && PusherNodes::is_pusher(slot.node.type_name)) return true;
     }
     return false;
 }
@@ -147,15 +154,24 @@ qp::graph::execution::GraphRunReport MagnetosphereRun::report() const {
     out.live = state_.live_count();
     out.absorbed = state_.count_with(pp::Status::absorbed);
     out.escaped = state_.count_with(pp::Status::escaped);
-    // The kernels this kit built are `BorisAdvancer`s, and the name check is what makes the downcast a checked
-    // claim rather than an assumption: a kernel this kit did not build would be skipped rather than read as one.
+    // The kernels this kit built derive from `PusherAdvancer`, and the name check is what makes the downcast a
+    // checked claim rather than an assumption: a kernel this kit did not build would be skipped rather than read as
+    // one. The counters live on the **family**, not on Boris, so a second scheme is reported by this same loop --
+    // and the note names the schemes a run actually used, because a report that said "boris" for an RK4 run would
+    // be the one thing a comparison is not allowed to get wrong.
+    std::string schemes;
     for (const std::unique_ptr<pk::IBatchAdvancer>& kernel : plan_.kernels) {
-        if (kernel != nullptr && kernel->name() == std::string_view{BorisAdvancer::kName}) {
-            out.speed_clamps += static_cast<const BorisAdvancer*>(kernel.get())->speed_clamps();
-        }
+        if (kernel == nullptr) continue;
+        const bool ours = kernel->name() == std::string_view{BorisAdvancer::kName} ||
+                          kernel->name() == std::string_view{Rk4Advancer::kName};
+        if (!ours) continue;
+        out.speed_clamps += static_cast<const PusherAdvancer*>(kernel.get())->speed_clamps();
+        if (!schemes.empty()) schemes += "+";
+        schemes += std::string{kernel->name()};
     }
-    out.note = std::string{BorisAdvancer::kName} + ": " + std::to_string(out.steps) + " steps, " +
-               std::to_string(out.live) + " of " + std::to_string(out.particles) + " live";
+    if (schemes.empty()) schemes = "no pusher";
+    out.note = schemes + ": " + std::to_string(out.steps) + " steps, " + std::to_string(out.live) + " of " +
+               std::to_string(out.particles) + " live";
     return out;
 }
 
@@ -316,7 +332,7 @@ bool MagnetosphereRunProvider::claims(const graph::Graph& graph) const noexcept 
     for (const graph::NodeSlot& slot : graph.slots()) {
         if (!slot.occupied) continue;
         const std::string& type = slot.node.type_name;
-        if (type == FieldNodes::kDipoleType || type == EmitterNodes::kRingType || type == PusherNodes::kBorisType) {
+        if (type == FieldNodes::kDipoleType || type == EmitterNodes::kRingType || PusherNodes::is_pusher(type)) {
             return true;
         }
     }
@@ -330,7 +346,7 @@ qp::graph::execution::RunBuildResult MagnetosphereRunProvider::build(const graph
     graph::Declarations declared;
     for (const graph::NodeSlot& slot : graph.slots()) {
         if (!slot.occupied) continue;
-        if (slot.node.type_name == PusherNodes::kBorisType) {
+        if (PusherNodes::is_pusher(slot.node.type_name)) {
             declared.add(graph::DeclaredOutput{slot.node.id, PusherNodes::kPortStateOut});
         }
     }
@@ -370,7 +386,7 @@ RunRefusal MagnetosphereRun::build(const graph::Graph& g, const graph::Declarati
     // -- 2. The emitter: backwards along the state channel from every pusher ---------------------------------
     std::vector<graph::NodeId> emitters;
     for (const graph::NodeId id : whole.particle.order()) {
-        if (!is_type(g, id, PusherNodes::kBorisType)) continue;
+        if (!is_pusher_node(g, id)) continue;
         const graph::NodeId emitter = emitter_behind(g, id);
         if (!emitter.valid()) return RunRefusal::no_emitter;
         if (!contains(emitters, emitter)) emitters.push_back(emitter);
@@ -402,7 +418,7 @@ RunRefusal MagnetosphereRun::build(const graph::Graph& g, const graph::Declarati
     // carries `q/m` because that is what the pusher divides by, and the trace needs `m` (see `mass_of`).
     recorded_source_ = emitters.front();
     for (const graph::NodeId id : whole.particle.order()) {
-        if (is_type(g, id, PusherNodes::kBorisType)) {
+        if (is_pusher_node(g, id)) {
             recorded_source_ = id;
             break;
         }
