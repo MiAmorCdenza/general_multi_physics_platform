@@ -363,6 +363,54 @@ public:
     /// that changing the default is a decision rather than a nudge.
     static constexpr double kDefaultConvectionA = 1.5e-12;
 
+    /// @brief The Volland-Stern **shielding coefficient**: a scalar that suppresses convection inside `r0`.
+    ///
+    /// The third of `efield.py`'s three, and the one that is **not a field**: the reference's own header states the
+    /// family's composition rule and then shows it --
+    ///
+    ///     E = add( corotation(B), mul( convection, volland_shield ) )
+    ///
+    /// -- so what this node publishes is the factor inside that `mul`, `w = (r / r0)^2` for `r < r0` and `1`
+    /// outside. It composes with `field.mul` in this kit exactly as it does there, which is why it is a scalar
+    /// producer with its own grid and no field inputs.
+    ///
+    /// ## What the coefficient construction is, and what it is not
+    ///
+    /// Multiplying a field by a function of position is **not** the same as multiplying its potential: with
+    /// `E = w (-grad phi)` the curl is `grad w x (-grad phi)`, which is not zero, so the shielded field is not the
+    /// gradient of the shielded potential `w phi`. The reference multiplies the field, and this node publishes the
+    /// factor rather than deciding for the caller which of the two constructions they asked for -- a graph that
+    /// wants `-grad(w phi)` can have it by wiring a different combination, and the difference between the two has a
+    /// closed form (`phi grad w`) that the case measures rather than argues about. That is the whole reason this is
+    /// a **coefficient** and not a field: a node that published `w E` would have made the choice for every graph
+    /// that ever needed the factor.
+    ///
+    /// ## The reference's floor, and why it is not here
+    ///
+    /// The reference writes `where((r < r0) & (r > 0.1), (r/r0)^2, 1.0)`, so inside a tenth of an earth radius its
+    /// coefficient is **one** -- no shielding at all. `(r/r0)^2` has no singularity at the origin (it is zero
+    /// there), so the floor is guarding something else, and in this kit a coefficient that jumps to one at the
+    /// centre of the planet would be a number nobody asked for. The formula is used as written, without the floor.
+    ///
+    /// ## Where the Kp scaling is not, and why
+    ///
+    /// The full Volland-Stern model scales both `A` and `r0` with `Kp`, and the convection node's contract already
+    /// records that the reopening condition for its amplitude is a driver. The driver now exists
+    /// (`SourceNodes::kKpType`), but the reference's `efield.py` has **no `Kp` formula in it** -- its convection
+    /// node carries a bare `multiplier` and this node a bare `r0` -- so no scaling is invented here. The
+    /// reopening condition is a **source** for that scaling rather than a driver: when one is chosen, `Kp` feeds
+    /// both nodes through the optional-socket pattern `field.magnetopause` established.
+    static constexpr const char* kShieldType = "field.shield";
+    /// @brief The radius the coefficient reaches one at, in metres: inside it, convection is suppressed.
+    static constexpr qp::graph::PortNumber kPortShieldR0 = 1;
+    /// @brief Where the **shield** node's grid starts: after the one parameter.
+    static constexpr qp::graph::PortNumber kPortShieldOrigin0 = 2;
+    /// @brief The coefficient.
+    static constexpr qp::graph::PortNumber kPortShieldOut = 1;
+
+    /// @brief The default shielding radius, in metres: four earth radii, the reference implementation's own value.
+    static constexpr double kDefaultShieldR0M = 4.0 * kEarthRadiusM;
+
     /// @brief The **corotation** electric field: the field a plasma moving with the planet sees.
     ///
     /// The second of `efield.py`'s three, and the one that has to exist for the convection field to mean anything:
@@ -1330,6 +1378,41 @@ public:
  */
 [[nodiscard]] bool bake_convection(double amplitude_v_per_m2, const GridSpec& grid,
                                    qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
+
+/**
+ * @brief Bakes the Volland-Stern shielding coefficient onto `grid`: `w = min(1, (r / r0)^2)`.
+ *
+ * The model and the construction's consequences are argued on `kShieldType`. What belongs here is what the case
+ * can hold the arithmetic to, and what is refused.
+ *
+ * ## The two regimes are exact, and the shell is where they meet
+ *
+ * Inside `r0` the coefficient is `(r/r0)^2` and outside it is **one**, so a graph that multiplies this by a field
+ * leaves that field untouched beyond the shielding radius -- to the last bit, not approximately. On the shell
+ * itself the two expressions agree because `r/r0` is one there, which is what makes `r0` a *parameter with a
+ * visible meaning* rather than a scale factor. And `(r/r0)^2` is zero at the origin and has no singularity there,
+ * so unlike the reference implementation this formula needs no floor, and none is applied.
+ *
+ * @param r0_m  The radius at which the coefficient reaches one, in metres. Must be positive and finite.
+ * @param grid  Where to bake. At least two nodes an axis and a positive spacing; anything else is refused.
+ * @param key   Who is publishing it.
+ * @param fields The store. Borrowed; the samples are moved into it on success.
+ *
+ * @ownership   owns the samples it publishes on success
+ * @thread      main
+ * @pre         none
+ * @post        On true, `fields.view(key)` is a readable **scalar** volume of dimensionless coefficients, in
+ *              `(0, 1]`, equal at every node to `min(1, (r / r0)^2)`
+ * @invariant   On false the store is unchanged
+ * @errors      Returns false rather than throwing, for a non-positive or non-finite `r0_m`, or for a grid that
+ *              cannot be baked
+ * @complexity  O(points)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.the_shield_suppresses_convection_inside_its_radius
+ */
+[[nodiscard]] bool bake_shield(double r0_m, const GridSpec& grid, qp::graph::field::FieldKey key,
+                               qp::graph::field::FieldSet& fields);
 
 /**
  * @brief Bakes the corotation field, `E = -(Omega x r) x B`, from a magnetic field that is already published.

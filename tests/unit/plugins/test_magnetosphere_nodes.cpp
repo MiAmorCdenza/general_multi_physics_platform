@@ -126,7 +126,7 @@ struct Scene final {
         // numbers, which is the composition principle -- a shielding field is `mul(convection, shield)` -- and three
         // of them could not be composed out of the others: no wiring of sums and products keeps a field
         // divergence-free (the two blends), and none of them moves a field onto another lattice (the resampler).
-        REQUIRE(FieldNodes::mount(host) == 14);
+        REQUIRE(FieldNodes::mount(host) == 15);
         REQUIRE(SourceNodes::mount(host) == 1);
         REQUIRE(PusherNodes::mount(host) == 2);
     }
@@ -222,7 +222,7 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // mask, the multiplier and the convection field. Each is a **type of its own** with its own port numbers,
     // which is the composition principle -- a shielding field is `mul(convection, shield)`, not a switch inside a
     // node.
-    REQUIRE(types.size() == 14);
+    REQUIRE(types.size() == 15);
     REQUIRE(types[0].type_name == FieldNodes::kDipoleType);
     REQUIRE(types[1].type_name == FieldNodes::kUniformType);
     REQUIRE(types[2].type_name == FieldNodes::kSumType);
@@ -291,7 +291,7 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     qp::host::PluginHost host{qp::plugin::Capability::node_types};
     // Fourteen field models now, and the count is asserted rather than assumed: it is the one place a new type
     // announces itself in the test suite, so a type that silently failed to register is a failure here.
-    REQUIRE(FieldNodes::mount(host) == 14);
+    REQUIRE(FieldNodes::mount(host) == 15);
     REQUIRE(host.node_types().find(FieldNodes::kDipoleType) != nullptr);
     REQUIRE(FieldNodes::mount(host) == 0);
 }
@@ -485,7 +485,7 @@ TEST_CASE("magnetosphere.field_nodes.a_field_scales_by_its_weight", "[magnetosph
     // where the weight belongs are both refused by `check_connection`, so the multiplier's own check is the second
     // line of defence rather than the only one.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 14);
+    REQUIRE(types.size() == 15);
     REQUIRE(types[5].type_name == FieldNodes::kMulType);
     REQUIRE(types[5].has_compute);
     const graph::PortDesc* mul_field = types[5].find_port(FieldNodes::kPortMulField, false);
@@ -722,7 +722,7 @@ TEST_CASE("magnetosphere.field_nodes.a_blend_does_not_open_a_divergence", "[magn
     // The declaration: the type's own port numbers, both sockets vector fields, and three parameters that are
     // typed into a panel rather than wired from a node.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 14);
+    REQUIRE(types.size() == 15);
     REQUIRE(types[10].type_name == FieldNodes::kBlendType);
     REQUIRE(types[10].has_compute);
     REQUIRE(types[10].allow_in_field_domain);
@@ -847,7 +847,7 @@ TEST_CASE("magnetosphere.field_nodes.the_convection_field_is_the_potentials_grad
 
     // The type is declared like the others and allowed only where a bake is.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 14);
+    REQUIRE(types.size() == 15);
     REQUIRE(types[6].type_name == FieldNodes::kConvectionType);
     REQUIRE(types[6].has_compute);
     REQUIRE(types[6].allow_in_field_domain);
@@ -976,7 +976,7 @@ TEST_CASE("magnetosphere.field_nodes.corotation_is_the_rotation_the_field_allows
     // The type declares one socket and no grid parameters, which is the decision this node makes: it bakes on the
     // lattice of the field it reads, so there is no second grid to disagree with the first.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 14);
+    REQUIRE(types.size() == 15);
     REQUIRE(types[7].type_name == FieldNodes::kCorotationType);
     REQUIRE(types[7].has_compute);
     REQUIRE(types[7].inputs.size() == 1);
@@ -1276,7 +1276,7 @@ TEST_CASE("magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_
 
     // And the type is declared with its own grid ports, three parameters first -- the same shape the mask has.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 14);
+    REQUIRE(types.size() == 15);
     REQUIRE(types[8].type_name == FieldNodes::kAtmosphereType);
     REQUIRE(types[8].has_compute);
     REQUIRE(types[8].allow_in_field_domain);
@@ -1442,7 +1442,7 @@ TEST_CASE("magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_impl
 
     // The type declares its own grid ports after its two parameters, and publishes tesla.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 14);
+    REQUIRE(types.size() == 15);
     REQUIRE(types[9].type_name == FieldNodes::kCurrentSheetType);
     REQUIRE(types[9].has_compute);
     REQUIRE(types[9].allow_in_field_domain);
@@ -1598,7 +1598,7 @@ TEST_CASE("magnetosphere.field_nodes.a_resample_moves_the_samples_and_adds_no_in
     // The declaration: its own numbers, nine grid ports that are typed rather than wired, and a grid of its own --
     // which is what makes it the node a pusher can be pointed at when the field it wants is on another lattice.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 14);
+    REQUIRE(types.size() == 15);
     REQUIRE(types[11].type_name == FieldNodes::kResampleType);
     REQUIRE(types[11].has_compute);
     REQUIRE(types[11].allow_in_field_domain);
@@ -1770,7 +1770,7 @@ TEST_CASE("magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose",
     REQUIRE(read.width_m == FieldNodes::kDefaultMagnetopauseWidthM);
 
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 14);
+    REQUIRE(types.size() == 15);
     REQUIRE(types[12].type_name == FieldNodes::kMagnetopauseType);
     REQUIRE(types[12].has_compute);
     REQUIRE(types[12].allow_in_field_domain);
@@ -1994,7 +1994,7 @@ TEST_CASE("magnetosphere.field_nodes.a_mix_blends_the_potentials_not_the_fields"
 
     // The declaration: its own numbers, a scalar weight socket, and the correction typed in rather than wired.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 14);
+    REQUIRE(types.size() == 15);
     REQUIRE(types[13].type_name == FieldNodes::kMixType);
     REQUIRE(types[13].has_compute);
     REQUIRE(types[13].allow_in_field_domain);
@@ -2006,6 +2006,170 @@ TEST_CASE("magnetosphere.field_nodes.a_mix_blends_the_potentials_not_the_fields"
     const graph::PortDesc* mixed_out = types[13].find_port(FieldNodes::kPortMixOut, true);
     REQUIRE(mixed_out != nullptr);
     REQUIRE(mixed_out->unit_symbol == std::string{"T"});
+}
+
+TEST_CASE("magnetosphere.field_nodes.the_shield_suppresses_convection_inside_its_radius", "[magnetosphere]") {
+    // **The third of `efield.py`'s three, and the one that is a coefficient rather than a field.** The reference's
+    // own header states the family's composition and then shows it: `E = add(corotation(B), mul(convection,
+    // volland_shield))`. So this case checks the factor's shape, checks that the multiplier composes it exactly, and
+    // then measures the one mathematical consequence that a *coefficient* has and a *potential* would not.
+    const double re = kEarthRadiusM;
+    const double r0 = 4.0 * re;
+    const double amplitude = FieldNodes::kDefaultConvectionA;
+    const GridSpec grid{Vec3{-8.0 * re, -8.0 * re, -8.0 * re}, Vec3{0.25 * re, 0.25 * re, 0.25 * re}, 65, 65, 65};
+    gfield::FieldSet fields;
+    const gfield::FieldKey shield_key{91, FieldNodes::kPortShieldOut};
+    REQUIRE(bake_shield(r0, grid, shield_key, fields));
+    const gfield::FieldValue shield = fields.view(shield_key);
+    REQUIRE(gfield::is_readable(shield));
+    // A **scalar** table, and the shape is asserted before anything is read out of it: a consumer that assumed
+    // three components would read other nodes' coefficients and call them its own.
+    REQUIRE(shield.is_scalar());
+    REQUIRE_FALSE(shield.is_vector());
+    REQUIRE(shield.desc.component == qp::abi::ComponentKind::scalar);
+    REQUIRE(shield.point_count() == grid.point_count());
+
+    // Every node against the closed form, and the two regimes counted so that neither can pass by being empty.
+    std::uint64_t inside = 0;
+    std::uint64_t outside = 0;
+    for (std::uint64_t point = 0; point < shield.point_count(); ++point) {
+        const std::uint64_t k = point % grid.nz;
+        const std::uint64_t j = (point / grid.nz) % grid.ny;
+        const std::uint64_t i = point / (grid.nz * grid.ny);
+        const Vec3 at{grid.origin_m.x + static_cast<double>(i) * grid.spacing_m.x,
+                      grid.origin_m.y + static_cast<double>(j) * grid.spacing_m.y,
+                      grid.origin_m.z + static_cast<double>(k) * grid.spacing_m.z};
+        const double ratio = norm(at) / r0;
+        const double expected = ratio < 1.0 ? ratio * ratio : 1.0;
+        REQUIRE(gfield::get_component(shield, point, 0) == expected);
+        // In `[0, 1]`, and the bottom of that range is **reached**: the coefficient is zero at the centre, which is
+        // the formula's own value there and the reason this node needs no floor (the reference's `r > 0.1` guard
+        // turns the centre into *one* instead, which is the one place its coefficient is not the formula's).
+        REQUIRE(gfield::get_component(shield, point, 0) >= 0.0);
+        REQUIRE(gfield::get_component(shield, point, 0) <= 1.0);
+        if (ratio < 1.0) {
+            ++inside;
+        } else {
+            ++outside;
+        }
+    }
+    REQUIRE(inside > 0);
+    REQUIRE(outside > 0);
+
+    // The shell itself: a node at exactly the shielding radius gets **one**, because the two expressions agree
+    // there. That is what makes `r0` a radius with a visible meaning rather than a scale factor, and the grid is
+    // whole earth radii in this test so the node exists.
+    const auto at_node = [&](std::uint32_t i, std::uint32_t j, std::uint32_t k) {
+        return gfield::get_component(shield, (static_cast<std::uint64_t>(i) * grid.ny + j) * grid.nz + k, 0);
+    };
+    REQUIRE(at_node(48, 32, 32) == 1.0);   // (4.0, 0, 0) earth radii: exactly r0
+    REQUIRE(at_node(47, 32, 32) < 1.0);    // (3.75, 0, 0): inside
+    REQUIRE(at_node(32, 32, 32) == 0.0);   // the centre: the formula's own zero, and no floor in the way
+
+    // **The composition the reference names**, exactly: outside the shell the product *is* the convection field, to
+    // the last bit, and inside it is the coefficient times the field -- which `field.mul`'s case already asserts
+    // for arbitrary inputs, and which this case asserts for the pair that exists to be used together.
+    const gfield::FieldKey convection_key{92, FieldNodes::kPortField};
+    const gfield::FieldKey shielded_key{93, FieldNodes::kPortMulOut};
+    REQUIRE(bake_convection(amplitude, grid, convection_key, fields));
+    const gfield::FieldValue convection = fields.view(convection_key);
+    REQUIRE(bake_scaled(convection, shield, shielded_key, fields));
+    const gfield::FieldValue shielded = fields.view(shielded_key);
+    REQUIRE(gfield::is_readable(shielded));
+    REQUIRE(shielded.point_count() == convection.point_count());
+
+    std::uint64_t weakened = 0;
+    std::uint64_t untouched = 0;
+    for (std::uint64_t point = 0; point < shielded.point_count(); ++point) {
+        const double w = gfield::get_component(shield, point, 0);
+        for (std::uint64_t component = 0; component < 3; ++component) {
+            const double field_value = gfield::get_component(convection, point, component);
+            REQUIRE(gfield::get_component(shielded, point, component) == field_value * w);
+        }
+        if (w < 1.0) {
+            ++weakened;
+        } else {
+            // Outside the shell the coefficient is one, so the product is the field **exactly** -- no rounding, no
+            // tolerance, which is the property a graph relies on when it shields one region and not another.
+            REQUIRE(gfield::get_component(shielded, point, 0) == gfield::get_component(convection, point, 0));
+            ++untouched;
+        }
+    }
+    REQUIRE(weakened > 0);
+    REQUIRE(untouched > 0);
+
+    // **What the coefficient construction does that a potential construction would not.** `E = w (-grad phi)` is not
+    // `-grad(w phi)`: the difference is `phi grad w`, and the curl is `grad w x E`. With `phi = 2Axy` and
+    // `w = r^2/r0^2` the curl has a closed form -- `-4A (x^2 - y^2) / r0^2` -- and the case measures it off the
+    // baked table with a five-point stencil, which is exact for polynomials of the degree in play modulo its own
+    // truncation. A node that had published `-grad(w phi)` instead would fail this by a factor of order one.
+    const auto interior = [&](std::uint32_t i, std::uint32_t j, std::uint32_t k) {
+        return gfield::get_component(shielded, (static_cast<std::uint64_t>(i) * grid.ny + j) * grid.nz + k, 0);
+    };
+    const auto interior_y = [&](std::uint32_t i, std::uint32_t j, std::uint32_t k) {
+        return gfield::get_component(shielded, (static_cast<std::uint64_t>(i) * grid.ny + j) * grid.nz + k, 1);
+    };
+    const double h = grid.spacing_m.x;
+    double worst = 0.0;
+    double strongest = 0.0;
+    for (std::uint32_t i = 2; i + 2 < grid.nx; ++i) {
+        for (std::uint32_t j = 2; j + 2 < grid.ny; ++j) {
+            const std::uint32_t k = grid.nz / 2;
+            const double x = grid.origin_m.x + static_cast<double>(i) * h;
+            const double y = grid.origin_m.y + static_cast<double>(j) * h;
+            const double z = grid.origin_m.z + static_cast<double>(k) * h;
+            // **The whole stencil must fit inside the shell.** A five-point derivative is exact for the
+            // cubic this field is inside `r0`, and it stops being exact the moment one of its nodes sits
+            // beyond the radius where the coefficient saturates -- which is what the first version of this
+            // measurement did, and why it disagreed with the closed form by thirty-nine percent at the node
+            // nearest the boundary.
+            if (norm(Vec3{x, y, z}) + 2.0 * h >= r0) continue;
+            const double dEy_dx = (-interior_y(i + 2, j, k) + 8.0 * interior_y(i + 1, j, k) -
+                                   8.0 * interior_y(i - 1, j, k) + interior_y(i - 2, j, k)) /
+                                  (12.0 * h);
+            const double dEx_dy = (-interior(i, j + 2, k) + 8.0 * interior(i, j + 1, k) -
+                                   8.0 * interior(i, j - 1, k) + interior(i, j - 2, k)) /
+                                  (12.0 * h);
+            const double measured = dEy_dx - dEx_dy;
+            const double predicted = -4.0 * amplitude * (x * x - y * y) / (r0 * r0);
+            const double gap = std::abs(measured - predicted);
+            if (gap > worst) worst = gap;
+            if (std::abs(predicted) > strongest) strongest = std::abs(predicted);
+        }
+    }
+    CAPTURE(worst, strongest);
+    REQUIRE(strongest > 0.0);
+    // **Measured: 1.4e-15 of the strongest closed-form value**, which is the rounding of the arithmetic -- the
+    // five-point stencil is exact for the cubic this field is inside the shell, so what is left is not truncation
+    // but the last bits. The tolerance is a million times that, because the statement worth making is "this is the
+    // coefficient construction" rather than "this is where one machine rounds": a node that had published
+    // `-grad(w phi)` would miss by a factor of order one, nine orders of magnitude above this bound.
+    REQUIRE(worst < 1.0e-9 * strongest);
+
+    // Refusals: a shielding radius of zero is not a smaller shield, and a grid that cannot be baked is refused
+    // rather than approximated.
+    REQUIRE_FALSE(bake_shield(0.0, grid, shield_key, fields));
+    REQUIRE_FALSE(bake_shield(-3.0 * re, grid, shield_key, fields));
+    REQUIRE_FALSE(bake_shield(std::nan(""), grid, shield_key, fields));
+    const GridSpec no_interior{Vec3{}, Vec3{re, re, re}, 1, 1, 1};
+    REQUIRE_FALSE(bake_shield(r0, no_interior, shield_key, fields));
+
+    // The declaration: its own numbers, a scalar output, and nine grid ports that are typed rather than wired.
+    const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
+    REQUIRE(types.size() == 15);
+    REQUIRE(types[14].type_name == FieldNodes::kShieldType);
+    REQUIRE(types[14].has_compute);
+    REQUIRE(types[14].allow_in_field_domain);
+    REQUIRE_FALSE(types[14].allow_in_particle_domain);
+    const graph::PortDesc* coefficient = types[14].find_port(FieldNodes::kPortShieldOut, true);
+    REQUIRE(coefficient != nullptr);
+    REQUIRE(coefficient->type == qp::ports::kScalarField);
+    REQUIRE(coefficient->unit_symbol == std::string{"1"});
+    for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+        const graph::PortDesc* port = types[14].find_port(FieldNodes::kPortShieldOrigin0 + offset, false);
+        REQUIRE(port != nullptr);
+        REQUIRE_FALSE(port->connectable);
+    }
 }
 
 TEST_CASE("magnetosphere.source.the_kp_index_moves_the_magnetopause", "[magnetosphere]") {

@@ -250,8 +250,8 @@ int main(int argc, char** argv) {
     // right when it was written and nothing tied it to the kit it was counting, which is the same shape as the
     // stale expectations this repository keeps finding in tests -- a number that describes another module's
     // inventory does not live in this one.
-    if (mounted_field_types != 14 || mounted_pushers != 2 || mounted_emitters != 1 || mounted_drivers != 1) {
-        qWarning().noquote() << "magnetosphere: mounted" << mounted_field_types << "of 14 field types,"
+    if (mounted_field_types != 15 || mounted_pushers != 2 || mounted_emitters != 1 || mounted_drivers != 1) {
+        qWarning().noquote() << "magnetosphere: mounted" << mounted_field_types << "of 15 field types,"
                              << mounted_pushers << "of 2 pushers," << mounted_emitters << "of 1 emitter and"
                              << mounted_drivers << "of 1 driver";
     }
@@ -327,6 +327,23 @@ int main(int argc, char** argv) {
         const std::size_t mix = node(FieldNodes::kMixType, "inside + outside");
         set(mix, FieldNodes::kPortMixCorrection, qp::ports::Value{1.0});
 
+        // The shielded convection field, as the reference composes it: `mul(convection, shield)` -- the
+        // coefficient node's whole purpose, wired exactly the way `efield.py`'s own header shows.
+        const std::size_t convection = node(FieldNodes::kConvectionType, "convection");
+        for (qp::graph::PortNumber axis = 0; axis < 3; ++axis) {
+            set(convection, FieldNodes::kPortConvectionOrigin0 + axis, qp::ports::Value{-20.0 * re});
+            set(convection, FieldNodes::kPortConvectionOrigin0 + 3 + axis, qp::ports::Value{1.0 * re});
+            set(convection, FieldNodes::kPortConvectionOrigin0 + 6 + axis, qp::ports::Value{41.0});
+        }
+        const std::size_t shield = node(FieldNodes::kShieldType, "shield");
+        set(shield, FieldNodes::kPortShieldR0, qp::ports::Value{4.0 * re});
+        for (qp::graph::PortNumber axis = 0; axis < 3; ++axis) {
+            set(shield, FieldNodes::kPortShieldOrigin0 + axis, qp::ports::Value{-20.0 * re});
+            set(shield, FieldNodes::kPortShieldOrigin0 + 3 + axis, qp::ports::Value{1.0 * re});
+            set(shield, FieldNodes::kPortShieldOrigin0 + 6 + axis, qp::ports::Value{41.0});
+        }
+        const std::size_t shielded = node(FieldNodes::kMulType, "shielded E");
+
         const std::size_t emitter = node(EmitterNodes::kRingType, "ring");
         set(emitter, EmitterNodes::kPortSpecies, qp::ports::Value{std::int64_t{0}});
         set(emitter, EmitterNodes::kPortLShell, qp::ports::Value{6.6});
@@ -360,6 +377,9 @@ int main(int argc, char** argv) {
         // the boundary. This is what source.kp exists for, and the demo shows the wire.
         wire(driver, SourceNodes::kPortKpOut, boundary, FieldNodes::kPortMagnetopauseKp);
         wire(mix, FieldNodes::kPortMixOut, emitter, EmitterNodes::kPortMagnetic);
+        wire(convection, FieldNodes::kPortField, shielded, FieldNodes::kPortMulField);
+        wire(shield, FieldNodes::kPortShieldOut, shielded, FieldNodes::kPortMulWeight);
+        wire(shielded, FieldNodes::kPortMulOut, pusher, PusherNodes::kPortElectric);
         wire(mix, FieldNodes::kPortMixOut, pusher, PusherNodes::kPortMagnetic);
         wire(emitter, EmitterNodes::kPortState, pusher, PusherNodes::kPortStateIn);
         wire(pusher, PusherNodes::kPortStateOut, particles, RenderNodes::kPortState);

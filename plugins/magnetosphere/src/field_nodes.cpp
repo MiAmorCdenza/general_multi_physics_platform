@@ -168,6 +168,10 @@ namespace {
         out = FieldNodes::kPortMagnetopauseOrigin0;
         return true;
     }
+    if (type_name == FieldNodes::kShieldType) {
+        out = FieldNodes::kPortShieldOrigin0;
+        return true;
+    }
     // `field.mul` and `field.blend` are the types that declare no grid at all: a product and a blend are both
     // defined on the lattice their inputs share, so they forward. A caller reaching here with one of them has
     // failed to follow the wire, which is what the walk below exists to do.
@@ -413,6 +417,33 @@ bool bake_convection(double amplitude_v_per_m2, const GridSpec& grid, gfield::Fi
     }
     const qp::abi::LatticeDesc desc = table.view(volt_per_metre_dimension()).desc;
     return fields.publish(key, desc, std::move(table.data()));
+}
+
+bool bake_shield(double r0_m, const GridSpec& grid, gfield::FieldKey key, gfield::FieldSet& fields) {
+    if (!bakeable(grid)) return false;
+    // Refused rather than clamped, for the reason the atmosphere node's scale height is: a zero or negative
+    // shielding radius is not a smaller shield, it is an inverted or absent one, and clamping would hide a sign
+    // error behind a picture that looks plausible.
+    if (!std::isfinite(r0_m) || !(r0_m > 0.0)) return false;
+
+    const qp::abi::LatticeDesc desc = qp::abi::make_lattice(
+        qp::abi::LatticeKind::volume, qp::abi::ComponentKind::scalar, qp::abi::ElementType::f64,
+        qp::abi::kDimensionless, grid.nx, grid.ny, grid.nz);
+
+    std::vector<double> coefficients(static_cast<std::size_t>(grid.point_count()), 1.0);
+    std::size_t at = 0;
+    for (std::uint32_t i = 0; i < grid.nx; ++i) {
+        for (std::uint32_t j = 0; j < grid.ny; ++j) {
+            for (std::uint32_t k = 0; k < grid.nz; ++k) {
+                const double r = norm(grid.node_position(i, j, k));
+                const double ratio = r / r0_m;
+                // `min(1, ratio^2)` and **not** a branch with a floor in it: the formula is already zero at the
+                // origin and already one outside, so the only thing a floor could add is a number nobody asked for.
+                coefficients[at++] = ratio < 1.0 ? ratio * ratio : 1.0;
+            }
+        }
+    }
+    return fields.publish(key, desc, std::move(coefficients));
 }
 
 bool bake_corotation(const gfield::FieldValue& magnetic, const Vec3& origin_m, const Vec3& spacing_m,
@@ -1359,6 +1390,49 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     mix_out.unit_symbol = "T";
     mix.outputs.push_back(mix_out);
 
+    // ---------------- the Volland-Stern shielding coefficient ----------------
+    graph::NodeDesc shield;
+    shield.type_name = kShieldType;
+    shield.label = "Volland-Stern shield";
+    shield.description = "The screening factor of the shielded convection field: one at and beyond the shielding "
+                         "radius, and `(r / r0)^2` inside it. It is a **coefficient**, not a field, and the "
+                         "reference's own composition shows why: `E = corotation + mul(convection, shield)`. Wire "
+                         "it into a multiplier beside the convection field and the drift stops inside `r0`, which is "
+                         "what makes the plasmapause a boundary rather than a guess.";
+    shield.category = "field";
+    shield.version = 1;
+    shield.allow_in_field_domain = true;
+    shield.allow_in_particle_domain = false;
+    shield.has_compute = true;
+    graph::PortDesc shield_radius = parameter(kPortShieldR0, "r0", "Shielding radius", "m", kDefaultShieldR0M);
+    shield_radius.description = "Where the coefficient reaches one, in metres. Four earth radii is the reference "
+                                "implementation's value, and it is the radius the reference's own range (one to ten) "
+                                "puts in the middle of the competition between convection and corotation.";
+    shield.inputs.push_back(shield_radius);
+    for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+        const char* names[9] = {"origin_x", "origin_y", "origin_z", "spacing_x", "spacing_y",
+                                "spacing_z", "count_x",  "count_y",   "count_z"};
+        const char* labels[9] = {"Grid origin x", "Grid origin y", "Grid origin z",   "Grid spacing x",
+                                 "Grid spacing y", "Grid spacing z", "Nodes along x", "Nodes along y",
+                                 "Nodes along z"};
+        const char* units[9] = {"m", "m", "m", "m", "m", "m", "", "", ""};
+        const double steps[9] = {kEarthRadiusM, kEarthRadiusM, kEarthRadiusM, 0.1 * kEarthRadiusM,
+                                 0.1 * kEarthRadiusM, 0.1 * kEarthRadiusM, 1.0, 1.0, 1.0};
+        shield.inputs.push_back(
+            parameter(kPortShieldOrigin0 + offset, names[offset], labels[offset], units[offset], steps[offset]));
+    }
+    graph::PortDesc shield_out;
+    shield_out.number = kPortShieldOut;
+    shield_out.name = "coef";
+    shield_out.label = "Coefficient";
+    shield_out.description = "The screening factor, dimensionless: one outside the shielding radius and falling to "
+                             "zero at the centre.";
+    shield_out.type = qp::ports::kScalarField;
+    shield_out.connectable = true;
+    shield_out.required = false;
+    shield_out.unit_symbol = "1";
+    shield.outputs.push_back(shield_out);
+
     // ---------------- the convection field ----------------
     graph::NodeDesc convection;
     convection.type_name = kConvectionType;
@@ -1534,7 +1608,7 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     return {std::move(dipole),      std::move(uniform),    std::move(sum),        std::move(electric),
             std::move(mask),        std::move(mul),        std::move(convection), std::move(corotation),
             std::move(atmosphere),  std::move(sheet),      std::move(blend),      std::move(resample),
-            std::move(magnetopause), std::move(mix)};
+            std::move(magnetopause), std::move(mix),     std::move(shield)};
 }
 
 gfield::FieldValue DipoleEvaluator::input_field(const graph::NodeId id, const graph::PortNumber port) const noexcept {
@@ -1686,6 +1760,20 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
         }
         Outcome out;
         out.emplace_back(FieldNodes::kPortResampleOut, qp::ports::Value{fields_->view(resample_key).desc});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
+    if (desc.type_name == FieldNodes::kShieldType) {
+        // A producer with its own grid, like the mask: the coefficient is a function of position and of nothing
+        // else, so it declares where it is sampled rather than borrowing a lattice it was not given.
+        const graph::InputView shield_view{inputs};
+        const double r0_m = real_or(shield_view, FieldNodes::kPortShieldR0, FieldNodes::kDefaultShieldR0M);
+        const GridSpec shield_grid = FieldNodes::read_from(shield_view, FieldNodes::kPortShieldOrigin0);
+        const gfield::FieldKey shield_key{id.index, FieldNodes::kPortShieldOut};
+        if (!bake_shield(r0_m, shield_grid, shield_key, *fields_)) {
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        Outcome out;
+        out.emplace_back(FieldNodes::kPortShieldOut, qp::ports::Value{fields_->view(shield_key).desc});
         return qp::diag::Result<Outcome>{std::move(out)};
     }
     if (desc.type_name == FieldNodes::kMagnetopauseType) {
