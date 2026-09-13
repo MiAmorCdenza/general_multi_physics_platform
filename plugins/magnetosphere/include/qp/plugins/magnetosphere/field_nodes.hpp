@@ -710,6 +710,121 @@ public:
     /// @brief The moved field.
     static constexpr qp::graph::PortNumber kPortResampleOut = 1;
 
+    /// @brief Publishes the magnetopause as a **smooth weight**: 1 inside the Shue surface, 0 outside.
+    ///
+    /// ## The node `field.mask` said would come
+    ///
+    /// `kMaskType`'s own documentation says it: *"the boundary that needs a smooth transition in the reference is the
+    /// magnetopause model, and that is another node, arriving as one."* This is that node. The mask is an either/or
+    /// region test and the case argues why it must stay one -- a mask with intermediate values would be a claim about
+    /// a boundary it does not model -- and the smooth boundary arrives as a model of its own.
+    ///
+    /// ## The surface
+    ///
+    /// Shue's form: `r_mp(theta) = r0 (2 / (1 + cos theta))^alpha`, with `theta` measured from `+x`, which is the
+    /// sunward direction -- the same convention `field.mask`'s `dayside` region and the convection field use. At the
+    /// nose the `alpha` vanishes and the surface is exactly `r0`; at the flank (`theta = pi/2`) it is `2^alpha r0`,
+    /// which is the flaring; downwind it opens without bound, which is what a paraboloid does and why the tail needs
+    /// the current sheet rather than this node to be closed.
+    ///
+    /// The weight is `w = 1 / (1 + exp((r - r_mp(theta)) / width))`: **one inside, zero outside**, which is the
+    /// orientation `field.mask` uses for its regions and the one a wire reads as "this field exists here". The
+    /// reference writes the complementary weight (`1 / (1 + exp(-(r - r_mp) / 4))`, one outside) because the only
+    /// thing it does with it is blend an inner and an outer field, and a blend multiplies one of them by `1 - w`
+    /// anyway. Nothing is lost either way and one of the two has to be chosen; this one matches the mask.
+    ///
+    /// ## Two internal clamps, and why they are not a user's parameter being rounded
+    ///
+    /// `r` is floored - not at zero but in effect, by computing `cos theta` only where `r > 0`: at the origin the
+    /// angle is undefined, and the weight there is 1 whatever the surface does, which is the model's own answer for
+    /// a point at the centre of the cavity. `cos theta` is clamped **on the antipode side only**, because the Shue
+    /// form diverges there -- where the fitted surface is not describing anything anyway -- and the clamp makes
+    /// `r_mp` large and finite, so the weight is 1 downwind. Clamping the sunward side too would move the nose by
+    /// `(2 / 1.9999)^alpha`: five parts in a hundred thousand of the standoff distance, which is small, invisible in
+    /// a picture, and exactly the size of error that an assertion of `w == 0.5` **exactly** at the nose catches.
+    /// Both clamps are properties of **this formula near its own singularities**, not of a number a user typed,
+    /// which is why they are clamped rather than refused: the three parameters below are the user's, and those are
+    /// refused when they do not describe a surface.
+    static constexpr const char* kMagnetopauseType = "field.magnetopause";
+    /// @brief The nose's distance, in metres: where the surface stands on the sunward axis.
+    static constexpr qp::graph::PortNumber kPortMagnetopauseStandoff = 1;
+    /// @brief The flaring exponent, dimensionless: how fast the surface opens away from the nose.
+    static constexpr qp::graph::PortNumber kPortMagnetopauseFlaring = 2;
+    /// @brief The transition's thickness, in metres.
+    static constexpr qp::graph::PortNumber kPortMagnetopauseWidth = 3;
+    /// @brief Where the **magnetopause** node's grid starts: after its three parameters.
+    static constexpr qp::graph::PortNumber kPortMagnetopauseOrigin0 = 4;
+
+    /// @brief The default standoff distance, in earth radii: the textbook ten at ordinary solar wind pressure.
+    ///
+    /// The reference computes it from `Kp` (`r0 = 10 / pdyn^(1/3)` with `pdyn = 2 + Kp/2`), and that computation is
+    /// a **driver's** job: when this kit has one, `Kp` becomes a socket and this parameter becomes the fallback.
+    /// Writing the formula here instead would put a solar-wind model inside a boundary model, which is the
+    /// composition mistake every other node in this file is arranged to avoid.
+    static constexpr double kDefaultMagnetopauseStandoffRe = 10.0;
+    /// @brief The default flaring exponent: Shue's 0.58 at zero IMF `B_z`, the reference's 0.59 at `Kp = 2`.
+    static constexpr double kDefaultMagnetopauseFlaring = 0.58;
+    /// @brief The default transition thickness, in metres: one earth radius.
+    ///
+    /// The reference uses four, because in its model this number is also the width of the **draping** layer that
+    /// carries the magnetosheath field. A boundary that smears over forty percent of its own standoff distance is
+    /// not a surface any more, so the default here is a boundary's thickness and the draping, when it arrives, is a
+    /// different node's job with its own width.
+    static constexpr double kDefaultMagnetopauseWidthM = kEarthRadiusM;
+    /// @brief The lowest `cos theta` the surface is asked about: within a ten-thousandth of the antipode.
+    static constexpr double kMagnetopauseMinCosine = -0.9999;
+
+    /// @brief What a magnetopause node's parameters say.
+    ///
+    /// @ownership   owns
+    /// @thread      main
+    /// @pre         none
+    /// @post        none
+    /// @invariant   `standoff_m > 0`, `flaring >= 0` and `width_m > 0` for any spec `read_magnetopause` produces
+    /// @errors      noexcept
+    /// @frozen      no
+    /// @tests       magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose
+    struct MagnetopauseSpec final {
+        /// The nose's distance, in metres.
+        double standoff_m = kDefaultMagnetopauseStandoffRe * kEarthRadiusM;
+        /// The flaring exponent.
+        double flaring = kDefaultMagnetopauseFlaring;
+        /// The transition's thickness, in metres.
+        double width_m = kDefaultMagnetopauseWidthM;
+    };
+
+    /// @brief A magnetopause node's parameters, read from the node itself.
+    ///
+    /// @param node The node. Borrowed.
+    ///
+    /// @ownership   pure
+    /// @thread      main
+    /// @pre         none
+    /// @post        The three numbers the node carries, or the defaults for the ones it does not
+    /// @invariant   One reader, two sources, as every other parameter reader in this kit
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose
+    [[nodiscard]] static MagnetopauseSpec read_magnetopause(const graph::Node& node) noexcept;
+
+    /// @brief The same reader for an evaluator's own inputs.
+    ///
+    /// @param inputs The evaluator's inputs. Borrowed for the call.
+    ///
+    /// @ownership   pure
+    /// @thread      main
+    /// @pre         none
+    /// @post        The same values `read_magnetopause` gives for the same ports
+    /// @invariant   One reader, two sources
+    /// @errors      noexcept
+    /// @complexity  O(1)
+    /// @nondet      none
+    /// @frozen      no
+    /// @tests       magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose
+    [[nodiscard]] static MagnetopauseSpec read_magnetopause_from(const graph::InputView& inputs) noexcept;
+
     /// @brief The default drag rate at the surface, in per second. Zero: no atmosphere until a course asks for one.
     static constexpr double kDefaultAtmosphereNu0 = 0.0;
     /// @brief The default scale height, in metres: 100 km, the thermosphere's order at low altitude.
@@ -1386,6 +1501,49 @@ public:
 [[nodiscard]] bool bake_resample(const qp::graph::field::FieldValue& source, const GridSpec& source_grid,
                                  const GridSpec& target_grid, qp::graph::field::FieldKey key,
                                  qp::graph::field::FieldSet& fields);
+
+/**
+ * @brief Bakes the magnetopause weight onto `grid`: `1` inside the Shue surface, `0` outside.
+ *
+ * The surface and the two clamps are argued on `kMagnetopauseType`. What belongs here is what the case can hold the
+ * arithmetic to, and what is refused.
+ *
+ * ## The two points where the closed form is exact
+ *
+ * `r_mp(0) = r0` because the exponent multiplies a factor of one, and `r_mp(pi/2) = 2^alpha r0`. At both, the
+ * weight is `1 / (1 + exp(0)) = 0.5` **exactly** -- not to a tolerance -- so a grid with a node on the nose and a
+ * node on the flank turns the model into two exact assertions. Everything else about the surface is checked by
+ * **finding** it: the case bisects the baked weight along a direction to locate the half level and compares that
+ * radius with the closed form, which tests the whole shape rather than the values at chosen nodes.
+ *
+ * ## What is refused, and what is clamped
+ *
+ * A non-positive standoff, a negative flaring exponent, a non-positive width and a non-finite number anywhere are
+ * refused: each of them describes something that is not a boundary, and clamping one would hand back a surface the
+ * user did not ask for. The **internal** singularities of the formula -- the undefined angle at the origin and the
+ * diverging factor at the antipode -- are clamped, because they are properties of the model rather than of a
+ * parameter, and both clamps leave the weight at the value the model gives: one.
+ *
+ * @param spec  The standoff distance, the flaring exponent and the transition's thickness, in SI.
+ * @param grid  Where to bake. At least two nodes an axis and a positive spacing; anything else is refused.
+ * @param key   Who is publishing it.
+ * @param fields The store. Borrowed; the samples are moved into it on success.
+ *
+ * @ownership   owns the samples it publishes on success
+ * @thread      main
+ * @pre         none
+ * @post        On true, `fields.view(key)` is a readable **scalar** volume of dimensionless weights, in `[0, 1]`,
+ *              equal at every node to `1 / (1 + exp((r - r_mp(theta)) / width))`
+ * @invariant   On false the store is unchanged
+ * @errors      Returns false -- never throws -- for a non-positive standoff or width, a negative or non-finite
+ *              flaring exponent, and a grid that cannot be baked
+ * @complexity  O(points)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose
+ */
+[[nodiscard]] bool bake_magnetopause(const FieldNodes::MagnetopauseSpec& spec, const GridSpec& grid,
+                                     qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
 
 /**
  * @brief The node evaluator that bakes this kit's field types into a store.

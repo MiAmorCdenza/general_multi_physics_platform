@@ -21,6 +21,7 @@
 #include <qp/plugins/magnetosphere/dipole.hpp>
 #include <qp/plugins/magnetosphere/geomagnetic.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -160,6 +161,10 @@ namespace {
         // target lattice. It is the one type whose whole job is to move samples, so a caller that reaches it has
         // reached the answer rather than a node to walk past.
         out = FieldNodes::kPortResampleOrigin0;
+        return true;
+    }
+    if (type_name == FieldNodes::kMagnetopauseType) {
+        out = FieldNodes::kPortMagnetopauseOrigin0;
         return true;
     }
     // `field.mul` and `field.blend` are the types that declare no grid at all: a product and a blend are both
@@ -501,6 +506,22 @@ FieldNodes::BlendSpec FieldNodes::read_blend(const graph::Node& node) noexcept {
     return read_blend_from(graph::InputView{values});
 }
 
+FieldNodes::MagnetopauseSpec FieldNodes::read_magnetopause_from(const graph::InputView& inputs) noexcept {
+    MagnetopauseSpec spec;
+    spec.standoff_m = real_or(inputs, kPortMagnetopauseStandoff,
+                              kDefaultMagnetopauseStandoffRe * kEarthRadiusM);
+    spec.flaring = real_or(inputs, kPortMagnetopauseFlaring, kDefaultMagnetopauseFlaring);
+    spec.width_m = real_or(inputs, kPortMagnetopauseWidth, kDefaultMagnetopauseWidthM);
+    return spec;
+}
+
+FieldNodes::MagnetopauseSpec FieldNodes::read_magnetopause(const graph::Node& node) noexcept {
+    graph::PortValues values;
+    values.reserve(node.params.size());
+    for (const graph::ParamValue& p : node.params) values.emplace_back(p.number, p.value);
+    return read_magnetopause_from(graph::InputView{values});
+}
+
 bool bake_current_sheet(const FieldNodes::SheetSpec& spec, const GridSpec& grid, gfield::FieldKey key,
                         gfield::FieldSet& fields) {
     if (!bakeable(grid)) return false;
@@ -640,6 +661,44 @@ bool bake_resample(const gfield::FieldValue& source, const GridSpec& source_grid
     // The source's dimension on the target's lattice: a resample moves samples, it does not change what they are.
     const qp::abi::LatticeDesc desc = table.view(source.desc.dimension).desc;
     return fields.publish(key, desc, std::move(table.data()));
+}
+
+bool bake_magnetopause(const FieldNodes::MagnetopauseSpec& spec, const GridSpec& grid, gfield::FieldKey key,
+                       gfield::FieldSet& fields) {
+    if (!bakeable(grid)) return false;
+    if (!std::isfinite(spec.standoff_m) || !(spec.standoff_m > 0.0)) return false;
+    if (!std::isfinite(spec.flaring) || spec.flaring < 0.0) return false;
+    if (!std::isfinite(spec.width_m) || !(spec.width_m > 0.0)) return false;
+
+    // A scalar table, not a vector one: this node publishes a **weight**, and the distinction is the one
+    // `field.mask`'s case is built around -- a consumer that read three components out of a one-component table
+    // would take other nodes' values rather than nothing.
+    const qp::abi::LatticeDesc desc = qp::abi::make_lattice(
+        qp::abi::LatticeKind::volume, qp::abi::ComponentKind::scalar, qp::abi::ElementType::f64,
+        qp::abi::kDimensionless, grid.nx, grid.ny, grid.nz);
+
+    std::vector<double> weights(static_cast<std::size_t>(grid.point_count()), 0.0);
+    std::size_t at = 0;
+    for (std::uint32_t i = 0; i < grid.nx; ++i) {
+        for (std::uint32_t j = 0; j < grid.ny; ++j) {
+            for (std::uint32_t k = 0; k < grid.nz; ++k) {
+                const Vec3 point = grid.node_position(i, j, k);
+                const double r = norm(point);
+                // The angle is undefined at the origin and the surface is not describable at the antipode; both
+                // clamps are the formula's own, and both leave the weight at one. See the declaration -- and note
+                // that the clamp is on the **antipode side only**: flooring `cos theta` at both ends moves the nose
+                // by `(2 / 1.9999)^alpha`, which is five parts in a hundred thousand of the standoff distance and
+                // exactly the kind of error an exactness assertion is for.
+                const double cosine =
+                    r > 0.0 ? std::max(FieldNodes::kMagnetopauseMinCosine, point.x / r) : 0.0;
+                const double surface = spec.standoff_m * std::pow(2.0 / (1.0 + cosine), spec.flaring);
+                // One **inside**, zero outside: the orientation `field.mask` uses, so a wire reads the same way --
+                // "this weight is one where the field it multiplies exists".
+                weights[at++] = 1.0 / (1.0 + std::exp((r - surface) / spec.width_m));
+            }
+        }
+    }
+    return fields.publish(key, desc, std::move(weights));
 }
 
 std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipole;
@@ -1044,6 +1103,67 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     resample_out.unit_symbol = "T";
     resample.outputs.push_back(resample_out);
 
+    // ---------------- the magnetopause ----------------
+    graph::NodeDesc magnetopause;
+    magnetopause.type_name = kMagnetopauseType;
+    magnetopause.label = "Magnetopause";
+    magnetopause.description = "The Shue surface as a smooth weight: one inside, zero outside. Wire it into a "
+                               "multiplier beside a dipole and the dipole stops at the boundary instead of filling "
+                               "the box -- the smooth version of a region mask, and the boundary that node said "
+                               "would arrive as a model of its own. The surface stands at the standoff distance on "
+                               "the sunward axis and flares away from it.";
+    magnetopause.category = "field";
+    magnetopause.version = 1;
+    magnetopause.allow_in_field_domain = true;
+    magnetopause.allow_in_particle_domain = false;
+    magnetopause.has_compute = true;
+    graph::PortDesc standoff =
+        parameter(kPortMagnetopauseStandoff, "standoff", "Standoff distance", "m",
+                  kDefaultMagnetopauseStandoffRe * kEarthRadiusM);
+    standoff.description = "Where the surface crosses the sunward axis, in metres. Ten earth radii is the textbook "
+                           "value at ordinary solar-wind pressure; the reference computes it from Kp, which is a "
+                           "driver's job and becomes a socket when this kit has one.";
+    magnetopause.inputs.push_back(standoff);
+    graph::PortDesc flaring = parameter(kPortMagnetopauseFlaring, "flaring", "Flaring exponent", "1",
+                                        kDefaultMagnetopauseFlaring);
+    flaring.description = "The exponent alpha in `r_mp = r0 (2 / (1 + cos theta))^alpha`. It does nothing at the "
+                          "nose -- the factor is one there -- and at the flank it is the whole shape: the surface "
+                          "stands at `2^alpha r0`. Shue's 0.58 and the reference's 0.59 at Kp = 2 agree to two "
+                          "percent, which is finer than the model.";
+    magnetopause.inputs.push_back(flaring);
+    graph::PortDesc boundary_width =
+        parameter(kPortMagnetopauseWidth, "width", "Width", "m", kDefaultMagnetopauseWidthM);
+    boundary_width.description = "How thick the transition is, in metres. The reference uses four earth radii "
+                                 "because in its model this number is also the width of the magnetosheath draping "
+                                 "layer; one earth radius is a boundary's own thickness, and the draping is a "
+                                 "different node's job.";
+    magnetopause.inputs.push_back(boundary_width);
+    // Its own nine grid ports, after its three parameters.
+    for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+        const char* names[9] = {"origin_x", "origin_y", "origin_z", "spacing_x", "spacing_y",
+                                "spacing_z", "count_x",  "count_y",   "count_z"};
+        const char* labels[9] = {"Grid origin x", "Grid origin y", "Grid origin z",   "Grid spacing x",
+                                 "Grid spacing y", "Grid spacing z", "Nodes along x", "Nodes along y",
+                                 "Nodes along z"};
+        const char* units[9] = {"m", "m", "m", "m", "m", "m", "", "", ""};
+        const double steps[9] = {kEarthRadiusM, kEarthRadiusM, kEarthRadiusM, 0.2 * kEarthRadiusM,
+                                 0.2 * kEarthRadiusM, 0.2 * kEarthRadiusM, 1.0, 1.0, 1.0};
+        magnetopause.inputs.push_back(
+            parameter(kPortMagnetopauseOrigin0 + offset, names[offset], labels[offset], units[offset],
+                      steps[offset]));
+    }
+    graph::PortDesc magnetopause_out;
+    magnetopause_out.number = kPortWeight;
+    magnetopause_out.name = "weight";
+    magnetopause_out.label = "Weight";
+    magnetopause_out.description = "The boundary as a dimensionless weight: one inside, zero outside, one half on "
+                                   "the surface.";
+    magnetopause_out.type = qp::ports::kScalarField;
+    magnetopause_out.connectable = true;
+    magnetopause_out.required = false;
+    magnetopause_out.unit_symbol = "1";
+    magnetopause.outputs.push_back(magnetopause_out);
+
     // ---------------- the convection field ----------------
     graph::NodeDesc convection;
     convection.type_name = kConvectionType;
@@ -1218,7 +1338,8 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
 
     return {std::move(dipole),      std::move(uniform),    std::move(sum),        std::move(electric),
             std::move(mask),        std::move(mul),        std::move(convection), std::move(corotation),
-            std::move(atmosphere),  std::move(sheet),      std::move(blend),      std::move(resample)};
+            std::move(atmosphere),  std::move(sheet),      std::move(blend),      std::move(resample),
+            std::move(magnetopause)};
 }
 
 gfield::FieldValue DipoleEvaluator::input_field(const graph::NodeId id, const graph::PortNumber port) const noexcept {
@@ -1357,6 +1478,22 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
         }
         Outcome out;
         out.emplace_back(FieldNodes::kPortResampleOut, qp::ports::Value{fields_->view(resample_key).desc});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
+    if (desc.type_name == FieldNodes::kMagnetopauseType) {
+        // A producer with its own grid, like the mask: the smooth boundary declares where it is sampled rather than
+        // borrowing the lattice of a field it is not given.
+        const graph::InputView magnetopause_view{inputs};
+        const FieldNodes::MagnetopauseSpec magnetopause_spec =
+            FieldNodes::read_magnetopause_from(magnetopause_view);
+        const GridSpec magnetopause_grid =
+            FieldNodes::read_from(magnetopause_view, FieldNodes::kPortMagnetopauseOrigin0);
+        const gfield::FieldKey magnetopause_key{id.index, FieldNodes::kPortWeight};
+        if (!bake_magnetopause(magnetopause_spec, magnetopause_grid, magnetopause_key, *fields_)) {
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        Outcome out;
+        out.emplace_back(FieldNodes::kPortWeight, qp::ports::Value{fields_->view(magnetopause_key).desc});
         return qp::diag::Result<Outcome>{std::move(out)};
     }
     if (desc.type_name == FieldNodes::kMaskType) {

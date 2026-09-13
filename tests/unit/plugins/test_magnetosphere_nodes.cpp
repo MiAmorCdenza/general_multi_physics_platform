@@ -125,7 +125,7 @@ struct Scene final {
         // composition principle -- a shielding field is `mul(convection, shield)` -- and two of them could not be
         // composed out of the others: no wiring of sums and products keeps a field divergence-free (the blend), and
         // none of them moves a field onto another lattice (the resampler).
-        REQUIRE(FieldNodes::mount(host) == 12);
+        REQUIRE(FieldNodes::mount(host) == 13);
         REQUIRE(PusherNodes::mount(host) == 1);
     }
 
@@ -220,7 +220,7 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // mask, the multiplier and the convection field. Each is a **type of its own** with its own port numbers,
     // which is the composition principle -- a shielding field is `mul(convection, shield)`, not a switch inside a
     // node.
-    REQUIRE(types.size() == 12);
+    REQUIRE(types.size() == 13);
     REQUIRE(types[0].type_name == FieldNodes::kDipoleType);
     REQUIRE(types[1].type_name == FieldNodes::kUniformType);
     REQUIRE(types[2].type_name == FieldNodes::kSumType);
@@ -289,7 +289,7 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     qp::host::PluginHost host{qp::plugin::Capability::node_types};
     // Twelve field models now, and the count is asserted rather than assumed: it is the one place a new type
     // announces itself in the test suite, so a type that silently failed to register is a failure here.
-    REQUIRE(FieldNodes::mount(host) == 12);
+    REQUIRE(FieldNodes::mount(host) == 13);
     REQUIRE(host.node_types().find(FieldNodes::kDipoleType) != nullptr);
     REQUIRE(FieldNodes::mount(host) == 0);
 }
@@ -483,7 +483,7 @@ TEST_CASE("magnetosphere.field_nodes.a_field_scales_by_its_weight", "[magnetosph
     // where the weight belongs are both refused by `check_connection`, so the multiplier's own check is the second
     // line of defence rather than the only one.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 12);
+    REQUIRE(types.size() == 13);
     REQUIRE(types[5].type_name == FieldNodes::kMulType);
     REQUIRE(types[5].has_compute);
     const graph::PortDesc* mul_field = types[5].find_port(FieldNodes::kPortMulField, false);
@@ -720,7 +720,7 @@ TEST_CASE("magnetosphere.field_nodes.a_blend_does_not_open_a_divergence", "[magn
     // The declaration: the type's own port numbers, both sockets vector fields, and three parameters that are
     // typed into a panel rather than wired from a node.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 12);
+    REQUIRE(types.size() == 13);
     REQUIRE(types[10].type_name == FieldNodes::kBlendType);
     REQUIRE(types[10].has_compute);
     REQUIRE(types[10].allow_in_field_domain);
@@ -845,7 +845,7 @@ TEST_CASE("magnetosphere.field_nodes.the_convection_field_is_the_potentials_grad
 
     // The type is declared like the others and allowed only where a bake is.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 12);
+    REQUIRE(types.size() == 13);
     REQUIRE(types[6].type_name == FieldNodes::kConvectionType);
     REQUIRE(types[6].has_compute);
     REQUIRE(types[6].allow_in_field_domain);
@@ -974,7 +974,7 @@ TEST_CASE("magnetosphere.field_nodes.corotation_is_the_rotation_the_field_allows
     // The type declares one socket and no grid parameters, which is the decision this node makes: it bakes on the
     // lattice of the field it reads, so there is no second grid to disagree with the first.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 12);
+    REQUIRE(types.size() == 13);
     REQUIRE(types[7].type_name == FieldNodes::kCorotationType);
     REQUIRE(types[7].has_compute);
     REQUIRE(types[7].inputs.size() == 1);
@@ -1274,7 +1274,7 @@ TEST_CASE("magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_
 
     // And the type is declared with its own grid ports, three parameters first -- the same shape the mask has.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 12);
+    REQUIRE(types.size() == 13);
     REQUIRE(types[8].type_name == FieldNodes::kAtmosphereType);
     REQUIRE(types[8].has_compute);
     REQUIRE(types[8].allow_in_field_domain);
@@ -1440,7 +1440,7 @@ TEST_CASE("magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_impl
 
     // The type declares its own grid ports after its two parameters, and publishes tesla.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 12);
+    REQUIRE(types.size() == 13);
     REQUIRE(types[9].type_name == FieldNodes::kCurrentSheetType);
     REQUIRE(types[9].has_compute);
     REQUIRE(types[9].allow_in_field_domain);
@@ -1596,7 +1596,7 @@ TEST_CASE("magnetosphere.field_nodes.a_resample_moves_the_samples_and_adds_no_in
     // The declaration: its own numbers, nine grid ports that are typed rather than wired, and a grid of its own --
     // which is what makes it the node a pusher can be pointed at when the field it wants is on another lattice.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 12);
+    REQUIRE(types.size() == 13);
     REQUIRE(types[11].type_name == FieldNodes::kResampleType);
     REQUIRE(types[11].has_compute);
     REQUIRE(types[11].allow_in_field_domain);
@@ -1611,6 +1611,174 @@ TEST_CASE("magnetosphere.field_nodes.a_resample_moves_the_samples_and_adds_no_in
     REQUIRE(resampled_out->unit_symbol == std::string{"T"});
     for (graph::PortNumber offset = 0; offset < 9; ++offset) {
         const graph::PortDesc* port = types[11].find_port(FieldNodes::kPortResampleOrigin0 + offset, false);
+        REQUIRE(port != nullptr);
+        REQUIRE_FALSE(port->connectable);
+    }
+}
+
+TEST_CASE("magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose", "[magnetosphere]") {
+    // **The node `field.mask` said would come.** That case argues why a mask must stay an either/or region test --
+    // a mask with intermediate values would be a claim about a boundary it does not model -- and its own comment
+    // names the boundary that needs the smooth version: the magnetopause, "arriving as a node of its own". This is
+    // it: Shue's surface, `r_mp(theta) = r0 (2 / (1 + cos theta))^alpha`, as a weight that is one inside and zero
+    // outside, which is the orientation the mask uses and therefore the one a wire reads the same way.
+    const double re = kEarthRadiusM;
+    gfield::FieldSet fields;
+
+    // **Two points where the closed form is exact, and the grid is built to land on them.** The nose is at `r0`
+    // because the exponent multiplies a factor of one; the flank is at `2^alpha r0`. With `alpha = 1` and a standoff
+    // of eight earth radii those are eight on the sunward axis and sixteen on the flank, so a lattice of whole earth
+    // radii puts a node on each -- and the weight there is `1 / (1 + exp(0))`, which is one half **exactly** rather
+    // than to a tolerance.
+    const FieldNodes::MagnetopauseSpec exact_spec{8.0 * re, 1.0, 1.0 * re};
+    const GridSpec coarse{Vec3{-16.0 * re, -16.0 * re, -16.0 * re}, Vec3{re, re, re}, 33, 33, 33};
+    const gfield::FieldKey weight_key{61, FieldNodes::kPortWeight};
+    REQUIRE(bake_magnetopause(exact_spec, coarse, weight_key, fields));
+    const gfield::FieldValue weight = fields.view(weight_key);
+    REQUIRE(gfield::is_readable(weight));
+    // **A scalar**, and the shape of the table is asserted before anything is read out of it: a consumer that
+    // assumed three components would read other nodes' weights and call them its own.
+    REQUIRE(weight.is_scalar());
+    REQUIRE_FALSE(weight.is_vector());
+    REQUIRE(weight.desc.component == qp::abi::ComponentKind::scalar);
+    REQUIRE(weight.point_count() == 33ull * 33ull * 33ull);
+    REQUIRE(weight.desc.dimension.L == 0);
+    REQUIRE(weight.desc.dimension.M == 0);
+
+    const auto at_node = [&](std::uint32_t i, std::uint32_t j, std::uint32_t k) {
+        return gfield::get_component(weight, (static_cast<std::uint64_t>(i) * coarse.ny + j) * coarse.nz + k, 0);
+    };
+    // The nose: node (24, 16, 16) is `(+8, 0, 0)` in earth radii. The flank: node (16, 32, 16) is `(0, +16, 0)`.
+    REQUIRE(at_node(24, 16, 16) == 0.5);
+    REQUIRE(at_node(16, 32, 16) == 0.5);
+    // And the two sides of each: inside is greater than a half, outside is less, which is the orientation.
+    REQUIRE(at_node(23, 16, 16) > 0.5);
+    REQUIRE(at_node(25, 16, 16) < 0.5);
+    REQUIRE(at_node(16, 31, 16) > 0.5);
+    REQUIRE(at_node(16, 33, 16) < 0.5);
+    // Downwind the surface opens without bound, so the whole tail side is inside: the weight is one there, which is
+    // what a paraboloid says and why the tail needs the current sheet rather than this node to be closed.
+    REQUIRE(at_node(0, 16, 16) > 0.99);
+    // Far outside it is zero, and every weight is in `[0, 1]`: a weight of 1.0000001 would scale a field up.
+    for (std::uint64_t point = 0; point < weight.point_count(); ++point) {
+        const double w = gfield::get_component(weight, point, 0);
+        REQUIRE(w >= 0.0);
+        REQUIRE(w <= 1.0);
+    }
+
+    // **The rest of the surface is found rather than sampled.** A fine slab through the equatorial plane, and a
+    // bisection along each direction for the radius where the baked weight crosses a half -- which is the surface,
+    // because along a ray the weight is a function of `r` alone. The comparison is against the closed form, so this
+    // tests the whole shape rather than the values at nodes somebody chose.
+    const GridSpec slab{Vec3{-25.0 * re, -25.0 * re, -0.2 * re}, Vec3{0.1 * re, 0.1 * re, 0.1 * re}, 501, 501, 5};
+    const FieldNodes::MagnetopauseSpec default_spec;
+    const gfield::FieldKey fine_key{62, FieldNodes::kPortWeight};
+    REQUIRE(bake_magnetopause(default_spec, slab, fine_key, fields));
+    const gfield::FieldValue fine = fields.view(fine_key);
+    REQUIRE(gfield::is_readable(fine));
+    const double degrees[5] = {0.0, 30.0, 60.0, 90.0, 105.0};
+    for (double degree : degrees) {
+        const double theta = degree * 3.14159265358979323846 / 180.0;
+        const Vec3 direction{std::cos(theta), std::sin(theta), 0.0};
+        const double closed_form =
+            FieldNodes::kDefaultMagnetopauseStandoffRe *
+            std::pow(2.0 / (1.0 + std::cos(theta)), FieldNodes::kDefaultMagnetopauseFlaring);
+        // Six widths on either side of the surface the closed form predicts, so the bisection has a bracket rather
+        // than an assumption, and so that "far" means far in the units of this node's own transition.
+        REQUIRE(sample_baked_scalar(fine, slab.origin_m, slab.spacing_m, direction * (0.5 * re)) > 0.99);
+        REQUIRE(sample_baked_scalar(fine, slab.origin_m, slab.spacing_m,
+                                    direction * ((closed_form + 6.0) * re)) < 0.01);
+        double low = 0.5 * re;
+        double high = 24.5 * re;
+        for (int step = 0; step < 80; ++step) {
+            const double middle = 0.5 * (low + high);
+            if (sample_baked_scalar(fine, slab.origin_m, slab.spacing_m, direction * middle) > 0.5) {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        const double found = 0.5 * (low + high) / re;
+        CAPTURE(degree, found, closed_form);
+        // Measured: the surface is located to between a millionth and three millionths of its own radius -- the
+        // table's interpolation error and nothing else, since the weight is monotone along a ray. The tolerance is
+        // a hundredth of a percent, thirty times the measurement, because it is a statement about the model being
+        // reproduced rather than about where one machine rounds.
+        REQUIRE(relative_to(found, closed_form) < 1.0e-4);
+    }
+
+    // **And the composition it exists for**: the dipole multiplied by the boundary, which is the smooth version of
+    // what a mask does to it. Where the weight is essentially zero the field is essentially gone, and where it is
+    // essentially one the field is untouched -- both counted, so neither statement can pass by being empty.
+    const gfield::FieldKey dipole_key{63, FieldNodes::kPortField};
+    const gfield::FieldKey shielded_key{64, FieldNodes::kPortMulOut};
+    REQUIRE(bake_dipole(0.0, kDipoleMomentAm2, coarse, dipole_key, fields));
+    REQUIRE(bake_scaled(fields.view(dipole_key), weight, shielded_key, fields));
+    const gfield::FieldValue dipole = fields.view(dipole_key);
+    const gfield::FieldValue shielded = fields.view(shielded_key);
+    REQUIRE(gfield::is_readable(shielded));
+    std::uint64_t cut = 0;
+    std::uint64_t kept = 0;
+    for (std::uint64_t point = 0; point < shielded.point_count(); ++point) {
+        const double w = gfield::get_component(weight, point, 0);
+        for (std::uint64_t component = 0; component < 3; ++component) {
+            const double field_value = gfield::get_component(dipole, point, component);
+            const double product = gfield::get_component(shielded, point, component);
+            // The product is the field times the weight, component by component, which is what makes the boundary a
+            // weight rather than a switch: nothing here rounds, clips or renormalises.
+            REQUIRE(product == field_value * w);
+        }
+        if (w < 0.01) ++cut;
+        if (w > 0.99) ++kept;
+    }
+    // Both regions exist in this box, so neither statement above can pass by being empty -- and the two counts are
+    // the assertion that the boundary really does divide it.
+    REQUIRE(cut > 0);
+    REQUIRE(kept > 0);
+
+    // Refusals: a standoff of zero is not a boundary, a negative flaring would shrink the surface away from the
+    // nose, a zero width is a discontinuity, and a non-finite number is not a parameter. Each is refused rather
+    // than clamped -- the internal singularities are the formula's own and are clamped, but these are the user's.
+    FieldNodes::MagnetopauseSpec zero_standoff = default_spec;
+    zero_standoff.standoff_m = 0.0;
+    REQUIRE_FALSE(bake_magnetopause(zero_standoff, slab, fine_key, fields));
+    FieldNodes::MagnetopauseSpec negative_standoff = default_spec;
+    negative_standoff.standoff_m = -5.0 * re;
+    REQUIRE_FALSE(bake_magnetopause(negative_standoff, slab, fine_key, fields));
+    FieldNodes::MagnetopauseSpec negative_flaring = default_spec;
+    negative_flaring.flaring = -0.1;
+    REQUIRE_FALSE(bake_magnetopause(negative_flaring, slab, fine_key, fields));
+    FieldNodes::MagnetopauseSpec zero_width = default_spec;
+    zero_width.width_m = 0.0;
+    REQUIRE_FALSE(bake_magnetopause(zero_width, slab, fine_key, fields));
+    FieldNodes::MagnetopauseSpec not_a_number = default_spec;
+    not_a_number.standoff_m = std::nan("");
+    REQUIRE_FALSE(bake_magnetopause(not_a_number, slab, fine_key, fields));
+    const GridSpec no_interior{Vec3{}, Vec3{re, re, re}, 1, 1, 1};
+    REQUIRE_FALSE(bake_magnetopause(default_spec, no_interior, fine_key, fields));
+
+    // The reader is the one the evaluator uses: a node carrying only the flaring exponent gets the defaults for the
+    // other two, which is the state a freshly placed node is in.
+    qp::graph::Node node;
+    node.type_name = FieldNodes::kMagnetopauseType;
+    node.set_param(FieldNodes::kPortMagnetopauseFlaring, qp::ports::Value{0.7});
+    const FieldNodes::MagnetopauseSpec read = FieldNodes::read_magnetopause(node);
+    REQUIRE(read.flaring == 0.7);
+    REQUIRE(read.standoff_m == FieldNodes::kDefaultMagnetopauseStandoffRe * kEarthRadiusM);
+    REQUIRE(read.width_m == FieldNodes::kDefaultMagnetopauseWidthM);
+
+    const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
+    REQUIRE(types.size() == 13);
+    REQUIRE(types[12].type_name == FieldNodes::kMagnetopauseType);
+    REQUIRE(types[12].has_compute);
+    REQUIRE(types[12].allow_in_field_domain);
+    REQUIRE_FALSE(types[12].allow_in_particle_domain);
+    const graph::PortDesc* boundary = types[12].find_port(FieldNodes::kPortWeight, true);
+    REQUIRE(boundary != nullptr);
+    REQUIRE(boundary->type == qp::ports::kScalarField);
+    REQUIRE(boundary->unit_symbol == std::string{"1"});
+    for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+        const graph::PortDesc* port = types[12].find_port(FieldNodes::kPortMagnetopauseOrigin0 + offset, false);
         REQUIRE(port != nullptr);
         REQUIRE_FALSE(port->connectable);
     }
