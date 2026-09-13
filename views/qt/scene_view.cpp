@@ -36,7 +36,12 @@ constexpr double kCurveWidth = 1.2;
 
 SceneView::SceneView(QString empty_text, QWidget* parent)
     : QWidget(parent), empty_text_(std::move(empty_text)) {
-    setMinimumSize(220, 220);
+    // **140 rather than the 220 this widget was born with**, and a measurement is why: the right-hand column
+    // stacks five docks in a window that is 720 logical pixels tall, and a 220-pixel floor per scene panel was
+    // enough to push the column past the window -- at which point Qt does not scroll, it gives the later docks
+    // zero height and they vanish while every check still passes. A 140-pixel panel is a small but honest picture;
+    // a 220-pixel minimum in a column that cannot hold it is no picture at all.
+    setMinimumSize(140, 140);
     setAutoFillBackground(true);
 }
 

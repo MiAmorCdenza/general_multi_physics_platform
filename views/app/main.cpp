@@ -238,9 +238,18 @@ int main(int argc, char** argv) {
     const std::size_t mounted_pushers = qp::plugins::magnetosphere::PusherNodes::mount(content_host);
     const std::size_t mounted_emitters = qp::plugins::magnetosphere::EmitterNodes::mount(content_host);
     const std::size_t mounted_render_items = qp::plugins::magnetosphere::RenderNodes::mount(content_host);
-    if (mounted_field_types + mounted_pushers + mounted_emitters != 3 || mounted_render_items != 2) {
-        qWarning().noquote() << "magnetosphere: mounted" << mounted_field_types + mounted_pushers + mounted_emitters
-                             << "of 3 node types and" << mounted_render_items << "of 2 render items";
+    // **Each count is compared against its own expected number**, and the first version of this check is why: it
+    // summed the three field-side counts and compared the total against a literal 3, so adding the electric field
+    // node made a healthy application print `mounted 6 of 3 node types` on every launch. The literal had been
+    // right when it was written and nothing tied it to the kit it was counting, which is the same shape as the
+    // stale expectations this repository keeps finding in tests -- a number that describes another module's
+    // inventory does not live in this one.
+    if (mounted_field_types != 4 || mounted_pushers != 1 || mounted_emitters != 1) {
+        qWarning().noquote() << "magnetosphere: mounted" << mounted_field_types << "of 4 field types,"
+                             << mounted_pushers << "of 1 pusher and" << mounted_emitters << "of 1 emitter";
+    }
+    if (mounted_render_items != 2) {
+        qWarning().noquote() << "magnetosphere: mounted" << mounted_render_items << "of 2 render items";
     }
 #endif
 

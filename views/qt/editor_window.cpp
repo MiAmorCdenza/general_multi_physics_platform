@@ -11,6 +11,7 @@
 #include <QFileDialog>
 #include <QMenu>
 #include <QMenuBar>
+#include <QScreen>
 #include <QSize>
 #include <QToolBar>
 
@@ -35,6 +36,8 @@
 #include <QStatusBar>
 #include <QString>
 #include <QVBoxLayout>
+#include <QFile>
+#include <QTextStream>
 #include <QTimer>
 #include <QWidget>
 
@@ -56,6 +59,13 @@ namespace {
 /// whole point one layer down -- so a width that hides it is a width that hides the feature.
 constexpr int kDockWidth = 420;
 
+/// @brief How much of the window's height the scene panels' area is given, in logical pixels.
+///
+/// The same kind of number as `kDockWidth` and measured the same way. It is a **request to `resizeDocks`** rather
+/// than a minimum: a user who drags the splitter keeps what they dragged, and the value only decides what the
+/// window opens with. 260 of a 720-pixel window leaves the canvas about four hundred, which is where a graph of
+/// five nodes is still readable.
+constexpr int kSceneHeight = 260;
 }  // namespace
 
 namespace {
@@ -196,6 +206,25 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
     // panel, and looking a panel up by position in `view_items()` at that point would be reading a list that a
     // plugin could have changed. A map from item to widget is the honest form of the same thing, and it also keeps
     // the pair visible in one place.
+    //
+    // ## Side by side at the bottom, one panel per item
+    //
+    // The rule is the simplest one that keeps every item visible: **N items, N panels, side by side across the
+    // bottom of the window**, each getting an equal share of the width. Three layouts were tried against the
+    // running window and the first two are worth recording because each looked right in the code:
+    //
+    //   1. stacked in the right-hand column. Six docks do not fit a 720-pixel window, and Qt's answer is not a
+    //      scroll bar -- it gives the later docks **zero** height and they vanish while the window looks fine and
+    //      every check passes. The diagnostic printed five docks with `visible=0 size=100x30` beside it.
+    //   2. tabbed with each other in that column (`tabifyDockWidget`). They fitted, and left the picture about
+    //      twenty pixels tall: visible and useless. `tabifyDockWidget` also turned out not to take effect for
+    //      docks that had just been added to the same area -- the tab bar showed one label and the second dock
+    //      kept its unlaid-out 100x30 -- which is a Qt behaviour this window should not be relying on either way.
+    //
+    // Side by side needs no tab machinery and cannot half-apply: every item gets its own widget in its own dock,
+    // and the number of panels is the number of items. The reopening condition is a **third** item, at which
+    // point three panels across one window is too many and the tabs (or a chooser) become worth the machinery.
+    QDockWidget* first_scene_dock = nullptr;
     for (qp::graph::IViewItem* item : qp::graph::view_items()) {
         if (item == nullptr) continue;
         const QString title = QString::fromUtf8(item->name().data(), static_cast<int>(item->name().size()));
@@ -203,8 +232,17 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
         auto* view = new SceneView(tr("%1: nothing to draw yet -- press Run.").arg(title), dock);
         dock->setWidget(view);
         dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
-        addDockWidget(Qt::RightDockWidgetArea, dock);
+        addDockWidget(Qt::BottomDockWidgetArea, dock);
+        if (first_scene_dock == nullptr) first_scene_dock = dock;
         scene_panels_.emplace_back(item, view);
+    }
+    // Give the pictures a measured share of the height, once the layout exists. A request to `resizeDocks` rather
+    // than a minimum: a user who drags the splitter keeps what they dragged, and this only decides what the window
+    // opens with. 260 of 720 leaves the canvas about four hundred, where a five-node graph is still readable.
+    if (first_scene_dock != nullptr) {
+        QTimer::singleShot(0, this, [this, first_scene_dock] {
+            resizeDocks({first_scene_dock}, {kSceneHeight}, Qt::Vertical);
+        });
     }
     splitDockWidget(dock, confidence_dock, Qt::Vertical);
 
@@ -311,7 +349,16 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
     (void)session_.add_listener(*status_bridge_);
 
     refresh_status();
-    resize(1280, 720);
+    // **Fit the window to the screen it opens on**, and the measurement that forced it: at this machine's 144%
+    // scaling a 1280x720 window occupies 1843x1037 physical pixels while the display has 1707x1067, so the window
+    // opened 95 logical pixels wider than the desktop. What lives in those 95 pixels is the right-hand column --
+    // the readings, the confidence report and the picture panels -- which is to say the window opened with its
+    // right-hand edge off the screen and no way to scroll to it. A default size is a guess about somebody else's
+    // monitor, so it is bounded by what this one actually has.
+    const QSize wanted{1280, 720};
+    const QScreen* here = screen();
+    const QRect available = here != nullptr ? here->availableGeometry() : QRect{};
+    resize(available.isEmpty() ? wanted : wanted.boundedTo(available.size() - QSize{40, 80}));
 }
 
 void EditorWindow::build_file_menu() {

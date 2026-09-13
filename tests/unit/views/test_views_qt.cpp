@@ -48,8 +48,11 @@
 
 #include <QApplication>
 #include <QAction>
+#include <QColor>
+#include <QImage>
 #include <QMenu>
 #include <QMenuBar>
+#include <QPixmap>
 
 #include <qp/graph/mutate/command.hpp>
 #if defined(QP_HAS_QPJSON_FORMAT)
@@ -77,6 +80,7 @@
 #include "node_graph_view.hpp"
 #include "property_panel.hpp"
 
+#include <algorithm>
 #include <filesystem>
 #include <string>
 #include <system_error>
@@ -1559,6 +1563,80 @@ TEST_CASE("qt.views.scene.draws_a_scene_and_says_when_there_is_none", "[views][q
     QPixmap canvas{view.size()};
     view.render(&canvas);
     REQUIRE_FALSE(canvas.isNull());
+
+    // **The fit is uniform and centred**, measured in pixels rather than assumed from the arithmetic. This block
+    // exists because the running window showed a field-line scene as a small cluster in a six-hundred-pixel panel,
+    // and the question a reader asks -- "is the mapping wrong, or is the picture correct for a wide, short
+    // rectangle?" -- is one only pixels can answer.
+    //
+    // The answer is the second: one scale for both axes, chosen by whichever axis binds, which in a 600x200 widget
+    // showing a square scene is the vertical one. So the content reaches close to the top and bottom edges, is
+    // **centred** horizontally, and deliberately does **not** reach the left and right ones. A widget that
+    // stretched each axis to fill would draw a circle as an ellipse, which is the one thing a student reads the
+    // picture for.
+    qp::views::SceneView wide{QStringLiteral("wide")};
+    wide.resize(600, 200);
+    qp::graph::ViewScene spanning;
+    for (int line = -2; line <= 2; ++line) {
+        std::vector<qp::graph::ViewScene::Point> curve;
+        for (int step = 0; step <= 40; ++step) {
+            const double t = -8.0 + 16.0 * static_cast<double>(step) / 40.0;
+            curve.push_back(qp::graph::ViewScene::Point{t, static_cast<double>(line)});
+        }
+        spanning.polylines.push_back(std::move(curve));
+    }
+    spanning.x_min = -8.8;
+    spanning.x_max = 8.8;
+    spanning.y_min = -8.8;
+    spanning.y_max = 8.8;
+    spanning.has_bounds = true;
+    spanning.body_radius = 1.0;
+    wide.set_scene(spanning);
+    QPixmap painted{wide.size()};
+    painted.fill(Qt::white);
+    wide.render(&painted);
+    const QImage image = painted.toImage();
+    int leftmost = image.width();
+    int rightmost = -1;
+    int topmost = image.height();
+    int bottommost = -1;
+    // The background is whatever the widget painted, sampled from a corner the drawing never reaches: a rule based
+    // on "not white" or on a colour would be a rule about this machine's palette, and the first two attempts at it
+    // measured the scale label instead of the curves. The top strip is excluded for the same reason -- the label
+    // lives there, and it is the one mark on the picture that is not part of the picture.
+    const QColor background = image.pixelColor(image.width() - 4, image.height() - 4);
+    for (int x = 0; x < image.width(); ++x) {
+        for (int y = 24; y < image.height(); ++y) {
+            const QColor pixel = image.pixelColor(x, y);
+            const int delta = std::abs(pixel.red() - background.red()) +
+                              std::abs(pixel.green() - background.green()) +
+                              std::abs(pixel.blue() - background.blue());
+            if (delta < 30) continue;
+            leftmost = std::min(leftmost, x);
+            rightmost = std::max(rightmost, x);
+            topmost = std::min(topmost, y);
+            bottommost = std::max(bottommost, y);
+        }
+    }
+    REQUIRE(rightmost > leftmost);
+    // **The mapping's own arithmetic, asserted in pixels.** The rectangle is 600x200 with an 8-pixel margin, the
+    // frame is `+/-8.8` on both axes, and the content spans `+/-8` in `x` and `+/-2` in `y`. One uniform scale is
+    // the smaller of the two the frame allows -- `(200 - 16) / 17.6 = 10.4545` pixels per unit -- and the scene's
+    // origin lands at the widget's centre with `y` flipped. Every expected pixel below is that sentence computed
+    // out, so a change to the fit has to change these numbers deliberately rather than drift past them.
+    constexpr double kScale = (200.0 - 16.0) / 17.6;
+    const auto expected_x = [](double scene_x) { return 300.0 + scene_x * kScale; };
+    const auto expected_y = [](double scene_y) { return 100.0 - scene_y * kScale; };
+    REQUIRE(std::abs(leftmost - expected_x(-8.0)) < 3.0);
+    REQUIRE(std::abs(rightmost - expected_x(8.0)) < 3.0);
+    REQUIRE(std::abs(topmost - expected_y(2.0)) < 3.0);
+    REQUIRE(std::abs(bottommost - expected_y(-2.0)) < 3.0);
+    // And **not** stretched to the sides, which is what "uniform" means here: a widget that fitted each axis
+    // independently would put `x = -8` at the left edge instead of at 216. Asserting the emptiness is asserting
+    // the property that keeps a circle a circle.
+    REQUIRE(leftmost > 100);
+    REQUIRE(rightmost < image.width() - 100);
+    REQUIRE(leftmost < rightmost);
 
     // And the scene is copied: replacing it does not touch what the caller still holds.
     Q_UNUSED(scene);
