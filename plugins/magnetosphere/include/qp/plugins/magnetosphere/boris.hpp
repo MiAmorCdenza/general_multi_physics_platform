@@ -257,19 +257,21 @@ public:
                                                  qp::graph::kernels::AdvanceContext& ctx) override;
 
 private:
-    /// @brief One particle's sub-step loop, which is the whole of what this scheme adds to the family.
-    ///
-    /// @ownership   mutates `loaded`
-    /// @thread      eval
-    /// @pre         `loaded.usable`, and the fields the batch carries are on the parameters' grid
-    /// @post        `loaded.position` and `loaded.velocity` hold the state after `loaded.substeps` sub-steps
-    /// @invariant   The rotation's two shears are constructed so that the scale factors cancel, so `|u|` survives
-    ///              the magnetic part to the rounding
-    /// @errors      noexcept
-    /// @complexity  O(substeps)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.boris.a_magnetic_field_does_no_work
+    /**
+     * @brief One particle's sub-step loop, which is the whole of what this scheme adds to the family.
+     *
+     * @ownership   mutates `loaded`
+     * @thread      eval
+     * @pre         `loaded.usable`, and the fields the batch carries are on the parameters' grid
+     * @post        `loaded.position` and `loaded.velocity` hold the state after `loaded.substeps` sub-steps
+     * @invariant   The rotation's two shears are constructed so that the scale factors cancel, so `|u|` survives
+     *              the magnetic part to the rounding
+     * @errors      noexcept
+     * @complexity  O(substeps)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.boris.a_magnetic_field_does_no_work
+     */
     void push(PusherAdvancer::Loaded& loaded, const qp::graph::kernels::BatchView& batch,
               const qp::graph::kernels::AdvanceContext& ctx) noexcept;
 };

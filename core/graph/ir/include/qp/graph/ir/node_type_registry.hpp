@@ -121,18 +121,20 @@ public:
      */
     [[nodiscard]] diag::Result<void> remove_type(std::string_view type_name) noexcept;
 
-    /// @brief The description registered under `type_name`, or null.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      any
-    /// @pre         none
-    /// @post        none
-    /// @invariant   The pointer stays valid until the type is removed or the registry dies
-    /// @errors      noexcept
-    /// @complexity  O(types)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       graph.catalog.register_and_find
+    /**
+     * @brief The description registered under `type_name`, or null.
+     *
+     * @ownership   borrows from this object
+     * @thread      any
+     * @pre         none
+     * @post        none
+     * @invariant   The pointer stays valid until the type is removed or the registry dies
+     * @errors      noexcept
+     * @complexity  O(types)
+     * @nondet      none
+     * @frozen      no
+     * @tests       graph.catalog.register_and_find
+     */
     [[nodiscard]] const NodeDesc* find(std::string_view type_name) const noexcept override;
 
     /// @brief Number of registered types.

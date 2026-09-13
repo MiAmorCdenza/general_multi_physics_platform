@@ -59,97 +59,107 @@ struct Vec3 final {
     double z = 0.0;
 };
 
-/// @brief Component-wise sum.
-///
-/// @param a The first vector.
-/// @param b The second vector.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        `{a.x + b.x, a.y + b.y, a.z + b.z}`
-/// @invariant   Commutative
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       magnetosphere.geometry.norm_and_dot
+/**
+ * @brief Component-wise sum.
+ *
+ * @param a The first vector.
+ * @param b The second vector.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        `{a.x + b.x, a.y + b.y, a.z + b.z}`
+ * @invariant   Commutative
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.geometry.norm_and_dot
+ */
 [[nodiscard]] constexpr Vec3 operator+(const Vec3& a, const Vec3& b) noexcept {
     return Vec3{a.x + b.x, a.y + b.y, a.z + b.z};
 }
 
-/// @brief Component-wise difference.
-///
-/// @param a The vector to subtract from.
-/// @param b The vector to subtract.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        `{a.x - b.x, a.y - b.y, a.z - b.z}`
-/// @invariant   Anti-commutative
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       magnetosphere.geometry.norm_and_dot
+/**
+ * @brief Component-wise difference.
+ *
+ * @param a The vector to subtract from.
+ * @param b The vector to subtract.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        `{a.x - b.x, a.y - b.y, a.z - b.z}`
+ * @invariant   Anti-commutative
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.geometry.norm_and_dot
+ */
 [[nodiscard]] constexpr Vec3 operator-(const Vec3& a, const Vec3& b) noexcept {
     return Vec3{a.x - b.x, a.y - b.y, a.z - b.z};
 }
 
-/// @brief Uniform scaling.
-///
-/// @param a The vector.
-/// @param s The scalar.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        Every component multiplied by `s`
-/// @invariant   `(a * s) * t == a * (s * t)` up to floating-point rounding
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       magnetosphere.geometry.norm_and_dot
+/**
+ * @brief Uniform scaling.
+ *
+ * @param a The vector.
+ * @param s The scalar.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        Every component multiplied by `s`
+ * @invariant   `(a * s) * t == a * (s * t)` up to floating-point rounding
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.geometry.norm_and_dot
+ */
 [[nodiscard]] constexpr Vec3 operator*(const Vec3& a, double s) noexcept {
     return Vec3{a.x * s, a.y * s, a.z * s};
 }
 
-/// @brief Uniform scaling, scalar first, so `s * a` reads the way the equations write it.
-///
-/// @param s The scalar.
-/// @param a The vector.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        `a * s`
-/// @invariant   Agrees with `operator*(const Vec3&, double)` bit for bit
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       magnetosphere.geometry.norm_and_dot
+/**
+ * @brief Uniform scaling, scalar first, so `s * a` reads the way the equations write it.
+ *
+ * @param s The scalar.
+ * @param a The vector.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        `a * s`
+ * @invariant   Agrees with `operator*(const Vec3&, double)` bit for bit
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.geometry.norm_and_dot
+ */
 [[nodiscard]] constexpr Vec3 operator*(double s, const Vec3& a) noexcept {
     return a * s;
 }
 
-/// @brief Dot product.
-///
-/// @param a The first vector.
-/// @param b The second vector.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        The scalar projection sum
-/// @invariant   Symmetric; zero for orthogonal vectors
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       magnetosphere.geometry.norm_and_dot
+/**
+ * @brief Dot product.
+ *
+ * @param a The first vector.
+ * @param b The second vector.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        The scalar projection sum
+ * @invariant   Symmetric; zero for orthogonal vectors
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.geometry.norm_and_dot
+ */
 [[nodiscard]] constexpr double dot(const Vec3& a, const Vec3& b) noexcept {
     return a.x * b.x + a.y * b.y + a.z * b.z;
 }
@@ -180,59 +190,65 @@ struct Vec3 final {
     return Vec3{a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
 
-/// @brief Squared length. The form to prefer when only a comparison is wanted: no square root, so no rounding.
-///
-/// @param a The vector.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        `dot(a, a)`
-/// @invariant   Never negative
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       magnetosphere.geometry.norm_and_dot
+/**
+ * @brief Squared length. The form to prefer when only a comparison is wanted: no square root, so no rounding.
+ *
+ * @param a The vector.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        `dot(a, a)`
+ * @invariant   Never negative
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.geometry.norm_and_dot
+ */
 [[nodiscard]] constexpr double norm2(const Vec3& a) noexcept { return dot(a, a); }
 
-/// @brief Length. Uses `std::sqrt`, so it is not `constexpr`.
-///
-/// @param a The vector.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        The Euclidean length, or a NaN only when a component already is one
-/// @invariant   `norm(a) * norm(a) == norm2(a)` up to one rounding
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       magnetosphere.geometry.norm_and_dot
+/**
+ * @brief Length. Uses `std::sqrt`, so it is not `constexpr`.
+ *
+ * @param a The vector.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        The Euclidean length, or a NaN only when a component already is one
+ * @invariant   `norm(a) * norm(a) == norm2(a)` up to one rounding
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.geometry.norm_and_dot
+ */
 [[nodiscard]] inline double norm(const Vec3& a) noexcept {
     return std::sqrt(norm2(a));
 }
 
-/// @brief Whether every component is a finite number.
-///
-/// The check a pusher makes before it trusts a field sample, and it exists because the alternative -- letting a
-/// NaN in and retiring the particle afterwards -- loses the information that the **field** was the source. A
-/// particle whose state became non-finite is a numerical failure; a particle handed a non-finite field is a
-/// configuration whose field model is broken, and those want different sentences in a report.
-///
-/// @param a The vector.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        True exactly when no component is an infinity or a NaN
-/// @invariant   False implies `norm2` is not a real number
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       magnetosphere.geometry.norm_and_dot
+/**
+ * @brief Whether every component is a finite number.
+ *
+ * The check a pusher makes before it trusts a field sample, and it exists because the alternative -- letting a
+ * NaN in and retiring the particle afterwards -- loses the information that the **field** was the source. A
+ * particle whose state became non-finite is a numerical failure; a particle handed a non-finite field is a
+ * configuration whose field model is broken, and those want different sentences in a report.
+ *
+ * @param a The vector.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        True exactly when no component is an infinity or a NaN
+ * @invariant   False implies `norm2` is not a real number
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.geometry.norm_and_dot
+ */
 [[nodiscard]] inline bool is_finite(const Vec3& a) noexcept {
     return std::isfinite(a.x) && std::isfinite(a.y) && std::isfinite(a.z);
 }

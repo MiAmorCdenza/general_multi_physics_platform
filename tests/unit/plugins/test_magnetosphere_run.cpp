@@ -236,6 +236,31 @@ TEST_CASE("magnetosphere.emitter.the_type_declares_the_ports_the_run_reads", "[m
     REQUIRE(kElectronChargeMassSI < 0.0);
     REQUIRE(relative(kAlphaChargeMassSI / kProtonChargeMassSI, 0.5) < 1.0e-15);
 
+    // **The mass table, and the agreement its contract claims.** `mass_of`'s contract named a case for this
+    // agreement from the day it was written and the case was never written -- the claim sat in a `///` block, which
+    // the gate cannot read, so nothing ever checked it. The assertions are here now, in the case that already tests
+    // the species table, because the two tables are one fact: the index means the same species in both, and the
+    // product of the two entries is the species' charge.
+    //
+    // The last of the three is the one worth having. A mass table that drifted out of order with the charge-to-mass
+    // table would still be three plausible numbers, and `q/m * m` is what catches it: it has to come out as the
+    // elementary charge (or twice it, for the alpha), which no reordering preserves.
+    REQUIRE(EmitterNodes::mass_of(0) == kProtonMassKg);
+    REQUIRE(EmitterNodes::mass_of(1) == kElectronMassKg);
+    REQUIRE(EmitterNodes::mass_of(99) == kProtonMassKg);
+    for (std::int64_t index = 0; index < 3; ++index) {
+        const double charge = EmitterNodes::charge_mass_of(index) * EmitterNodes::mass_of(index);
+        // **The sign is part of the assertion, and the first version of this got it wrong**: the electron's entry
+        // is the negative one -- its charge is -- so a loop that asserted a positive product was asserting that
+        // there is no electron in the table. The expected values are +e, -e and +2e, which is what makes this
+        // agreement a check on the *pairing* rather than on three plausible numbers.
+        const double expected = index == 2   ? 2.0 * kElementaryChargeC
+                                : index == 1 ? -kElementaryChargeC
+                                             : kElementaryChargeC;
+        REQUIRE(relative(charge, expected) < 1.0e-12);
+    }
+    REQUIRE(EmitterNodes::mass_of(2) > EmitterNodes::mass_of(0));
+
     // A fresh node produces a spec a run can use, and its defaults are the ones the description promises.
     graph::Node fresh;
     fresh.type_name = EmitterNodes::kRingType;

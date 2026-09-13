@@ -163,22 +163,24 @@ public:
         return formats_;
     }
 
-    /// @brief The format a plain "save" should use, or null when none is mounted.
-    ///
-    /// The first mounted one. When the document was opened from a file, the caller passes that format
-    /// explicitly instead -- resaving in a different format than the one it was read as would be a
-    /// silent conversion. See the file comment.
-    ///
-    /// @ownership   borrows
-    /// @thread      main
-    /// @pre         none
-    /// @post        Returns the first non-null format, or null
-    /// @invariant   Consistent with `formats()`
-    /// @errors      noexcept
-    /// @complexity  O(formats)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       document.formats_are_mounted_once_and_in_order
+    /**
+     * @brief The format a plain "save" should use, or null when none is mounted.
+     *
+     * The first mounted one. When the document was opened from a file, the caller passes that format
+     * explicitly instead -- resaving in a different format than the one it was read as would be a
+     * silent conversion. See the file comment.
+     *
+     * @ownership   borrows
+     * @thread      main
+     * @pre         none
+     * @post        Returns the first non-null format, or null
+     * @invariant   Consistent with `formats()`
+     * @errors      noexcept
+     * @complexity  O(formats)
+     * @nondet      none
+     * @frozen      no
+     * @tests       document.formats_are_mounted_once_and_in_order
+     */
     [[nodiscard]] qp::authoring::IDocumentFormat* default_format() const noexcept;
 
     /**

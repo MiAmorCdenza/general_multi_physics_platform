@@ -101,35 +101,39 @@ public:
 
     RenderNodes() = delete;
 
-    /// @brief The node types this build ships, ready to register with a host.
-    ///
-    /// @ownership   owns the returned descriptions
-    /// @thread      main
-    /// @pre         none
-    /// @post        One description for each item, with the ports the view will read
-    /// @invariant   `has_compute` is false, which is what keeps the type out of every evaluation plan
-    /// @errors      May allocate; allocation failure terminates
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.render.the_item_is_declared_and_never_evaluated,
-    ///              magnetosphere.render.the_field_lines_type_declares_the_ports_the_item_reads
+    /**
+     * @brief The node types this build ships, ready to register with a host.
+     *
+     * @ownership   owns the returned descriptions
+     * @thread      main
+     * @pre         none
+     * @post        One description for each item, with the ports the view will read
+     * @invariant   `has_compute` is false, which is what keeps the type out of every evaluation plan
+     * @errors      May allocate; allocation failure terminates
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.render.the_item_is_declared_and_never_evaluated,
+     *              magnetosphere.render.the_field_lines_type_declares_the_ports_the_item_reads
+     */
     [[nodiscard]] static std::vector<qp::graph::NodeDesc> node_types();
 
-    /// @brief Registers the render types with `host` as built-ins.
-    ///
-    /// @param host The host. Borrowed.
-    ///
-    /// @ownership   observes `host`
-    /// @thread      main
-    /// @pre         none
-    /// @post        Every type whose name was free is registered
-    /// @invariant   A type already registered under its name is left alone rather than duplicated
-    /// @errors      noexcept
-    /// @complexity  O(types)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.render.the_item_is_declared_and_never_evaluated
+    /**
+     * @brief Registers the render types with `host` as built-ins.
+     *
+     * @param host The host. Borrowed.
+     *
+     * @ownership   observes `host`
+     * @thread      main
+     * @pre         none
+     * @post        Every type whose name was free is registered
+     * @invariant   A type already registered under its name is left alone rather than duplicated
+     * @errors      noexcept
+     * @complexity  O(types)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.render.the_item_is_declared_and_never_evaluated
+     */
     static std::size_t mount(qp::host::PluginHost& host) noexcept;
 };
 

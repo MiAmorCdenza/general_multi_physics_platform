@@ -116,19 +116,21 @@ inline constexpr FieldKey kNoField{};
  */
 class FieldSet final {
 public:
-    /// @brief An empty set.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        `size()` is zero
-    /// @invariant   No allocation
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       field.set.publishes_and_reads_back
-    FieldSet() = default;
+    /**
+     * @brief An empty set.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        `size()` is zero
+     * @invariant   No allocation
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       field.set.publishes_and_reads_back
+     */
+    FieldSet() noexcept = default;
 
     /**
      * @brief Publishes one field, taking ownership of its samples.
@@ -185,97 +187,109 @@ public:
      */
     [[nodiscard]] FieldValue view(FieldKey key) const noexcept;
 
-    /// @brief Whether `key` names a published field.
-    ///
-    /// @param key Which field.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        Equivalent to `is_readable(view(key))`
-    /// @invariant   Never fails
-    /// @errors      noexcept
-    /// @complexity  O(log entries)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       field.set.keys_are_ordered_and_distinct
+    /**
+     * @brief Whether `key` names a published field.
+     *
+     * @param key Which field.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        Equivalent to `is_readable(view(key))`
+     * @invariant   Never fails
+     * @errors      noexcept
+     * @complexity  O(log entries)
+     * @nondet      none
+     * @frozen      no
+     * @tests       field.set.keys_are_ordered_and_distinct
+     */
     [[nodiscard]] bool contains(FieldKey key) const noexcept;
 
-    /// @brief Drops one field, releasing its samples.
-    ///
-    /// @param key Which field.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        `contains(key)` is false
-    /// @invariant   Other entries are untouched, and their sample buffers are not relocated
-    /// @errors      noexcept
-    /// @complexity  O(entries)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       field.set.keys_are_ordered_and_distinct
+    /**
+     * @brief Drops one field, releasing its samples.
+     *
+     * @param key Which field.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        `contains(key)` is false
+     * @invariant   Other entries are untouched, and their sample buffers are not relocated
+     * @errors      noexcept
+     * @complexity  O(entries)
+     * @nondet      none
+     * @frozen      no
+     * @tests       field.set.keys_are_ordered_and_distinct
+     */
     bool erase(FieldKey key) noexcept;
 
-    /// @brief Drops every field. Any `FieldValue` taken from here becomes invalid.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        `size()` is zero
-    /// @invariant   The capacity of the entries vector is kept, because a run that rebakes does not want to
-    ///              allocate its way back to where it was
-    /// @errors      noexcept
-    /// @complexity  O(entries)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       field.set.keys_are_ordered_and_distinct
+    /**
+     * @brief Drops every field. Any `FieldValue` taken from here becomes invalid.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        `size()` is zero
+     * @invariant   The capacity of the entries vector is kept, because a run that rebakes does not want to
+     *              allocate its way back to where it was
+     * @errors      noexcept
+     * @complexity  O(entries)
+     * @nondet      none
+     * @frozen      no
+     * @tests       field.set.keys_are_ordered_and_distinct
+     */
     void clear() noexcept;
 
-    /// @brief How many fields are published.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        At most the number of distinct keys ever published without an erase
-    /// @invariant   Equals the number of keys `view` answers readably for
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       field.set.publishes_and_reads_back
+    /**
+     * @brief How many fields are published.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        At most the number of distinct keys ever published without an erase
+     * @invariant   Equals the number of keys `view` answers readably for
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       field.set.publishes_and_reads_back
+     */
     [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }
 
-    /// @brief The keys, in ascending order.
-    ///
-    /// Published so a caller can report **what a run baked** without knowing which nodes it baked: the set is
-    /// the record, and a report that could not enumerate it would have to ask the graph, which is the layer this
-    /// one deliberately does not know about.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      main
-    /// @pre         none
-    /// @post        One key per published field, ascending
-    /// @invariant   Sorted and distinct
-    /// @errors      noexcept
-    /// @complexity  O(entries)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       field.set.keys_are_ordered_and_distinct
+    /**
+     * @brief The keys, in ascending order.
+     *
+     * Published so a caller can report **what a run baked** without knowing which nodes it baked: the set is
+     * the record, and a report that could not enumerate it would have to ask the graph, which is the layer this
+     * one deliberately does not know about.
+     *
+     * @ownership   borrows from this object
+     * @thread      main
+     * @pre         none
+     * @post        One key per published field, ascending
+     * @invariant   Sorted and distinct
+     * @errors      Allocates the returned vector; a failure to allocate propagates
+     * @complexity  O(entries)
+     * @nondet      none
+     * @frozen      no
+     * @tests       field.set.keys_are_ordered_and_distinct
+     */
     [[nodiscard]] std::vector<FieldKey> keys() const;
 
-    /// @brief Total sample bytes held, for a report that has to say what a bake cost.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        The sum of every entry's byte count
-    /// @invariant   Equals the bytes `view` describes, summed
-    /// @errors      noexcept
-    /// @complexity  O(entries)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       field.set.publishes_and_reads_back
+    /**
+     * @brief Total sample bytes held, for a report that has to say what a bake cost.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        The sum of every entry's byte count
+     * @invariant   Equals the bytes `view` describes, summed
+     * @errors      noexcept
+     * @complexity  O(entries)
+     * @nondet      none
+     * @frozen      no
+     * @tests       field.set.publishes_and_reads_back
+     */
     [[nodiscard]] std::uint64_t bytes() const noexcept;
 
 private:

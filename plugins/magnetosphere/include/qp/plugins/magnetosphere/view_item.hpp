@@ -69,51 +69,57 @@ public:
 
     ParticleViewItem() = default;
 
-    /// @brief The name.
-    ///
-    /// @ownership   observes
-    /// @thread      any
-    /// @pre         none
-    /// @post        `kName`
-    /// @invariant   Constant
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.render.a_snapshot_becomes_a_scene
+    /**
+     * @brief The name.
+     *
+     * @ownership   observes
+     * @thread      any
+     * @pre         none
+     * @post        `kName`
+     * @invariant   Constant
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.render.a_snapshot_becomes_a_scene
+     */
     [[nodiscard]] std::string_view name() const noexcept override { return kName; }
 
-    /// @brief Whether the declaration is this kit's particle item.
-    ///
-    /// @param type_name The render node's type.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        True exactly for `render.particles`
-    /// @invariant   Depends only on the type name
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.render.a_snapshot_becomes_a_scene
+    /**
+     * @brief Whether the declaration is this kit's particle item.
+     *
+     * @param type_name The render node's type.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        True exactly for `render.particles`
+     * @invariant   Depends only on the type name
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.render.a_snapshot_becomes_a_scene
+     */
     [[nodiscard]] bool draws(std::string_view type_name) const noexcept override;
 
-    /// @brief Turns a position snapshot into a scene.
-    ///
-    /// @param request The graph, the declarations and the snapshot. A null or empty snapshot produces an empty
-    ///                scene, which is a window that has not run yet rather than a failure.
-    ///
-    /// @ownership   owns the returned scene
-    /// @thread      main
-    /// @pre         `request.valid()`
-    /// @post        One point per particle, `x` and `y` in earth radii, with bounds unless there are none
-    /// @invariant   Does not modify the request
-    /// @errors      Cannot fail: a request that cannot be drawn answers with an empty scene
-    /// @complexity  O(particles)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.render.a_snapshot_becomes_a_scene
+    /**
+     * @brief Turns a position snapshot into a scene.
+     *
+     * @param request The graph, the declarations and the snapshot. A null or empty snapshot produces an empty
+     *                scene, which is a window that has not run yet rather than a failure.
+     *
+     * @ownership   owns the returned scene
+     * @thread      main
+     * @pre         `request.valid()`
+     * @post        One point per particle, `x` and `y` in earth radii, with bounds unless there are none
+     * @invariant   Does not modify the request
+     * @errors      Cannot fail: a request that cannot be drawn answers with an empty scene
+     * @complexity  O(particles)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.render.a_snapshot_becomes_a_scene
+     */
     [[nodiscard]] qp::graph::ViewScene scene(const qp::graph::ViewRequest& request) override;
 };
 

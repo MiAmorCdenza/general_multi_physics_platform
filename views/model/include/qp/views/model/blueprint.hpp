@@ -54,16 +54,18 @@
 
 namespace qp::views::model {
 
-/// @brief One node a blueprint asks for: its type, the name a user will see, and its starting parameters.
-///
-/// @ownership   owns
-/// @thread      any
-/// @pre         none
-/// @post        none
-/// @invariant   An empty `type_name` is a malformed blueprint and `check_blueprint` refuses it
-/// @errors      noexcept
-/// @frozen      no
-/// @tests       blueprint.a_blueprint_becomes_nodes_parameters_and_wires
+/**
+ * @brief One node a blueprint asks for: its type, the name a user will see, and its starting parameters.
+ *
+ * @ownership   owns
+ * @thread      any
+ * @pre         none
+ * @post        none
+ * @invariant   An empty `type_name` is a malformed blueprint and `check_blueprint` refuses it
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       blueprint.a_blueprint_becomes_nodes_parameters_and_wires
+ */
 struct BlueprintNode final {
     /// The node type, as the catalog names it. The one field a plugin's vocabulary appears in.
     std::string type_name;
@@ -73,16 +75,18 @@ struct BlueprintNode final {
     std::vector<std::pair<qp::graph::PortNumber, qp::ports::Value>> params;
 };
 
-/// @brief One wire: an output port of one node in the list to an input port of another.
-///
-/// @ownership   owns
-/// @thread      any
-/// @pre         none
-/// @post        none
-/// @invariant   Both indices are into the blueprint's node list, not into the graph
-/// @errors      noexcept
-/// @frozen      no
-/// @tests       blueprint.a_blueprint_becomes_nodes_parameters_and_wires
+/**
+ * @brief One wire: an output port of one node in the list to an input port of another.
+ *
+ * @ownership   owns
+ * @thread      any
+ * @pre         none
+ * @post        none
+ * @invariant   Both indices are into the blueprint's node list, not into the graph
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       blueprint.a_blueprint_becomes_nodes_parameters_and_wires
+ */
 struct BlueprintWire final {
     /// The index of the node the wire leaves.
     std::size_t from = 0;
@@ -94,16 +98,18 @@ struct BlueprintWire final {
     qp::graph::PortNumber to_port = 1;
 };
 
-/// @brief A demo's graph, in the vocabulary of node types.
-///
-/// @ownership   owns
-/// @thread      any
-/// @pre         none
-/// @post        none
-/// @invariant   Wires refer to nodes by index, so a blueprint is independent of the ids a session allocates
-/// @errors      noexcept
-/// @frozen      no
-/// @tests       blueprint.a_blueprint_becomes_nodes_parameters_and_wires
+/**
+ * @brief A demo's graph, in the vocabulary of node types.
+ *
+ * @ownership   owns
+ * @thread      any
+ * @pre         none
+ * @post        none
+ * @invariant   Wires refer to nodes by index, so a blueprint is independent of the ids a session allocates
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       blueprint.a_blueprint_becomes_nodes_parameters_and_wires
+ */
 struct GraphBlueprint final {
     /// What a menu entry says. Empty for a blueprint nothing offers.
     std::string label;
@@ -113,16 +119,18 @@ struct GraphBlueprint final {
     std::vector<BlueprintWire> wires;
 };
 
-/// @brief What checking a blueprint found.
-///
-/// @ownership   owns
-/// @thread      any
-/// @pre         none
-/// @post        none
-/// @invariant   `ok` is true exactly when `refusal` is empty
-/// @errors      noexcept
-/// @frozen      no
-/// @tests       blueprint.a_blueprint_this_build_cannot_offer_is_refused_before_anything_is_added
+/**
+ * @brief What checking a blueprint found.
+ *
+ * @ownership   owns
+ * @thread      any
+ * @pre         none
+ * @post        none
+ * @invariant   `ok` is true exactly when `refusal` is empty
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       blueprint.a_blueprint_this_build_cannot_offer_is_refused_before_anything_is_added
+ */
 struct BlueprintCheck final {
     /// Whether this build can offer the blueprint at all.
     bool ok = false;
@@ -130,16 +138,18 @@ struct BlueprintCheck final {
     std::string refusal;
 };
 
-/// @brief What applying a blueprint produced.
-///
-/// @ownership   owns
-/// @thread      any
-/// @pre         none
-/// @post        none
-/// @invariant   `ok` is true exactly when every node, parameter and wire was applied
-/// @errors      noexcept
-/// @frozen      no
-/// @tests       blueprint.a_blueprint_becomes_nodes_parameters_and_wires
+/**
+ * @brief What applying a blueprint produced.
+ *
+ * @ownership   owns
+ * @thread      any
+ * @pre         none
+ * @post        none
+ * @invariant   `ok` is true exactly when every node, parameter and wire was applied
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       blueprint.a_blueprint_becomes_nodes_parameters_and_wires
+ */
 struct BlueprintReport final {
     /// Whether the whole demo was applied.
     bool ok = false;

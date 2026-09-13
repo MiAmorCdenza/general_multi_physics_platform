@@ -209,18 +209,20 @@ public:
     [[nodiscard]] diag::Result<void> advance(const graph::kernels::BatchView& batch,
                                              graph::kernels::AdvanceContext& ctx) override;
 
-    /// @brief Whether `prepare` has succeeded at least once.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        none
-    /// @invariant   True for every object whose last `prepare` returned ok
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.mechanics.oscillator_rejects_bad_input
+    /**
+     * @brief Whether `prepare` has succeeded at least once.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        none
+     * @invariant   True for every object whose last `prepare` returned ok
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.mechanics.oscillator_rejects_bad_input
+     */
     [[nodiscard]] bool is_prepared() const noexcept { return prepared_; }
 
     /**
@@ -256,37 +258,41 @@ public:
      */
     [[nodiscard]] graph::kernels::ClampPolicy clamp_policy() const noexcept;
 
-    /// @brief How many values this operator has clamped since it was prepared.
-    ///
-    /// Exposed because C8 requires that numerical error not be mistaken for physics: a run
-    /// that has been clamped 41 000 times looks exactly like a run that has not, unless
-    /// somebody says so. The count is per operator and is reset by `prepare`, so it
-    /// describes the current configuration rather than the process's history.
-    ///
-    /// @ownership   pure
-    /// @thread      eval (read after a run)
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Zero immediately after a successful `prepare`
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.mechanics.oscillator_clamps_and_reports_it
+    /**
+     * @brief How many values this operator has clamped since it was prepared.
+     *
+     * Exposed because C8 requires that numerical error not be mistaken for physics: a run
+     * that has been clamped 41 000 times looks exactly like a run that has not, unless
+     * somebody says so. The count is per operator and is reset by `prepare`, so it
+     * describes the current configuration rather than the process's history.
+     *
+     * @ownership   pure
+     * @thread      eval (read after a run)
+     * @pre         none
+     * @post        none
+     * @invariant   Zero immediately after a successful `prepare`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.mechanics.oscillator_clamps_and_reports_it
+     */
     [[nodiscard]] std::uint64_t clamps_fired() const noexcept { return clamps_fired_; }
 
-    /// @brief The prepared angular frequency, or 0 when unprepared.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Positive exactly when `is_prepared()`
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.mechanics.oscillator_rejects_bad_input
+    /**
+     * @brief The prepared angular frequency, or 0 when unprepared.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        none
+     * @invariant   Positive exactly when `is_prepared()`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.mechanics.oscillator_rejects_bad_input
+     */
     [[nodiscard]] double omega() const noexcept { return omega_; }
 
 private:

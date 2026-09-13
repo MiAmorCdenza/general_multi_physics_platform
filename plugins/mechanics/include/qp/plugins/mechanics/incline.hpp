@@ -222,78 +222,88 @@ public:
      */
     [[nodiscard]] graph::kernels::ClampPolicy clamp_policy() const noexcept;
 
-    /// @brief How many values this operator has clamped since it was prepared.
-    ///
-    /// C8 requires that numerical error not be mistaken for physics, and a run that has been
-    /// clamped looks exactly like one that has not unless somebody says so. Reset by
-    /// `prepare`, so the count describes the current configuration.
-    ///
-    /// @ownership   pure
-    /// @thread      eval (read after a run)
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Zero immediately after a successful `prepare`
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.mechanics.incline_clamps_and_reports_it
+    /**
+     * @brief How many values this operator has clamped since it was prepared.
+     *
+     * C8 requires that numerical error not be mistaken for physics, and a run that has been
+     * clamped looks exactly like one that has not unless somebody says so. Reset by
+     * `prepare`, so the count describes the current configuration.
+     *
+     * @ownership   pure
+     * @thread      eval (read after a run)
+     * @pre         none
+     * @post        none
+     * @invariant   Zero immediately after a successful `prepare`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.mechanics.incline_clamps_and_reports_it
+     */
     [[nodiscard]] std::uint64_t clamps_fired() const noexcept { return clamps_fired_; }
 
-    /// @brief Whether `prepare` has succeeded at least once.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        none
-    /// @invariant   True for every object whose last `prepare` returned ok
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.mechanics.incline_rejects_impossible_surfaces
+    /**
+     * @brief Whether `prepare` has succeeded at least once.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        none
+     * @invariant   True for every object whose last `prepare` returned ok
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.mechanics.incline_rejects_impossible_surfaces
+     */
     [[nodiscard]] bool is_prepared() const noexcept { return prepared_; }
 
-    /// @brief The prepared gravitational acceleration, or 0 when unprepared.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Positive exactly when `is_prepared()`
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.mechanics.incline_rejects_impossible_surfaces
+    /**
+     * @brief The prepared gravitational acceleration, or 0 when unprepared.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        none
+     * @invariant   Positive exactly when `is_prepared()`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.mechanics.incline_rejects_impossible_surfaces
+     */
     [[nodiscard]] double gravity() const noexcept { return gravity_; }
 
-    /// @brief The prepared static friction coefficient.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Unchanged by a refused `prepare`
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.mechanics.incline_rejects_impossible_surfaces
+    /**
+     * @brief The prepared static friction coefficient.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        none
+     * @invariant   Unchanged by a refused `prepare`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.mechanics.incline_rejects_impossible_surfaces
+     */
     [[nodiscard]] double static_friction() const noexcept { return mu_static_; }
 
-    /// @brief The prepared kinetic friction coefficient.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Never exceeds `static_friction()`
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.mechanics.incline_rejects_impossible_surfaces
+    /**
+     * @brief The prepared kinetic friction coefficient.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        none
+     * @invariant   Never exceeds `static_friction()`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.mechanics.incline_rejects_impossible_surfaces
+     */
     [[nodiscard]] double kinetic_friction() const noexcept { return mu_kinetic_; }
 
 private:

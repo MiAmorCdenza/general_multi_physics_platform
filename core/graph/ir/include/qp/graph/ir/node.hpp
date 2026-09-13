@@ -80,18 +80,20 @@ struct Node final {
         return qp::ports::Value{};
     }
 
-    /// @brief Set a parameter value. Replaces an existing entry, otherwise appends.
-    ///
-    /// @ownership   owns (copies the value)
-    /// @thread      main
-    /// @pre         number != 0
-    /// @post        `param(number) == value`
-    /// @invariant   The same number appears at most once
-    /// @errors      noexcept
-    /// @complexity  O(n)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       graph.node.set_param_replaces
+    /**
+     * @brief Set a parameter value. Replaces an existing entry, otherwise appends.
+     *
+     * @ownership   owns (copies the value)
+     * @thread      main
+     * @pre         number != 0
+     * @post        `param(number) == value`
+     * @invariant   The same number appears at most once
+     * @errors      Allocates when the number is new; a failure to allocate propagates
+     * @complexity  O(n)
+     * @nondet      none
+     * @frozen      no
+     * @tests       graph.node.set_param_replaces
+     */
     void set_param(PortNumber number, qp::ports::Value value) {
         for (auto& p : params) {
             if (p.number == number) {

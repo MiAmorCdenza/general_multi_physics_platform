@@ -271,36 +271,40 @@ public:
     /// @brief The provider for `id`, or null. Null means "nobody can do this".
     [[nodiscard]] ICapabilityProvider* provider_of(std::string_view id) const noexcept;
 
-    /// @brief Every capability id currently available, in registration order.
-    ///
-    /// Registration order, not sorted: a caller that forwards to "the first
-    /// provider" gets a stable answer only if this order is stable, and it is the
-    /// order the plugins were loaded in.
-    ///
-    /// @ownership   pure (returns copies)
-    /// @thread      main
-    /// @pre         none
-    /// @post        One entry per granted offer
-    /// @invariant   Repeated calls without intervening mutation return an equal vector
-    /// @errors      noexcept; allocation failure terminates
-    /// @complexity  O(n)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       capability.registry.negotiate_grants_declared
+    /**
+     * @brief Every capability id currently available, in registration order.
+     *
+     * Registration order, not sorted: a caller that forwards to "the first
+     * provider" gets a stable answer only if this order is stable, and it is the
+     * order the plugins were loaded in.
+     *
+     * @ownership   pure (returns copies)
+     * @thread      main
+     * @pre         none
+     * @post        One entry per granted offer
+     * @invariant   Repeated calls without intervening mutation return an equal vector
+     * @errors      noexcept; allocation failure terminates
+     * @complexity  O(n)
+     * @nondet      none
+     * @frozen      no
+     * @tests       capability.registry.negotiate_grants_declared
+     */
     [[nodiscard]] std::vector<CapabilityId> available_ids() const noexcept;
 
-    /// @brief The plugin ids that were granted a registration, in order.
-    ///
-    /// @ownership   pure (returns copies)
-    /// @thread      main
-    /// @pre         none
-    /// @post        One entry per registered plugin, deduplicated
-    /// @invariant   A plugin offering three capabilities appears once
-    /// @errors      noexcept; allocation failure terminates
-    /// @complexity  O(n)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       capability.registry.negotiate_grants_declared
+    /**
+     * @brief The plugin ids that were granted a registration, in order.
+     *
+     * @ownership   pure (returns copies)
+     * @thread      main
+     * @pre         none
+     * @post        One entry per registered plugin, deduplicated
+     * @invariant   A plugin offering three capabilities appears once
+     * @errors      noexcept; allocation failure terminates
+     * @complexity  O(n)
+     * @nondet      none
+     * @frozen      no
+     * @tests       capability.registry.negotiate_grants_declared
+     */
     [[nodiscard]] std::vector<std::string> plugin_ids() const noexcept;
 
     /// @brief How many capability ids are available.

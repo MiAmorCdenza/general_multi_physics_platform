@@ -300,18 +300,20 @@ enum class LoadFailure : std::uint8_t {
     registration_failed = 10,
 };
 
-/// @brief Stable short name for `LoadFailure`, for logs and test ids.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        One of a fixed set of literals
-/// @invariant   Never empty
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       plugin.loader.reports_distinct_failures
+/**
+ * @brief Stable short name for `LoadFailure`, for logs and test ids.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        One of a fixed set of literals
+ * @invariant   Never empty
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       plugin.loader.reports_distinct_failures
+ */
 [[nodiscard]] const char* to_string(LoadFailure f) noexcept;
 
 /**
@@ -379,60 +381,68 @@ public:
     LoadedPlugin(LoadedPlugin&& other) noexcept;
     LoadedPlugin& operator=(LoadedPlugin&& other) noexcept;
 
-    /// @brief Whether a library is currently mapped.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        none
-    /// @invariant   True for every object returned by `load_plugin`
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.loader.loads_and_unloads
+    /**
+     * @brief Whether a library is currently mapped.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   True for every object returned by `load_plugin`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.loader.loads_and_unloads
+     */
     [[nodiscard]] bool valid() const noexcept;
 
-    /// @brief The manifest the plugin declared, valid while the library is mapped.
-    ///
-    /// @ownership   borrows from the loaded library
-    /// @thread      main
-    /// @pre         valid()
-    /// @post        none
-    /// @invariant   Identical on every call
-    /// @errors      Undefined if `valid()` is false
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.loader.loads_and_unloads
+    /**
+     * @brief The manifest the plugin declared, valid while the library is mapped.
+     *
+     * @ownership   borrows from the loaded library
+     * @thread      main
+     * @pre         valid()
+     * @post        none
+     * @invariant   Identical on every call
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.loader.loads_and_unloads
+     */
     [[nodiscard]] const Manifest& manifest() const noexcept;
 
-    /// @brief The path this plugin was loaded from.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      main
-    /// @pre         valid()
-    /// @post        none
-    /// @invariant   As passed to `load_plugin`
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.loader.loads_and_unloads
+    /**
+     * @brief The path this plugin was loaded from.
+     *
+     * @ownership   borrows from this object
+     * @thread      main
+     * @pre         valid()
+     * @post        none
+     * @invariant   As passed to `load_plugin`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.loader.loads_and_unloads
+     */
     [[nodiscard]] const std::string& path() const noexcept;
 
-    /// @brief Whether this plugin's contributions are currently installed.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        False after `unload()`
-    /// @invariant   A plugin that never installed anything reports false
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.loader.loads_and_unloads
+    /**
+     * @brief Whether this plugin's contributions are currently installed.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        False after `unload()`
+     * @invariant   A plugin that never installed anything reports false
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.loader.loads_and_unloads
+     */
     [[nodiscard]] bool contributes() const noexcept;
 
     /**
@@ -525,32 +535,36 @@ struct LoadReport final {
     /// equals `plugins.size()` whenever `all_ok()` is true.
     std::size_t requested = 0;
 
-    /// @brief Whether every requested plugin loaded.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Equivalent to every outcome having `failure == ok`
-    /// @errors      noexcept
-    /// @complexity  O(outcomes.size())
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.loader.load_set_is_all_or_nothing
+    /**
+     * @brief Whether every requested plugin loaded.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   Equivalent to every outcome having `failure == ok`
+     * @errors      noexcept
+     * @complexity  O(outcomes.size())
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.loader.load_set_is_all_or_nothing
+     */
     [[nodiscard]] bool all_ok() const noexcept;
 
-    /// @brief The first failure, or nullptr when every plugin loaded.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      main
-    /// @pre         none
-    /// @post        null when `all_ok()`
-    /// @invariant   Reports the first failure in input order, not an arbitrary one
-    /// @errors      noexcept
-    /// @complexity  O(outcomes.size())
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.loader.load_set_is_all_or_nothing
+    /**
+     * @brief The first failure, or nullptr when every plugin loaded.
+     *
+     * @ownership   borrows from this object
+     * @thread      main
+     * @pre         none
+     * @post        null when `all_ok()`
+     * @invariant   Reports the first failure in input order, not an arbitrary one
+     * @errors      noexcept
+     * @complexity  O(outcomes.size())
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.loader.load_set_is_all_or_nothing
+     */
     [[nodiscard]] const LoadOutcome* first_failure() const noexcept;
 };
 

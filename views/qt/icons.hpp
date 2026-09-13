@@ -42,16 +42,18 @@
 
 namespace qp::views::qt::icons {
 
-/// @brief How an icon's ink is coloured. The member names are `theme::Palette` fields.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        none
-/// @invariant   At most as many entries as `IconBitmap::kMaxInk`
-/// @errors      noexcept
-/// @frozen      no
-/// @tests       theme.icons_use_palette_ink
+/**
+ * @brief How an icon's ink is coloured. The member names are `theme::Palette` fields.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        none
+ * @invariant   At most as many entries as `IconBitmap::kMaxInk`
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       theme.icons_use_palette_ink
+ */
 enum class Ink : std::uint8_t {
     /// `Palette::text` -- the main stroke.
     stroke = 0,
@@ -111,77 +113,87 @@ enum class Glyph : std::uint8_t {
     measure = 5,
 };
 
-/// @brief The bitmap for a glyph. Total: an unknown glyph yields the `new_document` glyph rather than nothing.
-///
-/// @ownership   borrows (a reference to a function-local constant)
-/// @thread      any
-/// @pre         none
-/// @post        `size == IconBitmap::kSize`
-/// @invariant   Stable for the lifetime of the process
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       theme.icons_are_well_formed
+/**
+ * @brief The bitmap for a glyph. Total: an unknown glyph yields the `new_document` glyph rather than nothing.
+ *
+ * @ownership   borrows (a reference to a function-local constant)
+ * @thread      any
+ * @pre         none
+ * @post        `size == IconBitmap::kSize`
+ * @invariant   Stable for the lifetime of the process
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       theme.icons_are_well_formed
+ */
 [[nodiscard]] const IconBitmap& bitmap(Glyph glyph) noexcept;
 
-/// @brief The machine name of a glyph, for a test's failure message and for `QAction::setObjectName`.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        Non-empty for every glyph
-/// @invariant   Distinct glyphs have distinct names
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       theme.icons_are_well_formed
+/**
+ * @brief The machine name of a glyph, for a test's failure message and for `QAction::setObjectName`.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        Non-empty for every glyph
+ * @invariant   Distinct glyphs have distinct names
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       theme.icons_are_well_formed
+ */
 [[nodiscard]] std::string_view name(Glyph glyph) noexcept;
 
-/// @brief How many glyphs exist, so a generating test can iterate without a sentinel.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        `>= 1`
-/// @invariant   Constant
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       theme.icons_are_well_formed
+/**
+ * @brief How many glyphs exist, so a generating test can iterate without a sentinel.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        `>= 1`
+ * @invariant   Constant
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       theme.icons_are_well_formed
+ */
 [[nodiscard]] constexpr std::size_t count() noexcept { return 6; }
 
-/// @brief The glyph for index `i`, or `new_document` past the end.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        A valid glyph for every input
-/// @invariant   `glyph(i) == i` for `i < count()`
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       theme.icons_are_well_formed
+/**
+ * @brief The glyph for index `i`, or `new_document` past the end.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        A valid glyph for every input
+ * @invariant   `glyph(i) == i` for `i < count()`
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       theme.icons_are_well_formed
+ */
 [[nodiscard]] constexpr Glyph glyph_at(std::size_t i) noexcept {
     return i < count() ? static_cast<Glyph>(i) : Glyph::new_document;
 }
 
-/// @brief The resource path of the shipped sprite sheet, inside `icons.qrc`.
-///
-/// A resource rather than a file on disk: the sheet is part of the program, so an installed build cannot lose
-/// it by being moved, and nothing has to know where the executable lives.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        Non-null, starts with ':'
-/// @invariant   Constant
-/// @errors      noexcept
-/// @frozen      no
-/// @tests       theme.icons_match_the_shipped_sheet
+/**
+ * @brief The resource path of the shipped sprite sheet, inside `icons.qrc`.
+ *
+ * A resource rather than a file on disk: the sheet is part of the program, so an installed build cannot lose
+ * it by being moved, and nothing has to know where the executable lives.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        Non-null, starts with ':'
+ * @invariant   Constant
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       theme.icons_match_the_shipped_sheet
+ */
 inline constexpr const char* kSheetResource = ":/qp/icons/icons.png";
 
 /// @brief The gap between two glyphs in the sheet, in pixels. One transparent column.
@@ -228,18 +240,20 @@ struct Sheet final {
     [[nodiscard]] bool glyph_has_ink(std::size_t g) const noexcept;
 };
 
-/// @brief The shipped sheet, read once.
-///
-/// @ownership   borrows (a reference to a function-local constant)
-/// @thread      ui
-/// @pre         none
-/// @post        The same sheet every call
-/// @invariant   Read once, because decoding a PNG per icon would be a per-paint cost
-/// @errors      noexcept
-/// @complexity  O(1) after the first call
-/// @nondet      none
-/// @frozen      no
-/// @tests       theme.icons_match_the_shipped_sheet
+/**
+ * @brief The shipped sheet, read once.
+ *
+ * @ownership   borrows (a reference to a function-local constant)
+ * @thread      ui
+ * @pre         none
+ * @post        The same sheet every call
+ * @invariant   Read once, because decoding a PNG per icon would be a per-paint cost
+ * @errors      noexcept
+ * @complexity  O(1) after the first call
+ * @nondet      none
+ * @frozen      no
+ * @tests       theme.icons_match_the_shipped_sheet
+ */
 [[nodiscard]] const Sheet& sheet() noexcept;
 
 }  // namespace qp::views::qt::icons

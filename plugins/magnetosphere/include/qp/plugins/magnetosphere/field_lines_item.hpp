@@ -80,18 +80,20 @@ public:
 
     FieldLinesViewItem() = default;
 
-    /// @brief The name.
-    ///
-    /// @ownership   observes
-    /// @thread      any
-    /// @pre         none
-    /// @post        `kName`
-    /// @invariant   Constant
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.render.a_field_becomes_a_family_of_curves
+    /**
+     * @brief The name.
+     *
+     * @ownership   observes
+     * @thread      any
+     * @pre         none
+     * @post        `kName`
+     * @invariant   Constant
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.render.a_field_becomes_a_family_of_curves
+     */
     [[nodiscard]] std::string_view name() const noexcept override { return kName; }
 
     /**
@@ -105,10 +107,10 @@ public:
      * measures it: two declarations on one item, two tables with different dimensions, two different families of
      * curves.
      *
-     * This contract is a **block comment** where its neighbours are `///`, and that is the gate's rule rather than a
-     * style choice: it reads block comments, so a `@tests` line written with `///` is invisible to it and the case it
-     * claims is reported as an orphan. The trap has now fired three times in this tree, which is why the rule is
-     * written down in `standards/` rather than remembered.
+     * This contract is a **block comment** where its neighbours are doc-comment lines, and that is the gate's rule
+     * rather than a style choice: it reads block comments, so a claim written in doc-comment lines is invisible to
+     * it and the case is reported as an orphan. The trap fired three times in this tree before the rule was written
+     * down here, which is the reason it is spelled out rather than remembered.
      *
      * @param type_name The render node's type.
      *
@@ -126,26 +128,28 @@ public:
      */
     [[nodiscard]] bool draws(std::string_view type_name) const noexcept override;
 
-    /// @brief Traces the declared field's lines and answers with them.
-    ///
-    /// This is the expensive item: one trace per seed, five field reads a stage, and the interface sanctions it
-    /// explicitly -- `IViewItem::scene` "may allocate and may be slow: this runs when a run finishes, not per
-    /// frame".
-    ///
-    /// @param request The graph, the declarations and the run's tables.
-    ///
-    /// @ownership   owns the returned scene
-    /// @thread      main
-    /// @pre         `request.valid()`
-    /// @post        One polyline per seed whose trace produced a curve, in `(x, z)`, with bounds unless nothing
-    ///              was drawn
-    /// @invariant   Does not modify the request
-    /// @errors      Cannot fail: a declaration whose field is missing, unreadable or not baked answers with an
-    ///              empty scene, which is the honest picture of a field that is not there
-    /// @complexity  O(seeds x points x stages)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.render.a_field_becomes_a_family_of_curves
+    /**
+     * @brief Traces the declared field's lines and answers with them.
+     *
+     * This is the expensive item: one trace per seed, five field reads a stage, and the interface sanctions it
+     * explicitly -- `IViewItem::scene` "may allocate and may be slow: this runs when a run finishes, not per
+     * frame".
+     *
+     * @param request The graph, the declarations and the run's tables.
+     *
+     * @ownership   owns the returned scene
+     * @thread      main
+     * @pre         `request.valid()`
+     * @post        One polyline per seed whose trace produced a curve, in `(x, z)`, with bounds unless nothing
+     *              was drawn
+     * @invariant   Does not modify the request
+     * @errors      Cannot fail: a declaration whose field is missing, unreadable or not baked answers with an
+     *              empty scene, which is the honest picture of a field that is not there
+     * @complexity  O(seeds x points x stages)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.render.a_field_becomes_a_family_of_curves
+     */
     [[nodiscard]] qp::graph::ViewScene scene(const qp::graph::ViewRequest& request) override;
 };
 

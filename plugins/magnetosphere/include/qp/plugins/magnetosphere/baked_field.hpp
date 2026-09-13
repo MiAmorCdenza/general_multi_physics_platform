@@ -80,19 +80,21 @@ namespace qp::plugins::magnetosphere {
  */
 class BakedField final {
 public:
-    /// @brief An empty table. `view()` describes nothing and every sample is zero.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        `empty()` is true
-    /// @invariant   No allocation
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.baked_field.the_view_describes_the_storage
-    BakedField() = default;
+    /**
+     * @brief An empty table. `view()` describes nothing and every sample is zero.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        `empty()` is true
+     * @invariant   No allocation
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.baked_field.the_view_describes_the_storage
+     */
+    BakedField() noexcept = default;
 
     /**
      * @brief Allocates a uniform grid and zeroes it.
@@ -116,18 +118,20 @@ public:
      */
     BakedField(Vec3 origin, Vec3 spacing, std::uint32_t nx, std::uint32_t ny, std::uint32_t nz);
 
-    /// @brief Nodes along `x`.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        Zero for an empty table
-    /// @invariant   Constant
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.baked_field.the_view_describes_the_storage
+    /**
+     * @brief Nodes along `x`.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        Zero for an empty table
+     * @invariant   Constant
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.baked_field.the_view_describes_the_storage
+     */
     [[nodiscard]] std::uint32_t width() const noexcept { return nx_; }
 
     /// @brief Nodes along `y`.
@@ -145,22 +149,24 @@ public:
     /// @brief The position of node `(0, 0, 0)`, in metres.
     [[nodiscard]] const Vec3& origin() const noexcept { return origin_; }
 
-    /// @brief The position of node `(i, j, k)`, in metres.
-    ///
-    /// @param i Index along `x`.
-    /// @param j Index along `y`.
-    /// @param k Index along `z`.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        `origin + (i * sx, j * sy, k * sz)`
-    /// @invariant   Agrees with `sample` at every node
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.baked_field.a_node_sample_is_exact
+    /**
+     * @brief The position of node `(i, j, k)`, in metres.
+     *
+     * @param i Index along `x`.
+     * @param j Index along `y`.
+     * @param k Index along `z`.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        `origin + (i * sx, j * sy, k * sz)`
+     * @invariant   Agrees with `sample` at every node
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.baked_field.a_node_sample_is_exact
+     */
     [[nodiscard]] Vec3 node_position(std::uint32_t i, std::uint32_t j, std::uint32_t k) const noexcept;
 
     /**
@@ -263,18 +269,20 @@ public:
     /// region is not a run about that region. Zero is a real answer meaning "every sample was inside".
     [[nodiscard]] std::uint64_t clamped_samples() const noexcept { return clamped_; }
 
-    /// @brief Forgets the clamp count, so a second run is reported as its own.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        `clamped_samples()` is zero
-    /// @invariant   The samples are untouched
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.baked_field.out_of_range_is_clamped_and_counted
+    /**
+     * @brief Forgets the clamp count, so a second run is reported as its own.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        `clamped_samples()` is zero
+     * @invariant   The samples are untouched
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.baked_field.out_of_range_is_clamped_and_counted
+     */
     void reset_counts() noexcept { clamped_ = 0; }
 
 private:

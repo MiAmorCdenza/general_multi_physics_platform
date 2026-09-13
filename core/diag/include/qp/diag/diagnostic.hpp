@@ -76,22 +76,24 @@ public:
     [[nodiscard]] const SourceId& source() const noexcept { return source_; }
     [[nodiscard]] const std::string& message() const noexcept { return message_; }
 
-    /// @brief Log severity, derived from the error domain.
-    ///
-    /// Declared here and defined in logging.hpp so that this header keeps its
-    /// "no dependency on the log schema" property; diagnostics exist whether or
-    /// not anyone logs them.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        Returns the severity implied by code()
-    /// @invariant   Same diagnostic always reports the same severity
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       diag.diagnostic.severity_is_derived_from_domain
+    /**
+     * @brief Log severity, derived from the error domain.
+     *
+     * Declared here and defined in logging.hpp so that this header keeps its
+     * "no dependency on the log schema" property; diagnostics exist whether or
+     * not anyone logs them.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        Returns the severity implied by code()
+     * @invariant   Same diagnostic always reports the same severity
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       diag.diagnostic.severity_is_derived_from_domain
+     */
     [[nodiscard]] Severity severity() const noexcept;
 
     /// @brief Overrides the consequence. Returns `*this` so calls can be chained.
@@ -109,21 +111,23 @@ public:
         return *this;
     }
 
-    /// @brief Builds the single user-visible line of text.
-    ///
-    /// Format: `<source>: <code> - <message>`
-    /// This is **display**, not the basis for a decision; always decide on code.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        Returns a non-empty string; the prefix is omitted when source is empty
-    /// @invariant   The same diagnostic returns the same string on every call
-    /// @errors      noexcept; allocation failure calls std::terminate
-    /// @complexity  O(len)
-    /// @nondet      none
-    /// @frozen      no (the display format may change)
-    /// @tests       diag.diagnostic.stable_text
+    /**
+     * @brief Builds the single user-visible line of text.
+     *
+     * Format: `<source>: <code> - <message>`
+     * This is **display**, not the basis for a decision; always decide on code.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        Returns a non-empty string; the prefix is omitted when source is empty
+     * @invariant   The same diagnostic returns the same string on every call
+     * @errors      Allocates the string; a failure to allocate propagates to the caller
+     * @complexity  O(len)
+     * @nondet      none
+     * @frozen      no (the display format may change)
+     * @tests       diag.diagnostic.stable_text
+     */
     [[nodiscard]] std::string to_text() const {
         std::string out;
         if (!source_.empty()) {

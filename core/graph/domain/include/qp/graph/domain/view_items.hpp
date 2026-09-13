@@ -115,18 +115,20 @@ struct ViewRequest final {
     /// of this file never has to check the call sites to know what a `0` in that position means.
     const qp::graph::field::FieldSet* fields = nullptr;
 
-    /// @brief Whether there is anything to draw from.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        True exactly when a graph and a position snapshot are present
-    /// @invariant   Does not inspect the positions
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       graph.domain.a_scene_is_a_value_not_a_widget
+    /**
+     * @brief Whether there is anything to draw from.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        True exactly when a graph and a position snapshot are present
+     * @invariant   Does not inspect the positions
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       graph.domain.a_scene_is_a_value_not_a_widget
+     */
     [[nodiscard]] bool valid() const noexcept { return graph != nullptr && positions != nullptr; }
 };
 
@@ -184,18 +186,20 @@ struct ViewScene final {
     /// a flag would leave the host choosing a size, and the host does not know the units.
     double body_radius = 0.0;
 
-    /// @brief Whether there is anything to draw.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        True exactly when both lists are empty
-    /// @invariant   A scene with a polyline and no points is not empty
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       graph.domain.a_scene_is_a_value_not_a_widget
+    /**
+     * @brief Whether there is anything to draw.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        True exactly when both lists are empty
+     * @invariant   A scene with a polyline and no points is not empty
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       graph.domain.a_scene_is_a_value_not_a_widget
+     */
     [[nodiscard]] bool empty() const noexcept { return points.empty() && polylines.empty(); }
 };
 
@@ -222,103 +226,115 @@ public:
     IViewItem(const IViewItem&) = delete;
     IViewItem& operator=(const IViewItem&) = delete;
 
-    /// @brief Stable short name, for a status line and for a panel's title.
-    ///
-    /// @ownership   observes
-    /// @thread      any
-    /// @pre         none
-    /// @post        Non-empty
-    /// @invariant   Constant for the object's lifetime
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       graph.domain.a_scene_is_a_value_not_a_widget
+    /**
+     * @brief Stable short name, for a status line and for a panel's title.
+     *
+     * @ownership   observes
+     * @thread      any
+     * @pre         none
+     * @post        Non-empty
+     * @invariant   Constant for the object's lifetime
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       graph.domain.a_scene_is_a_value_not_a_widget
+     */
     [[nodiscard]] virtual std::string_view name() const noexcept = 0;
 
-    /// @brief Whether this item draws a render node of `type_name`.
-    ///
-    /// Asked per declaration rather than once per graph, because a graph may declare several items and one item
-    /// may draw only some of them. The answer depends on the **type name**, never on an instance's parameters:
-    /// an item that declined for a particular node would report "nothing to draw" about a graph that draws.
-    ///
-    /// @param type_name The render node's type.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        The answer depends only on the type name
-    /// @invariant   A name this item answers true for is one `scene` can be asked about
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       graph.domain.a_scene_is_a_value_not_a_widget
+    /**
+     * @brief Whether this item draws a render node of `type_name`.
+     *
+     * Asked per declaration rather than once per graph, because a graph may declare several items and one item
+     * may draw only some of them. The answer depends on the **type name**, never on an instance's parameters:
+     * an item that declined for a particular node would report "nothing to draw" about a graph that draws.
+     *
+     * @param type_name The render node's type.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        The answer depends only on the type name
+     * @invariant   A name this item answers true for is one `scene` can be asked about
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       graph.domain.a_scene_is_a_value_not_a_widget
+     */
     [[nodiscard]] virtual bool draws(std::string_view type_name) const noexcept = 0;
 
-    /// @brief Produces the scene for one declaration.
-    ///
-    /// May allocate and may be slow: this runs when a run finishes, not per frame. That is why it is one call
-    /// per draw rather than a per-particle callback, and why it is free to build a trail.
-    ///
-    /// @param request The graph, the declarations and the last run.
-    ///
-    /// @ownership   owns the returned scene
-    /// @thread      main
-    /// @pre         `request.valid()`
-    /// @post        A scene in the item's own units, possibly empty
-    /// @invariant   Does not modify the graph, the declarations or the run
-    /// @errors      Cannot fail: an item that cannot draw answers with an empty scene
-    /// @complexity  O(whatever this item has to read): the particle item is O(particles), a field-line item is
-    ///              O(lines x steps x interpolation), and the interface makes no claim beyond "not per frame"
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       graph.domain.a_scene_is_a_value_not_a_widget
+    /**
+     * @brief Produces the scene for one declaration.
+     *
+     * May allocate and may be slow: this runs when a run finishes, not per frame. That is why it is one call
+     * per draw rather than a per-particle callback, and why it is free to build a trail.
+     *
+     * @param request The graph, the declarations and the last run.
+     *
+     * @ownership   owns the returned scene
+     * @thread      main
+     * @pre         `request.valid()`
+     * @post        A scene in the item's own units, possibly empty
+     * @invariant   Does not modify the graph, the declarations or the run
+     * @errors      Cannot fail: an item that cannot draw answers with an empty scene
+     * @complexity  O(whatever this item has to read): the particle item is O(particles), a field-line item is
+     *              O(lines x steps x interpolation), and the interface makes no claim beyond "not per frame"
+     * @nondet      none
+     * @frozen      no
+     * @tests       graph.domain.a_scene_is_a_value_not_a_widget
+     */
     [[nodiscard]] virtual ViewScene scene(const ViewRequest& request) = 0;
 };
 
-/// @brief The view items the application mounted, in the order a declaration should be offered to them.
-///
-/// @ownership   borrows (the list holds pointers; whoever registered an item owns it)
-/// @thread      main
-/// @pre         none
-/// @post        Empty when nothing has been mounted
-/// @invariant   The same object every call
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       graph.domain.a_scene_is_a_value_not_a_widget
+/**
+ * @brief The view items the application mounted, in the order a declaration should be offered to them.
+ *
+ * @ownership   borrows (the list holds pointers; whoever registered an item owns it)
+ * @thread      main
+ * @pre         none
+ * @post        Empty when nothing has been mounted
+ * @invariant   The same object every call
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       graph.domain.a_scene_is_a_value_not_a_widget
+ */
 [[nodiscard]] const std::vector<IViewItem*>& view_items() noexcept;
 
-/// @brief Adds a view item to the list the window offers declarations to.
-///
-/// @param item The item. Borrowed; it must outlive the window.
-///
-/// @ownership   observes `item`
-/// @thread      main
-/// @pre         `item` outlives the window
-/// @post        `item` is the last entry, unless it was already there
-/// @invariant   A null item is not added, and an item already mounted is not added twice
-/// @errors      noexcept
-/// @complexity  O(items)
-/// @nondet      none
-/// @frozen      no
-/// @tests       graph.domain.a_scene_is_a_value_not_a_widget
+/**
+ * @brief Adds a view item to the list the window offers declarations to.
+ *
+ * @param item The item. Borrowed; it must outlive the window.
+ *
+ * @ownership   observes `item`
+ * @thread      main
+ * @pre         `item` outlives the window
+ * @post        `item` is the last entry, unless it was already there
+ * @invariant   A null item is not added, and an item already mounted is not added twice
+ * @errors      noexcept
+ * @complexity  O(items)
+ * @nondet      none
+ * @frozen      no
+ * @tests       graph.domain.a_scene_is_a_value_not_a_widget
+ */
 void mount_view_item(IViewItem* item) noexcept;
 
-/// @brief Forgets every view item, for a test that wants a clean list.
-///
-/// @ownership   owns
-/// @thread      main
-/// @pre         none
-/// @post        `view_items()` is empty
-/// @invariant   No item is destroyed: the list only borrows
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       graph.domain.a_scene_is_a_value_not_a_widget
+/**
+ * @brief Forgets every view item, for a test that wants a clean list.
+ *
+ * @ownership   owns
+ * @thread      main
+ * @pre         none
+ * @post        `view_items()` is empty
+ * @invariant   No item is destroyed: the list only borrows
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       graph.domain.a_scene_is_a_value_not_a_widget
+ */
 void clear_view_items() noexcept;
 
 }  // namespace qp::graph

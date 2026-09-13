@@ -146,46 +146,52 @@ public:
     explicit MeasurementModel(qp::runtime::RunLedger& ledger, std::string quantity,
                               qp::units::Dim dim = {}, qp::runtime::RunId run = {});
 
-    /// @brief The readings, in the order they were taken.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      ui
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Returned reference is stable until the next mutation
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       measurement.model.add_and_retake
+    /**
+     * @brief The readings, in the order they were taken.
+     *
+     * @ownership   borrows from this object
+     * @thread      ui
+     * @pre         none
+     * @post        none
+     * @invariant   Returned reference is stable until the next mutation
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.add_and_retake
+     */
     [[nodiscard]] const qp::runtime::Dataset& dataset() const noexcept { return dataset_; }
 
-    /// @brief The time series recorded alongside the readings.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      ui
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Returned reference is stable until the next mutation
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       measurement.model.trace_is_separate_from_readings
+    /**
+     * @brief The time series recorded alongside the readings.
+     *
+     * @ownership   borrows from this object
+     * @thread      ui
+     * @pre         none
+     * @post        none
+     * @invariant   Returned reference is stable until the next mutation
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.trace_is_separate_from_readings
+     */
     [[nodiscard]] const qp::runtime::Trace& trace() const noexcept { return trace_; }
 
-    /// @brief The runs recorded in this session, for the reproducibility line.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      ui
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Returned reference is stable until the next mutation
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       measurement.model.report_names_its_gaps
+    /**
+     * @brief The runs recorded in this session, for the reproducibility line.
+     *
+     * @ownership   borrows from this object
+     * @thread      ui
+     * @pre         none
+     * @post        none
+     * @invariant   Returned reference is stable until the next mutation
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.report_names_its_gaps
+     */
     [[nodiscard]] const qp::runtime::RunLedger& ledger() const noexcept { return ledger_; }
 
     /**
@@ -334,22 +340,24 @@ public:
     [[nodiscard]] diag::Result<void> add_sample(double t,
                                                 std::vector<qp::runtime::UncertainValue> values);
 
-    /// @brief Appends one sample whose channels are all plain measured values.
-    ///
-    /// A convenience for the common case -- a simulation step producing one number per
-    /// channel, with no per-channel uncertainty -- built on the overload above rather than
-    /// a second code path.
-    ///
-    /// @ownership   copies
-    /// @thread      ui
-    /// @pre         `values.size()` equals the trace's channel count
-    /// @post        Equivalent to `add_sample(t, ...)` with each value marked measured
-    /// @invariant   Identical refusal codes to the overload above
-    /// @errors      Propagates the trace's refusal codes
-    /// @complexity  O(channels)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       measurement.model.trace_is_separate_from_readings
+    /**
+     * @brief Appends one sample whose channels are all plain measured values.
+     *
+     * A convenience for the common case -- a simulation step producing one number per
+     * channel, with no per-channel uncertainty -- built on the overload above rather than
+     * a second code path.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         `values.size()` equals the trace's channel count
+     * @post        Equivalent to `add_sample(t, ...)` with each value marked measured
+     * @invariant   Identical refusal codes to the overload above
+     * @errors      Propagates the trace's refusal codes
+     * @complexity  O(channels)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.trace_is_separate_from_readings
+     */
     [[nodiscard]] diag::Result<void> add_sample(double t, const std::vector<double>& values,
                                                 double uncertainty = 0.0);
 
@@ -370,24 +378,26 @@ public:
      */
     [[nodiscard]] diag::Result<std::size_t> add_channel(std::string name, qp::units::Dim dim);
 
-    /// @brief Starts a run in the ledger and returns its id.
-    ///
-    /// Goes through `RunLedger::begin` rather than accepting a finished `RunRecord` for two
-    /// reasons. The ledger issues the id, and a caller that supplied its own could collide
-    /// with one already issued. And a run is **started** before it produces anything: the
-    /// samples that follow belong to it, and the model needs the id at that moment to give
-    /// its trace an identity.
-    ///
-    /// @ownership   copies
-    /// @thread      ui
-    /// @pre         none
-    /// @post        The returned id is greater than every previously issued one
-    /// @invariant   The record is stored as given; this model never edits a run's claims
-    /// @errors      noexcept
-    /// @complexity  O(spec)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       measurement.model.report_names_its_gaps
+    /**
+     * @brief Starts a run in the ledger and returns its id.
+     *
+     * Goes through `RunLedger::begin` rather than accepting a finished `RunRecord` for two
+     * reasons. The ledger issues the id, and a caller that supplied its own could collide
+     * with one already issued. And a run is **started** before it produces anything: the
+     * samples that follow belong to it, and the model needs the id at that moment to give
+     * its trace an identity.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         none
+     * @post        The returned id is greater than every previously issued one
+     * @invariant   The record is stored as given; this model never edits a run's claims
+     * @errors      Copies the spec, which may allocate; a failure propagates
+     * @complexity  O(spec)
+     * @nondet      none
+     * @frozen      no
+     * @tests       measurement.model.report_names_its_gaps
+     */
     qp::runtime::RunId begin_run(qp::runtime::RunSpec spec);
 
     /**

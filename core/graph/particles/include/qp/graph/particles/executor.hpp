@@ -99,20 +99,22 @@ enum class SlotName : std::uint8_t {
 /// @brief How many slots a plan can bind.
 inline constexpr std::size_t kSlotNameCount = 3;
 
-/// @brief Stable short name of a slot, for a message or a log line.
-///
-/// @param name The slot to name.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        One of the three names, never null
-/// @invariant   Total: every enumerator has a name
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       particles.executor.a_bound_field_reaches_the_kernel
+/**
+ * @brief Stable short name of a slot, for a message or a log line.
+ *
+ * @param name The slot to name.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        One of the three names, never null
+ * @invariant   Total: every enumerator has a name
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       particles.executor.a_bound_field_reaches_the_kernel
+ */
 [[nodiscard]] const char* to_string(SlotName name) noexcept;
 
 /**
@@ -202,20 +204,22 @@ inline constexpr std::size_t kBatchSlotCount = ParticleState::kSlotCount + kSlot
 /// @brief Where the first field slot sits -- immediately after the state.
 inline constexpr std::size_t kFieldSlotBase = ParticleState::kSlotCount;
 
-/// @brief The array index of a batch slot, for indexing a `BatchView`.
-///
-/// @param slot Which slot.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        The index this slot occupies in `BatchView::in` and `BatchView::out`
-/// @invariant   `slot_index(BatchSlot::position)` is zero and the indices are consecutive
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       particles.executor.the_batch_layout_is_declared_once
+/**
+ * @brief The array index of a batch slot, for indexing a `BatchView`.
+ *
+ * @param slot Which slot.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        The index this slot occupies in `BatchView::in` and `BatchView::out`
+ * @invariant   `slot_index(BatchSlot::position)` is zero and the indices are consecutive
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       particles.executor.the_batch_layout_is_declared_once
+ */
 [[nodiscard]] constexpr std::size_t slot_index(BatchSlot slot) noexcept {
     return static_cast<std::size_t>(slot);
 }
@@ -298,32 +302,34 @@ struct StepPlan final {
     /// named while the user is still editing the graph rather than discovered from a straight-line trajectory.
     std::uint32_t required_slots = kNoSlotsRequired;
 
-    /// @brief The binding for one slot. A default-constructed view when it is absent.
-    ///
-    /// **This accessor exists because there are two index spaces that both look like "the slot number", and they
-    /// do not agree.** `BatchView::in` is what a *kernel* indexes, and a field sits there at
-    /// `slot_index(name)` -- 4, 5 and 6, after the state's own slots. `fields[]` above is what the *plan builder*
-    /// fills, and it is indexed by the enumerator's own value: 0, 1 and 2, because the array holds exactly
-    /// `kSlotNameCount` entries and nothing else lives in it.
-    ///
-    /// Both original callers are right: `BorisAdvancer` reads `batch.in[slot_index(...)]` and the plan builder
-    /// writes `fields[static_cast<std::size_t>(slot)]`. A **third** caller wrote the first form against the second
-    /// array, and the machine reported it as one would hope -- the value it produced had `data = 0x0b`, an address
-    /// eleven bytes into a three-element array of sixteen-byte structs. That read happened to be visibly wrong; the
-    /// same mistake a few bytes further from the end is a plausible pointer to something else entirely.
-    ///
-    /// @param name Which slot.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        The bound view, or an invalid one
-    /// @invariant   Never reads outside `fields`
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.executor.a_bound_field_reaches_the_kernel
+    /**
+     * @brief The binding for one slot. A default-constructed view when it is absent.
+     *
+     * **This accessor exists because there are two index spaces that both look like "the slot number", and they
+     * do not agree.** `BatchView::in` is what a *kernel* indexes, and a field sits there at
+     * `slot_index(name)` -- 4, 5 and 6, after the state's own slots. `fields[]` above is what the *plan builder*
+     * fills, and it is indexed by the enumerator's own value: 0, 1 and 2, because the array holds exactly
+     * `kSlotNameCount` entries and nothing else lives in it.
+     *
+     * Both original callers are right: `BorisAdvancer` reads `batch.in[slot_index(...)]` and the plan builder
+     * writes `fields[static_cast<std::size_t>(slot)]`. A **third** caller wrote the first form against the second
+     * array, and the machine reported it as one would hope -- the value it produced had `data = 0x0b`, an address
+     * eleven bytes into a three-element array of sixteen-byte structs. That read happened to be visibly wrong; the
+     * same mistake a few bytes further from the end is a plausible pointer to something else entirely.
+     *
+     * @param name Which slot.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        The bound view, or an invalid one
+     * @invariant   Never reads outside `fields`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.executor.a_bound_field_reaches_the_kernel
+     */
     [[nodiscard]] const field::FieldValue& field(SlotName name) const noexcept;
 };
 
@@ -363,20 +369,22 @@ enum class PlanRefusal : std::uint8_t {
     scratch_unavailable = 5,
 };
 
-/// @brief Stable short name of a refusal, for a message or a log line.
-///
-/// @param refusal The refusal to name.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        One of the names in this enumerator's list, never null
-/// @invariant   Total: every enumerator has a name
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       particles.executor.an_empty_plan_is_refused
+/**
+ * @brief Stable short name of a refusal, for a message or a log line.
+ *
+ * @param refusal The refusal to name.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        One of the names in this enumerator's list, never null
+ * @invariant   Total: every enumerator has a name
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       particles.executor.an_empty_plan_is_refused
+ */
 [[nodiscard]] const char* to_string(PlanRefusal refusal) noexcept;
 
 /**
@@ -419,23 +427,25 @@ struct AdvanceReport final {
  */
 class ParticleExecutor final {
 public:
-    /// @brief The clamp policy a run applies unless its caller says otherwise.
-    ///
-    /// The default `ClampPolicy` -- finite only, magnitude bound 1e12 -- and the bound is the interesting half:
-    /// a particle that reaches 1e12 metres has left the solar system and one that reaches 1e12 m/s is not a
-    /// speed, so both are retired rather than carried. A run that wants the other answer asks for
-    /// `ClampPolicy::none()` and gets a non-finite value it can report.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Constant
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.executor.a_clamp_is_counted_not_hidden
+    /**
+     * @brief The clamp policy a run applies unless its caller says otherwise.
+     *
+     * The default `ClampPolicy` -- finite only, magnitude bound 1e12 -- and the bound is the interesting half:
+     * a particle that reaches 1e12 metres has left the solar system and one that reaches 1e12 m/s is not a
+     * speed, so both are retired rather than carried. A run that wants the other answer asks for
+     * `ClampPolicy::none()` and gets a non-finite value it can report.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        none
+     * @invariant   Constant
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.executor.a_clamp_is_counted_not_hidden
+     */
     [[nodiscard]] static constexpr kernels::ClampPolicy default_clamp() noexcept {
         return kernels::ClampPolicy{};
     }
@@ -466,79 +476,89 @@ public:
     ParticleExecutor& operator=(const ParticleExecutor&) = delete;
     ~ParticleExecutor() = default;
 
-    /// @brief The batch this executor advances.
-    ///
-    /// @ownership   borrows
-    /// @thread      any
-    /// @pre         none
-    /// @post        none
-    /// @invariant   The object passed to the constructor
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.executor.a_step_counts_every_kernel_that_ran
+    /**
+     * @brief The batch this executor advances.
+     *
+     * @ownership   borrows
+     * @thread      any
+     * @pre         none
+     * @post        none
+     * @invariant   The object passed to the constructor
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.executor.a_step_counts_every_kernel_that_ran
+     */
     [[nodiscard]] ParticleState& state() noexcept { return *state_; }
 
-    /// @brief Whether `prepare` has succeeded.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        True after a successful `prepare`, false before it and after a failed one
-    /// @invariant   `advance` refuses while this is false
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.executor.a_plan_prepares_every_kernel_once
+    /**
+     * @brief Whether `prepare` has succeeded.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        True after a successful `prepare`, false before it and after a failed one
+     * @invariant   `advance` refuses while this is false
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.executor.a_plan_prepares_every_kernel_once
+     */
     [[nodiscard]] bool prepared() const noexcept { return prepared_; }
 
-    /// @brief What the run has done so far.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Monotone in every field
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.executor.a_step_counts_every_kernel_that_ran
+    /**
+     * @brief What the run has done so far.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        none
+     * @invariant   Monotone in every field
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.executor.a_step_counts_every_kernel_that_ran
+     */
     [[nodiscard]] const AdvanceReport& report() const noexcept { return report_; }
 
-    /// @brief How many steps the plan holds, and therefore how many kernel calls one `advance` makes.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        The number of `StepPlan`s the executor was built with
-    /// @invariant   Constant for the object's lifetime
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.executor.a_step_counts_every_kernel_that_ran
+    /**
+     * @brief How many steps the plan holds, and therefore how many kernel calls one `advance` makes.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        The number of `StepPlan`s the executor was built with
+     * @invariant   Constant for the object's lifetime
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.executor.a_step_counts_every_kernel_that_ran
+     */
     [[nodiscard]] std::size_t step_count() const noexcept { return steps_.size(); }
 
-    /// @brief The plan's step at `index`, so a caller can assert what a run was configured as.
-    ///
-    /// Exposed because the bindings are the part of a plan that cannot be seen from anywhere else: a field
-    /// reached the executor or it did not, and this is the only way to ask.
-    ///
-    /// @param index Which step.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      main
-    /// @pre         `index < step_count()`
-    /// @post        A reference to that step's plan
-    /// @invariant   Never reads outside the plan
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.executor.a_bound_field_reaches_the_kernel
+    /**
+     * @brief The plan's step at `index`, so a caller can assert what a run was configured as.
+     *
+     * Exposed because the bindings are the part of a plan that cannot be seen from anywhere else: a field
+     * reached the executor or it did not, and this is the only way to ask.
+     *
+     * @param index Which step.
+     *
+     * @ownership   borrows from this object
+     * @thread      main
+     * @pre         `index < step_count()`
+     * @post        A reference to that step's plan
+     * @invariant   Never reads outside the plan
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.executor.a_bound_field_reaches_the_kernel
+     */
     [[nodiscard]] const StepPlan& step(std::size_t index) const noexcept { return steps_[index]; }
 
     /**
@@ -603,18 +623,20 @@ public:
      */
     [[nodiscard]] diag::Result<void> advance(kernels::AdvanceContext& ctx);
 
-    /// @brief Forgets the counters, so a second run is reported as its own.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        `report()` is default-constructed
-    /// @invariant   The prepared state is untouched: a run that is restarted does not need preparing again
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.executor.a_step_counts_every_kernel_that_ran
+    /**
+     * @brief Forgets the counters, so a second run is reported as its own.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        `report()` is default-constructed
+     * @invariant   The prepared state is untouched: a run that is restarted does not need preparing again
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.executor.a_step_counts_every_kernel_that_ran
+     */
     void reset_report() noexcept { report_ = AdvanceReport{}; }
 
 private:

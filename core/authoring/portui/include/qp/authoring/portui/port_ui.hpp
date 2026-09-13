@@ -89,18 +89,20 @@ enum class EditorKind : std::uint8_t {
     reference = 5,
 };
 
-/// @brief Stable short name of an editor kind, for logs and diagnostics.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        Returns a non-empty ASCII identifier
-/// @invariant   Distinct kinds never share a name
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       portui.description.editor_kinds
+/**
+ * @brief Stable short name of an editor kind, for logs and diagnostics.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        Returns a non-empty ASCII identifier
+ * @invariant   Distinct kinds never share a name
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       portui.description.editor_kinds
+ */
 [[nodiscard]] constexpr const char* to_string(EditorKind k) noexcept {
     switch (k) {
         case EditorKind::read_only: return "read_only";

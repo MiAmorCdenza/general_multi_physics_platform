@@ -41,24 +41,26 @@
 
 namespace qp::views {
 
-/// @brief The built-in demonstrator types, in the order a palette should show them.
-///
-/// A **list of values** rather than a registration, and the difference matters: the types are this build's own
-/// content, so where they go is the composition root's decision. A function that took a catalog would let a
-/// built-in type exist without the host's record knowing about it, which is exactly the hole the record was
-/// added to close -- `origin_of` would answer "nobody" for a type the build ships. Returning descriptors keeps
-/// that decision at the one place that can record it.
-///
-/// @ownership   owns the returned descriptors
-/// @thread      ui
-/// @pre         none
-/// @post        Every descriptor has a non-empty, unique `type_name`
-/// @invariant   The same list every call, in the same order
-/// @errors      May allocate; allocation failure terminates, as elsewhere in this project
-/// @complexity  O(types)
-/// @nondet      none
-/// @frozen      no
-/// @tests       views.demo.library_has_expected_types
+/**
+ * @brief The built-in demonstrator types, in the order a palette should show them.
+ *
+ * A **list of values** rather than a registration, and the difference matters: the types are this build's own
+ * content, so where they go is the composition root's decision. A function that took a catalog would let a
+ * built-in type exist without the host's record knowing about it, which is exactly the hole the record was
+ * added to close -- `origin_of` would answer "nobody" for a type the build ships. Returning descriptors keeps
+ * that decision at the one place that can record it.
+ *
+ * @ownership   owns the returned descriptors
+ * @thread      ui
+ * @pre         none
+ * @post        Every descriptor has a non-empty, unique `type_name`
+ * @invariant   The same list every call, in the same order
+ * @errors      May allocate; allocation failure terminates, as elsewhere in this project
+ * @complexity  O(types)
+ * @nondet      none
+ * @frozen      no
+ * @tests       views.demo.library_has_expected_types
+ */
 [[nodiscard]] std::vector<qp::graph::NodeDesc> demo_library();
 
 /**

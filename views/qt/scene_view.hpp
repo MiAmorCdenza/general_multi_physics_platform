@@ -64,89 +64,99 @@ class SceneView final : public QWidget {
     Q_OBJECT
 
 public:
-    /// @brief A panel that says `empty_text` when its scene has nothing in it.
-    ///
-    /// @param empty_text What to show before there is anything to draw. Passed in because the item knows what it
-    ///                   would have drawn -- see the file comment -- and it is a parameter rather than a setter
-    ///                   because a panel that changed its message later would be a panel whose blank state means
-    ///                   two different things at two moments.
-    /// @param parent     The Qt parent, which owns this widget.
-    ///
-    /// @ownership   owns
-    /// @thread      ui
-    /// @pre         none
-    /// @post        The widget shows `empty_text` until `set_scene` is called with something drawable
-    /// @invariant   `empty_text()` is the string passed here
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       qt.views.scene.draws_a_scene_and_says_when_there_is_none
+    /**
+     * @brief A panel that says `empty_text` when its scene has nothing in it.
+     *
+     * @param empty_text What to show before there is anything to draw. Passed in because the item knows what it
+     *                   would have drawn -- see the file comment -- and it is a parameter rather than a setter
+     *                   because a panel that changed its message later would be a panel whose blank state means
+     *                   two different things at two moments.
+     * @param parent     The Qt parent, which owns this widget.
+     *
+     * @ownership   owns
+     * @thread      ui
+     * @pre         none
+     * @post        The widget shows `empty_text` until `set_scene` is called with something drawable
+     * @invariant   `empty_text()` is the string passed here
+     * @errors      Qt allocates a widget; a failure to allocate propagates
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.scene.draws_a_scene_and_says_when_there_is_none
+     */
     explicit SceneView(QString empty_text, QWidget* parent = nullptr);
 
-    /// @brief Takes a scene to paint, replacing whatever was there.
-    ///
-    /// @param scene The scene. Copied: see the file comment for why this is not a pointer.
-    ///
-    /// @ownership   owns a copy
-    /// @thread      ui
-    /// @pre         none
-    /// @post        `scene()` equals `scene` and the widget repaints
-    /// @invariant   No pointer into the caller's data is kept
-    /// @errors      noexcept
-    /// @complexity  O(points + curves)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       qt.views.scene.draws_a_scene_and_says_when_there_is_none
+    /**
+     * @brief Takes a scene to paint, replacing whatever was there.
+     *
+     * @param scene The scene. Copied: see the file comment for why this is not a pointer.
+     *
+     * @ownership   owns a copy
+     * @thread      ui
+     * @pre         none
+     * @post        `scene()` equals `scene` and the widget repaints
+     * @invariant   No pointer into the caller's data is kept
+     * @errors      Copies the scene, which allocates; a failure to allocate propagates
+     * @complexity  O(points + curves)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.scene.draws_a_scene_and_says_when_there_is_none
+     */
     void set_scene(qp::graph::ViewScene scene);
 
-    /// @brief The scene being painted.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      ui
-    /// @pre         none
-    /// @post        The last scene handed to `set_scene`
-    /// @invariant   Never null; an empty one before the first call
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       qt.views.scene.draws_a_scene_and_says_when_there_is_none
+    /**
+     * @brief The scene being painted.
+     *
+     * @ownership   borrows from this object
+     * @thread      ui
+     * @pre         none
+     * @post        The last scene handed to `set_scene`
+     * @invariant   Never null; an empty one before the first call
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.scene.draws_a_scene_and_says_when_there_is_none
+     */
     [[nodiscard]] const qp::graph::ViewScene& scene() const noexcept { return scene_; }
 
-    /// @brief The message painted when there is nothing to draw.
-    ///
-    /// A sentence rather than a blank widget, and exposed so a test can assert it: a window that has not been run
-    /// and a graph that draws nothing look identical on screen, and only one of them is worth a second look from
-    /// the user.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      ui
-    /// @pre         none
-    /// @post        The string the constructor was given
-    /// @invariant   Constant for the widget's lifetime
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       qt.views.scene.draws_a_scene_and_says_when_there_is_none
+    /**
+     * @brief The message painted when there is nothing to draw.
+     *
+     * A sentence rather than a blank widget, and exposed so a test can assert it: a window that has not been run
+     * and a graph that draws nothing look identical on screen, and only one of them is worth a second look from
+     * the user.
+     *
+     * @ownership   borrows from this object
+     * @thread      ui
+     * @pre         none
+     * @post        The string the constructor was given
+     * @invariant   Constant for the widget's lifetime
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.scene.draws_a_scene_and_says_when_there_is_none
+     */
     [[nodiscard]] const QString& empty_text() const noexcept { return empty_text_; }
 
 protected:
-    /// @brief Paints the scene, or the message when there is none.
-    ///
-    /// @param event The paint event. Unused beyond Qt's own bookkeeping.
-    ///
-    /// @ownership   observes
-    /// @thread      ui
-    /// @pre         none
-    /// @post        The widget shows the current scene
-    /// @invariant   Reads only `scene_` and `empty_text_`
-    /// @errors      Cannot fail
-    /// @complexity  O(points + curves)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       qt.views.scene.draws_a_scene_and_says_when_there_is_none
+    /**
+     * @brief Paints the scene, or the message when there is none.
+     *
+     * @param event The paint event. Unused beyond Qt's own bookkeeping.
+     *
+     * @ownership   observes
+     * @thread      ui
+     * @pre         none
+     * @post        The widget shows the current scene
+     * @invariant   Reads only `scene_` and `empty_text_`
+     * @errors      Cannot fail
+     * @complexity  O(points + curves)
+     * @nondet      none
+     * @frozen      no
+     * @tests       qt.views.scene.draws_a_scene_and_says_when_there_is_none
+     */
     void paintEvent(QPaintEvent* event) override;
 
 private:

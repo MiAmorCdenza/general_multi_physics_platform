@@ -94,18 +94,20 @@ public:
     [[nodiscard]] static std::unique_ptr<graph::execution::IStateOperator> make(
         std::unique_ptr<graph::kernels::IBatchAdvancer> advancer);
 
-    /// @brief The wrapped advancer's name.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        Non-empty
-    /// @invariant   Constant
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       execution.binding.end_to_end_against_a_closed_form
+    /**
+     * @brief The wrapped advancer's name.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        Non-empty
+     * @invariant   Constant
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.binding.end_to_end_against_a_closed_form
+     */
     [[nodiscard]] std::string_view name() const noexcept override;
 
     /**

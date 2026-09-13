@@ -441,6 +441,37 @@ def collect_test_ids(tests_dir: Path, exclude: set[str] | None = None,
     return ids
 
 
+def scan_unreadable_claims(header_roots: list[Path]) -> list[str]:
+    """Every `@tests` written on a `///` line, as `path:line` sites.
+
+    **A claim the gate cannot read**, and the failure is not a missing check but a misleading one: the case the
+    claim names is reported as an orphan, so the author is sent looking for a claim that is sitting right there in
+    the file. That happened three times in one session before this rule was written.
+
+    The rule reads `/** */` blocks and leaves `///` lines as prose, because the two comment styles are different on
+    purpose -- a block comment is a contract, a doc comment is documentation -- and a gate that accepted both would
+    let a file's contracts drift between two dialects with no rule about which one a declaration should use.
+
+    **It was counted for as long as the tree had them, and it fails the gate now that the tree does not.** That was
+    the condition the rule set for itself: converting them is a cross-cutting edit whose risk is that the claims are
+    wrong and become visible all at once. They were, and converting them is what found out how wrong -- **188 claims
+    across 44 files, of which 17 were false**: fifteen described a function that allocates as `noexcept`, one used an
+    ownership value that does not exist, and one named a case nobody had written. Every one had gone unchecked since
+    it was typed, which is what "counted rather than failed" costs and why the conversion was worth doing before the
+    rule was tightened.
+
+    A function rather than a loop inside `main` because every rule needs a case in the gate's own self-test -- a
+    rule nobody has watched fire is a rule nobody has checked -- and a self-test cannot reach into a loop.
+    """
+    sites: list[str] = []
+    for root in header_roots:
+        for path in sorted(root.rglob("*.hpp")):
+            for number, text in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+                if "///" in text and "@tests" in text:
+                    sites.append(f"{path}:{number}")
+    return sites
+
+
 def main(argv: list[str] | None = None) -> int:
     try:  # the Windows console may be GBK; keep the script from crashing on encoding
         sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
@@ -502,16 +533,7 @@ def main(argv: list[str] | None = None) -> int:
             contracts, viols = parse_header(path)
             all_contracts.extend(contracts)
             violations.extend(viols)
-            # C7, counted as the headers are walked: an `@tests` on a `///` line is a claim this gate will never
-            # read. **Counted rather than failed**, and the count is the finding: the first run of this rule found
-            # 71 such declarations across 20 files, which means this is not a mistake anybody made occasionally but
-            # a style the whole tree drifted into -- and every one of those 71 claims has been unchecked since it
-            # was written. Turning them into failures here would demand a cross-cutting edit whose risk is that the
-            # claims are *wrong* (C4) and become visible all at once; that is its own piece of work, and this line
-            # is what makes its size known. See the rule's own comment below.
-            for number, text in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-                if "///" in text and "@tests" in text:
-                    unreadable_claims.append(f"{path}:{number}")
+    unreadable_claims = scan_unreadable_claims(header_roots)
 
     # A test file may also carry a module-level contract block (declaring the contract surface it
     # covers). Its cases are not re-reported as orphans, because filing cases is exactly its purpose.
@@ -569,6 +591,15 @@ def main(argv: list[str] | None = None) -> int:
     # Reported rather than fixed by teaching the gate to read `///`: the two comment styles are different on
     # purpose (a block comment is a contract, a `///` line is prose), and a gate that accepted both would let a
     # file's contracts drift between two dialects with no rule about which one a declaration should use.
+    #
+    # **It was counted for as long as the tree had them, and it fails now that the tree does not.** That was the
+    # condition this rule's own comment set: converting them is a cross-cutting edit whose risk is that the claims
+    # are wrong and become visible all at once. They were, and the conversion is what found out how wrong:
+    # **188 claims across 44 files, of which 17 were false** -- fifteen described a function that allocates as
+    # `noexcept`, one used an ownership value that does not exist, and one named a case nobody had written. Every
+    # one of them had been unchecked since it was typed, which is exactly what "counted rather than failed" costs
+    # and exactly why the conversion was worth doing before the rule was tightened. A new one now fails the gate,
+    # which is the only way the dialect stays single.
 
     # -- Output --
     exempted = sum(1 for c in all_contracts
@@ -594,15 +625,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[C6] 孤儿测试用例（未被任何契约 @tests 引用）：{tid}")
 
     if unreadable_claims:
-        # Printed always, including under --quiet, because it is a fact about this tree rather than a style
-        # opinion: every one of these is a claim written down and never checked, and a reader who does not know the
-        # number cannot decide whether fixing it is an afternoon or a week.
-        print(f"[C7] {len(unreadable_claims)} 处 @tests 写在 /// 行上，本门禁读不到（"
-              f"这些声明认领的用例从未被检查过）；写成 /** */ 块注释即生效。"
-              f"最大的一处：{unreadable_claims[0]}")
+        # A violation now rather than a count. The conversion that emptied this list is what measured what the
+        # count was hiding -- seventeen false claims -- and leaving the rule as a warning would let the next one in
+        # with nothing but a line of output to notice it by.
+        for site in unreadable_claims:
+            print(f"[C7] @tests 写在 /// 行上，本门禁读不到（这个声明认领的用例从未被检查过）；"
+                  f"写成 /** */ 块注释即生效：{site}")
 
-    if violations:
-        print(f"\n门禁失败：{len(violations)} 处契约违规", file=sys.stderr)
+    failure_count = len(violations) + len(unreadable_claims)
+    if failure_count:
+        print(f"\n门禁失败：{failure_count} 处契约违规", file=sys.stderr)
         return 1
     if orphans and not args.allow_orphan_tests:
         print(f"\n门禁失败：{len(orphans)} 个孤儿测试用例（用 --allow-orphan-tests 可降级为警告）",

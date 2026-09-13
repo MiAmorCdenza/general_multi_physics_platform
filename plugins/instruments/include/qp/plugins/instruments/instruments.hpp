@@ -70,18 +70,20 @@
 
 namespace qp::plugins::instruments {
 
-/// @brief How many devices this build ships, so a caller can iterate without a sentinel.
-///
-/// @ownership   pure
-/// @thread      main
-/// @pre         none
-/// @post        `>= 1`
-/// @invariant   Constant
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       instrument.the_shipped_kit_is_usable
+/**
+ * @brief How many devices this build ships, so a caller can iterate without a sentinel.
+ *
+ * @ownership   pure
+ * @thread      main
+ * @pre         none
+ * @post        `>= 1`
+ * @invariant   Constant
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       instrument.the_shipped_kit_is_usable
+ */
 [[nodiscard]] constexpr std::size_t builtin_count() noexcept { return 5; }
 
 /**

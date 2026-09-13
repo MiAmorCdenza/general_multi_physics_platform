@@ -105,18 +105,20 @@ struct GraphRunReport final {
     /// One line for the status bar, in the provider's own words. May be empty.
     std::string note{};
 
-    /// @brief Whether every particle is accounted for.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        True exactly when the three status counts sum to `particles`
-    /// @invariant   An empty report is consistent
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       execution.run_provider.a_provider_names_its_own_refusal
+    /**
+     * @brief Whether every particle is accounted for.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        True exactly when the three status counts sum to `particles`
+     * @invariant   An empty report is consistent
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.run_provider.a_provider_names_its_own_refusal
+     */
     [[nodiscard]] bool is_consistent() const noexcept {
         return live + absorbed + escaped == particles;
     }
@@ -197,18 +199,20 @@ public:
      */
     [[nodiscard]] virtual diag::Result<void> advance(std::size_t steps, double dt) = 0;
 
-    /// @brief What the run has done so far.
-    ///
-    /// @ownership   owns (the returned report carries a string)
-    /// @thread      main
-    /// @pre         none
-    /// @post        A consistent report; all zeros before the first step
-    /// @invariant   Monotone in every count except `live`, which falls as particles retire
-    /// @errors      noexcept
-    /// @complexity  O(particles)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       execution.run_provider.a_provider_names_its_own_refusal
+    /**
+     * @brief What the run has done so far.
+     *
+     * @ownership   owns (the returned report carries a string)
+     * @thread      main
+     * @pre         none
+     * @post        A consistent report; all zeros before the first step
+     * @invariant   Monotone in every count except `live`, which falls as particles retire
+     * @errors      Allocates the report's sentence; a failure to allocate propagates
+     * @complexity  O(particles)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.run_provider.a_provider_names_its_own_refusal
+     */
     [[nodiscard]] virtual GraphRunReport report() const = 0;
 
     /**
@@ -359,18 +363,20 @@ struct RunBuildResult final {
     /// Why there is no run, in the provider's own words. Empty on success.
     std::string refusal{};
 
-    /// @brief Whether a run was built.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        Equivalent to `run != nullptr`
-    /// @invariant   Never true together with a non-empty refusal
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       execution.run_provider.a_provider_names_its_own_refusal
+    /**
+     * @brief Whether a run was built.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        Equivalent to `run != nullptr`
+     * @invariant   Never true together with a non-empty refusal
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.run_provider.a_provider_names_its_own_refusal
+     */
     [[nodiscard]] bool ok() const noexcept { return run != nullptr; }
 };
 
@@ -397,18 +403,20 @@ public:
     IGraphRunProvider(const IGraphRunProvider&) = delete;
     IGraphRunProvider& operator=(const IGraphRunProvider&) = delete;
 
-    /// @brief Stable short name, for a status line and for the ledger.
-    ///
-    /// @ownership   observes
-    /// @thread      any
-    /// @pre         none
-    /// @post        Non-empty
-    /// @invariant   Constant for the object's lifetime
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       execution.run_provider.a_provider_names_its_own_refusal
+    /**
+     * @brief Stable short name, for a status line and for the ledger.
+     *
+     * @ownership   observes
+     * @thread      any
+     * @pre         none
+     * @post        Non-empty
+     * @invariant   Constant for the object's lifetime
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.run_provider.a_provider_names_its_own_refusal
+     */
     [[nodiscard]] virtual std::string_view name() const noexcept = 0;
 
     /**

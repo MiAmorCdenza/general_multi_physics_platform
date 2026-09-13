@@ -422,18 +422,20 @@ enum class RunRefusal : std::uint8_t {
     node_cannot_be_honoured = 3,
 };
 
-/// @brief Stable short name of a refusal, for a message or a log line.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        Non-null for every enumerator
-/// @invariant   Distinct codes have distinct names
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       execution.check_run.answers_before_anything_steps
+/**
+ * @brief Stable short name of a refusal, for a message or a log line.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        Non-null for every enumerator
+ * @invariant   Distinct codes have distinct names
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       execution.check_run.answers_before_anything_steps
+ */
 [[nodiscard]] constexpr const char* to_string(RunRefusal r) noexcept {
     switch (r) {
         case RunRefusal::ok: return "ok";
@@ -487,18 +489,20 @@ struct RunReadiness final {
     /// The sentence a status line should show. Never empty.
     std::string detail{};
 
-    /// @brief Whether a run would start.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        Equivalent to `refusal == RunRefusal::ok`
-    /// @invariant   Depends only on `refusal`
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       execution.check_run.answers_before_anything_steps
+    /**
+     * @brief Whether a run would start.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        Equivalent to `refusal == RunRefusal::ok`
+     * @invariant   Depends only on `refusal`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       execution.check_run.answers_before_anything_steps
+     */
     [[nodiscard]] bool ok() const noexcept { return refusal == RunRefusal::ok; }
 };
 
@@ -790,9 +794,9 @@ public:
      * `plugin_fault` in a run outcome could not tell whether the operator raised once on an edge case or has
      * been quarantined for good, and those two lead to different sentences in a status line.
      *
-     * A block comment, not `///` lines: the contract gate reads block comments, so a contract written with
-     * `///` is a contract the gate cannot see -- and this one's `@tests` id was reported as an orphan until
-     * it was converted.
+     * A block comment rather than doc-comment lines: the contract gate reads block comments, so a contract
+     * written in doc-comment lines is one the gate cannot see -- and the case id this declaration claims was
+     * reported as an orphan until the block was converted.
      *
      * @ownership   borrows from this object
      * @thread      main

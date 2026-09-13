@@ -138,18 +138,20 @@ public:
      */
     [[nodiscard]] virtual std::string_view mounting_plugin() const noexcept = 0;
 
-    /// @brief Whether this host granted `bit` to the plugin that is registering.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Constant for the lifetime of the host
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       host.refuses_a_capability_it_did_not_grant
+    /**
+     * @brief Whether this host granted `bit` to the plugin that is registering.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   Constant for the lifetime of the host
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       host.refuses_a_capability_it_did_not_grant
+     */
     [[nodiscard]] virtual bool granted(plugin::Capability bit) const noexcept = 0;
 
     /**
@@ -320,32 +322,36 @@ struct LoadReport final {
     /// The plugins that did not, each with a reason, in the order they were tried.
     std::vector<PluginOutcome> refused{};
 
-    /// @brief Whether every attempt succeeded. True for an empty report.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Equivalent to `refused.empty()`
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       host.reports_every_failure_with_a_reason
+    /**
+     * @brief Whether every attempt succeeded. True for an empty report.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   Equivalent to `refused.empty()`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       host.reports_every_failure_with_a_reason
+     */
     [[nodiscard]] bool all_mounted() const noexcept { return refused.empty(); }
 
-    /// @brief How many plugins were attempted.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        none
-    /// @invariant   The sum of both lists
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       host.reports_every_failure_with_a_reason
+    /**
+     * @brief How many plugins were attempted.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   The sum of both lists
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       host.reports_every_failure_with_a_reason
+     */
     [[nodiscard]] std::size_t attempts() const noexcept {
         return mounted_plugins.size() + refused.size();
     }
@@ -406,18 +412,20 @@ public:
     PluginHost& operator=(const PluginHost&) = delete;
     ~PluginHost() override;
 
-    /// @brief The capability bits this host grants.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Same value as passed to the constructor
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       host.refuses_a_capability_it_did_not_grant
+    /**
+     * @brief The capability bits this host grants.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   Same value as passed to the constructor
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       host.refuses_a_capability_it_did_not_grant
+     */
     [[nodiscard]] plugin::Capability grant() const noexcept { return grant_; }
 
     [[nodiscard]] std::string_view mounting_plugin() const noexcept override;
@@ -661,18 +669,20 @@ public:
      */
     [[nodiscard]] diag::Result<void> unload(std::string_view plugin_id);
 
-    /// @brief The ids of the mounted plugins, in mount order.
-    ///
-    /// @ownership   pure (returns copies)
-    /// @thread      main
-    /// @pre         none
-    /// @post        none
-    /// @invariant   The order plugins were installed in
-    /// @errors      May allocate
-    /// @complexity  O(plugins)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       host.scanning_a_directory_mounts_what_it_can_and_reports_the_rest
+    /**
+     * @brief The ids of the mounted plugins, in mount order.
+     *
+     * @ownership   pure (returns copies)
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   The order plugins were installed in
+     * @errors      May allocate
+     * @complexity  O(plugins)
+     * @nondet      none
+     * @frozen      no
+     * @tests       host.scanning_a_directory_mounts_what_it_can_and_reports_the_rest
+     */
     [[nodiscard]] std::vector<std::string> mounted_ids() const;
 
 private:

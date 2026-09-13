@@ -101,20 +101,22 @@ enum class TraceStop : std::uint8_t {
     no_field = 4,
 };
 
-/// @brief Stable short name of a stop reason, for a message or a log line.
-///
-/// @param stop The reason to name.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        One of the names in this enumerator's list, never null
-/// @invariant   Total: every enumerator has a name
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       magnetosphere.trace.leaving_the_table_stops_the_line
+/**
+ * @brief Stable short name of a stop reason, for a message or a log line.
+ *
+ * @param stop The reason to name.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        One of the names in this enumerator's list, never null
+ * @invariant   Total: every enumerator has a name
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.trace.leaving_the_table_stops_the_line
+ */
 [[nodiscard]] const char* to_string(TraceStop stop) noexcept;
 
 /**
@@ -157,18 +159,20 @@ struct TraceSpec final {
     /// there rather than that the step is too big -- and it is a bound on the loop rather than a tuning knob.
     std::size_t max_attempts = 50;
 
-    /// @brief Whether the numbers describe a trace that can run.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        True when the cap, tolerance and radius are positive and finite and both budgets are non-zero
-    /// @invariant   Never inspects a field
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.trace.the_step_cap_does_not_decide_the_shape
+    /**
+     * @brief Whether the numbers describe a trace that can run.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        True when the cap, tolerance and radius are positive and finite and both budgets are non-zero
+     * @invariant   Never inspects a field
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.trace.the_step_cap_does_not_decide_the_shape
+     */
     [[nodiscard]] bool usable() const noexcept;
 };
 
@@ -199,18 +203,20 @@ struct FieldLine final {
     /// a line that has fallen into the planet, and a picture cannot be asked.
     double min_radius_re = 0.0;
 
-    /// @brief Whether the trace produced a curve at all.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        True exactly when there are at least two points
-    /// @invariant   A single point is not a curve
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.trace.a_uniform_field_gives_a_straight_line
+    /**
+     * @brief Whether the trace produced a curve at all.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        True exactly when there are at least two points
+     * @invariant   A single point is not a curve
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.trace.a_uniform_field_gives_a_straight_line
+     */
     [[nodiscard]] bool usable() const noexcept { return points_re.size() >= 2; }
 };
 
@@ -270,33 +276,37 @@ public:
     FieldTracer(qp::graph::field::FieldValue table, Vec3 origin_m, Vec3 spacing_m,
                 TraceSpec spec = TraceSpec{}) noexcept;
 
-    /// @brief Whether this tracer can trace anything.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        True exactly when the table is readable, holds vectors, spans at least two nodes an axis,
-    ///              and every spacing is positive and finite
-    /// @invariant   A tracer that answers false answers an empty line for every seed
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.trace.a_dipole_line_returns_to_its_seed
+    /**
+     * @brief Whether this tracer can trace anything.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        True exactly when the table is readable, holds vectors, spans at least two nodes an axis,
+     *              and every spacing is positive and finite
+     * @invariant   A tracer that answers false answers an empty line for every seed
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.trace.a_dipole_line_returns_to_its_seed
+     */
     [[nodiscard]] bool usable() const noexcept { return usable_; }
 
-    /// @brief The step cap, the tolerance and the budgets this tracer runs with.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        The spec passed at construction
-    /// @invariant   Constant
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.trace.the_step_cap_does_not_decide_the_shape
+    /**
+     * @brief The step cap, the tolerance and the budgets this tracer runs with.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        The spec passed at construction
+     * @invariant   Constant
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.trace.the_step_cap_does_not_decide_the_shape
+     */
     [[nodiscard]] const TraceSpec& spec() const noexcept { return spec_; }
 
     /**
@@ -315,18 +325,20 @@ public:
      */
     [[nodiscard]] Vec3 box_min_re() const noexcept { return min_re_; }
 
-    /// @brief The far corner of the sampled region, in earth radii. See `box_min_re`.
-    ///
-    /// @ownership   owns
-    /// @thread      any
-    /// @pre         none
-    /// @post        The corner opposite `box_min_re`
-    /// @invariant   `max.x >= min.x` on every axis
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.trace.leaving_the_table_stops_the_line
+    /**
+     * @brief The far corner of the sampled region, in earth radii. See `box_min_re`.
+     *
+     * @ownership   owns
+     * @thread      any
+     * @pre         none
+     * @post        The corner opposite `box_min_re`
+     * @invariant   `max.x >= min.x` on every axis
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.trace.leaving_the_table_stops_the_line
+     */
     [[nodiscard]] Vec3 box_max_re() const noexcept { return max_re_; }
 
     /**
@@ -358,55 +370,61 @@ public:
      */
     [[nodiscard]] FieldLine trace(const Vec3& seed_re, bool both_ways = true) const;
 
-    /// @brief How many field samples this tracer has read, since construction or the last reset.
-    ///
-    /// The evidence a report needs to say what a picture cost: five per stage, and a stage per step, so a family
-    /// of a hundred lines is a number a caller should be able to see rather than estimate. Counted through a
-    /// `mutable` member because sampling is a read -- the same device, and the same reason, as
-    /// `BakedField::clamped_samples`.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        Monotone until `reset_samples`
-    /// @invariant   Equals the number of `sample_baked` calls every trace made
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.trace.the_step_cap_does_not_decide_the_shape
+    /**
+     * @brief How many field samples this tracer has read, since construction or the last reset.
+     *
+     * The evidence a report needs to say what a picture cost: five per stage, and a stage per step, so a family
+     * of a hundred lines is a number a caller should be able to see rather than estimate. Counted through a
+     * `mutable` member because sampling is a read -- the same device, and the same reason, as
+     * `BakedField::clamped_samples`.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        Monotone until `reset_samples`
+     * @invariant   Equals the number of `sample_baked` calls every trace made
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.trace.the_step_cap_does_not_decide_the_shape
+     */
     [[nodiscard]] std::uint64_t samples() const noexcept { return samples_; }
 
-    /// @brief Forgets the sample count, so a second family is reported as its own.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        `samples()` is zero
-    /// @invariant   The table is untouched
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.trace.the_step_cap_does_not_decide_the_shape
+    /**
+     * @brief Forgets the sample count, so a second family is reported as its own.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        `samples()` is zero
+     * @invariant   The table is untouched
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.trace.the_step_cap_does_not_decide_the_shape
+     */
     void reset_samples() const noexcept { samples_ = 0; }
 
 private:
     /// @brief Unit `B` at a point in earth radii, or a zero vector when there is no usable direction there.
     [[nodiscard]] Vec3 direction(const Vec3& point_re) const noexcept;
 
-    /// @brief Walks one direction from `seed_re`. `step_max_re` signed decides which way.
-    ///
-    /// @ownership   owns `out`
-    /// @thread      main
-    /// @pre         `sign` is exactly `+1.0` or `-1.0`
-    /// @post        `out` holds the points walked and why the walk ended
-    /// @invariant   Every point is inside the table's box
-    /// @errors      noexcept
-    /// @complexity  O(points x stages)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.trace.a_uniform_field_gives_a_straight_line
+    /**
+     * @brief Walks one direction from `seed_re`. `step_max_re` signed decides which way.
+     *
+     * @ownership   owns `out`
+     * @thread      main
+     * @pre         `sign` is exactly `+1.0` or `-1.0`
+     * @post        `out` holds the points walked and why the walk ended
+     * @invariant   Every point is inside the table's box
+     * @errors      Allocates as the line grows; a failure to allocate propagates
+     * @complexity  O(points x stages)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.trace.a_uniform_field_gives_a_straight_line
+     */
     [[nodiscard]] TraceStop walk(const Vec3& seed_re, double sign, FieldLine& out) const;
 
     /// @brief Whether a point in earth radii is inside the sampled box.

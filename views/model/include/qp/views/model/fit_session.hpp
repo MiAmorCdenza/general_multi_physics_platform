@@ -158,20 +158,22 @@ enum class FitExclusion : std::uint8_t {
     value_not_finite = 2,
 };
 
-/// @brief Stable short name of an exclusion, for a message or a log line.
-///
-/// @param reason The exclusion to name.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        One of the names `to_string` writes, never null
-/// @invariant   Total: every enumerator has a name
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       fit.session.an_unknown_uncertainty_is_excluded
+/**
+ * @brief Stable short name of an exclusion, for a message or a log line.
+ *
+ * @param reason The exclusion to name.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        One of the names `to_string` writes, never null
+ * @invariant   Total: every enumerator has a name
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       fit.session.an_unknown_uncertainty_is_excluded
+ */
 [[nodiscard]] const char* to_string(FitExclusion reason) noexcept;
 
 /**
@@ -197,20 +199,22 @@ enum class FitRefusal : std::uint8_t {
     not_enough_points = 3,
 };
 
-/// @brief Stable short name of a refusal, for a message or a log line.
-///
-/// @param reason The refusal to name.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        One of the names in this declaration's enumerator list, never null
-/// @invariant   Total: every enumerator has a name
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       fit.session.no_channel_is_refused_by_name
+/**
+ * @brief Stable short name of a refusal, for a message or a log line.
+ *
+ * @param reason The refusal to name.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        One of the names in this declaration's enumerator list, never null
+ * @invariant   Total: every enumerator has a name
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       fit.session.no_channel_is_refused_by_name
+ */
 [[nodiscard]] const char* to_string(FitRefusal reason) noexcept;
 
 /**
@@ -297,66 +301,74 @@ struct FitReport final {
     /// Nothing when the fit can run; the reason it cannot otherwise.
     std::optional<FitRefusal> refusal{};
 
-    /// @brief How many readings were left out, of every reason.
-    ///
-    /// @ownership   pure
-    /// @thread      ui
-    /// @pre         none
-    /// @post        The sum of every count in `excluded`
-    /// @invariant   `points.size() + excluded_count() == sample_count` for a report over a consistent trace
-    /// @errors      noexcept
-    /// @complexity  O(exclusions)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       fit.session.an_unknown_uncertainty_is_excluded
+    /**
+     * @brief How many readings were left out, of every reason.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         none
+     * @post        The sum of every count in `excluded`
+     * @invariant   `points.size() + excluded_count() == sample_count` for a report over a consistent trace
+     * @errors      noexcept
+     * @complexity  O(exclusions)
+     * @nondet      none
+     * @frozen      no
+     * @tests       fit.session.an_unknown_uncertainty_is_excluded
+     */
     [[nodiscard]] std::size_t excluded_count() const noexcept;
 
-    /// @brief The number of readings left out for one reason.
-    ///
-    /// @param reason The exclusion to count. A reason that does not apply counts zero, which is a real answer.
-    ///
-    /// @ownership   pure
-    /// @thread      ui
-    /// @pre         none
-    /// @post        Zero when no reading was excluded for that reason
-    /// @invariant   Never larger than `excluded_count()`
-    /// @errors      noexcept
-    /// @complexity  O(exclusions)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       fit.session.an_unknown_uncertainty_is_excluded
+    /**
+     * @brief The number of readings left out for one reason.
+     *
+     * @param reason The exclusion to count. A reason that does not apply counts zero, which is a real answer.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         none
+     * @post        Zero when no reading was excluded for that reason
+     * @invariant   Never larger than `excluded_count()`
+     * @errors      noexcept
+     * @complexity  O(exclusions)
+     * @nondet      none
+     * @frozen      no
+     * @tests       fit.session.an_unknown_uncertainty_is_excluded
+     */
     [[nodiscard]] std::size_t excluded_count(FitExclusion reason) const noexcept;
 
-    /// @brief Whether a fit can be run on this report.
-    ///
-    /// @ownership   pure
-    /// @thread      ui
-    /// @pre         none
-    /// @post        True exactly when `refusal` is absent
-    /// @invariant   A fittable report has more points than parameters
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       fit.session.degrees_of_freedom_decide_eligibility
+    /**
+     * @brief Whether a fit can be run on this report.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         none
+     * @post        True exactly when `refusal` is absent
+     * @invariant   A fittable report has more points than parameters
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       fit.session.degrees_of_freedom_decide_eligibility
+     */
     [[nodiscard]] bool fittable() const noexcept { return !refusal.has_value(); }
 
-    /// @brief `points - (degree + 1)`, the divisor of a reduced chi-squared.
-    ///
-    /// Zero rather than a negative number when the points do not exceed the parameters, and the reader is
-    /// expected to check `fittable()` first: a negative degree of freedom is not a quantity, and a caller that
-    /// divided by it would produce a number that looks like a fit quality and is not one.
-    ///
-    /// @ownership   pure
-    /// @thread      ui
-    /// @pre         none
-    /// @post        `points.size() - (request.degree + 1)`, or zero when that would be negative
-    /// @invariant   Zero exactly when a fit has no freedom left
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       fit.session.degrees_of_freedom_decide_eligibility
+    /**
+     * @brief `points - (degree + 1)`, the divisor of a reduced chi-squared.
+     *
+     * Zero rather than a negative number when the points do not exceed the parameters, and the reader is
+     * expected to check `fittable()` first: a negative degree of freedom is not a quantity, and a caller that
+     * divided by it would produce a number that looks like a fit quality and is not one.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         none
+     * @post        `points.size() - (request.degree + 1)`, or zero when that would be negative
+     * @invariant   Zero exactly when a fit has no freedom left
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       fit.session.degrees_of_freedom_decide_eligibility
+     */
     [[nodiscard]] std::size_t degrees_of_freedom() const noexcept;
 };
 
@@ -394,32 +406,36 @@ public:
      */
     explicit FitSession(const qp::runtime::Trace& trace) noexcept : trace_(&trace) {}
 
-    /// @brief The trace this session reads.
-    ///
-    /// @ownership   borrows
-    /// @thread      ui
-    /// @pre         none
-    /// @post        none
-    /// @invariant   The same object passed to the constructor
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       fit.session.points_come_from_a_named_channel
+    /**
+     * @brief The trace this session reads.
+     *
+     * @ownership   borrows
+     * @thread      ui
+     * @pre         none
+     * @post        none
+     * @invariant   The same object passed to the constructor
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       fit.session.points_come_from_a_named_channel
+     */
     [[nodiscard]] const qp::runtime::Trace& trace() const noexcept { return *trace_; }
 
-    /// @brief What the session has been asked to fit.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      ui
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Stable until the next mutation
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       fit.session.points_come_from_a_named_channel
+    /**
+     * @brief What the session has been asked to fit.
+     *
+     * @ownership   borrows from this object
+     * @thread      ui
+     * @pre         none
+     * @post        none
+     * @invariant   Stable until the next mutation
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       fit.session.points_come_from_a_named_channel
+     */
     [[nodiscard]] const FitRequest& request() const noexcept { return request_; }
 
     /**

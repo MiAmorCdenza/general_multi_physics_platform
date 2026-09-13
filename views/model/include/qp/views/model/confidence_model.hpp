@@ -165,49 +165,55 @@ public:
      */
     void set_omega(double w) noexcept;
 
-    /// @brief The angular frequency the report will assume.
-    ///
-    /// @ownership   pure
-    /// @thread      ui
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Positive and finite
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       confidence.notes_name_the_mechanism
+    /**
+     * @brief The angular frequency the report will assume.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         none
+     * @post        none
+     * @invariant   Positive and finite
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       confidence.notes_name_the_mechanism
+     */
     [[nodiscard]] double omega() const noexcept { return omega_; }
 
-    /// @brief Whether `set_omega` was called with a usable value.
-    ///
-    /// The report uses this to say whether the frequency is the caller's or the default, which is
-    /// the difference between a diagnostic and a guess.
-    ///
-    /// @ownership   pure
-    /// @thread      ui
-    /// @pre         none
-    /// @post        none
-    /// @invariant   False until a usable `set_omega`
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       confidence.notes_name_the_mechanism
+    /**
+     * @brief Whether `set_omega` was called with a usable value.
+     *
+     * The report uses this to say whether the frequency is the caller's or the default, which is
+     * the difference between a diagnostic and a guess.
+     *
+     * @ownership   pure
+     * @thread      ui
+     * @pre         none
+     * @post        none
+     * @invariant   False until a usable `set_omega`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       confidence.notes_name_the_mechanism
+     */
     [[nodiscard]] bool omega_was_declared() const noexcept { return omega_declared_; }
 
-    /// @brief The trace this model reports on.
-    ///
-    /// @ownership   borrows
-    /// @thread      ui
-    /// @pre         none
-    /// @post        none
-    /// @invariant   The same object passed to the constructor
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       confidence.energy_drift_is_measured
+    /**
+     * @brief The trace this model reports on.
+     *
+     * @ownership   borrows
+     * @thread      ui
+     * @pre         none
+     * @post        none
+     * @invariant   The same object passed to the constructor
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       confidence.energy_drift_is_measured
+     */
     [[nodiscard]] const qp::runtime::Trace& trace() const noexcept { return *trace_; }
 
     /**

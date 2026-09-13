@@ -94,39 +94,43 @@ enum class Status : std::uint8_t {
     escaped = 2,
 };
 
-/// @brief Stable short name of a status, for a message or a log line.
-///
-/// @param status The status to name.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        One of the three names, never null
-/// @invariant   Total: every enumerator has a name
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       particles.state.status_round_trips_through_the_buffer
+/**
+ * @brief Stable short name of a status, for a message or a log line.
+ *
+ * @param status The status to name.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        One of the three names, never null
+ * @invariant   Total: every enumerator has a name
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       particles.state.status_round_trips_through_the_buffer
+ */
 [[nodiscard]] const char* to_string(Status status) noexcept;
 
-/// @brief A particle batch: four typed arrays, and the four views that describe them.
-///
-/// ## Why the views are produced on demand rather than stored
-///
-/// A stored `FieldValue` holds a raw pointer into an array that can be reallocated by `resize`, so it would go
-/// stale on the first resize and the failure would be a read of freed memory rather than a compile error. The
-/// arrays are the storage and the views are a function of them, so this class exposes `slot()` and lets the
-/// caller take a view for the duration of a call.
-///
-/// @ownership   owns
-/// @thread      main
-/// @pre         none
-/// @post        none
-/// @invariant   Every array has exactly `count()` entries
-/// @errors      See each declaration
-/// @frozen      no
-/// @tests       particles.state.layout_is_declared_not_assumed
+/**
+ * @brief A particle batch: four typed arrays, and the four views that describe them.
+ *
+ * ## Why the views are produced on demand rather than stored
+ *
+ * A stored `FieldValue` holds a raw pointer into an array that can be reallocated by `resize`, so it would go
+ * stale on the first resize and the failure would be a read of freed memory rather than a compile error. The
+ * arrays are the storage and the views are a function of them, so this class exposes `slot()` and lets the
+ * caller take a view for the duration of a call.
+ *
+ * @ownership   owns
+ * @thread      main
+ * @pre         none
+ * @post        none
+ * @invariant   Every array has exactly `count()` entries
+ * @errors      See each declaration
+ * @frozen      no
+ * @tests       particles.state.layout_is_declared_not_assumed
+ */
 class ParticleState final {
 public:
     /// @brief The slots a batch has, in the order `slot()` indexes them.
@@ -148,19 +152,21 @@ public:
     /// @brief How many slots a batch has.
     static constexpr std::size_t kSlotCount = 4;
 
-    /// @brief An empty batch. `count()` is zero and every slot view is invalid but harmless.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        `count() == 0` and `is_consistent()` is true
-    /// @invariant   Every array is empty
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.state.layout_is_declared_not_assumed
-    ParticleState() = default;
+    /**
+     * @brief An empty batch. `count()` is zero and every slot view is invalid but harmless.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        `count() == 0` and `is_consistent()` is true
+     * @invariant   Every array is empty
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.state.layout_is_declared_not_assumed
+     */
+    ParticleState() noexcept = default;
 
     /**
      * @brief Allocates `n` particles, all live, at rest at the origin with zero charge.
@@ -184,18 +190,20 @@ public:
      */
     explicit ParticleState(std::size_t n);
 
-    /// @brief How many particles the batch holds.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        The same number every call until the next `resize`
-    /// @invariant   Equal to the length of every array
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.state.layout_is_declared_not_assumed
+    /**
+     * @brief How many particles the batch holds.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        The same number every call until the next `resize`
+     * @invariant   Equal to the length of every array
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.state.layout_is_declared_not_assumed
+     */
     [[nodiscard]] std::size_t count() const noexcept { return count_; }
 
     /**
@@ -244,20 +252,22 @@ public:
      */
     [[nodiscard]] field::FieldValue slot(Slot slot) noexcept;
 
-    /// @brief The same, read-only.
-    ///
-    /// @param slot Which array.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      any
-    /// @pre         `slot` is one of the four enumerators
-    /// @post        A readable view covering `count()` points, or an invalid one for an empty batch
-    /// @invariant   The description matches the table in the file comment for that slot
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.state.slots_are_double_precision
+    /**
+     * @brief The same, read-only.
+     *
+     * @param slot Which array.
+     *
+     * @ownership   borrows from this object
+     * @thread      any
+     * @pre         `slot` is one of the four enumerators
+     * @post        A readable view covering `count()` points, or an invalid one for an empty batch
+     * @invariant   The description matches the table in the file comment for that slot
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.state.slots_are_double_precision
+     */
     [[nodiscard]] field::FieldValue slot(Slot slot) const noexcept;
 
     /**
@@ -285,112 +295,124 @@ public:
      */
     [[nodiscard]] double at(std::size_t i, std::size_t component, Slot slot) const noexcept;
 
-    /// @brief Writes one component of one particle. An out-of-range request changes nothing.
-    ///
-    /// @param i         Which particle.
-    /// @param component Which component within the slot.
-    /// @param slot      Which array.
-    /// @param value     The value to store.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        The addressed component holds `value`, or nothing changed
-    /// @invariant   Never writes outside the array
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.state.a_write_is_visible_through_the_view
+    /**
+     * @brief Writes one component of one particle. An out-of-range request changes nothing.
+     *
+     * @param i         Which particle.
+     * @param component Which component within the slot.
+     * @param slot      Which array.
+     * @param value     The value to store.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        The addressed component holds `value`, or nothing changed
+     * @invariant   Never writes outside the array
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.state.a_write_is_visible_through_the_view
+     */
     void set(std::size_t i, std::size_t component, Slot slot, double value) noexcept;
 
-    /// @brief The status of one particle, or `escaped` for an index out of range.
-    ///
-    /// `escaped` rather than `live` for an out-of-range read, and the direction matters: a particle that does not
-    /// exist is not one that is being integrated, and answering `live` would let a loop that ran past the end
-    /// keep stepping a phantom that always looks healthy.
-    ///
-    /// @param i Which particle.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        The stored status, or `Status::escaped` when `i` is out of range
-    /// @invariant   Never reads outside the array
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.state.status_round_trips_through_the_buffer
+    /**
+     * @brief The status of one particle, or `escaped` for an index out of range.
+     *
+     * `escaped` rather than `live` for an out-of-range read, and the direction matters: a particle that does not
+     * exist is not one that is being integrated, and answering `live` would let a loop that ran past the end
+     * keep stepping a phantom that always looks healthy.
+     *
+     * @param i Which particle.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        The stored status, or `Status::escaped` when `i` is out of range
+     * @invariant   Never reads outside the array
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.state.status_round_trips_through_the_buffer
+     */
     [[nodiscard]] Status status_of(std::size_t i) const noexcept;
 
-    /// @brief Sets one particle's status.
-    ///
-    /// @param i      Which particle.
-    /// @param status The new status.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        `status_of(i) == status` for an in-range index
-    /// @invariant   An out-of-range index changes nothing
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.state.status_round_trips_through_the_buffer
+    /**
+     * @brief Sets one particle's status.
+     *
+     * @param i      Which particle.
+     * @param status The new status.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        `status_of(i) == status` for an in-range index
+     * @invariant   An out-of-range index changes nothing
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.state.status_round_trips_through_the_buffer
+     */
     void set_status(std::size_t i, Status status) noexcept;
 
-    /// @brief How many particles are still `live`.
-    ///
-    /// The number a report quotes, and the reason `Status` exists: a run that ends with 12 000 of 20 000
-    /// particles left has two different explanations depending on whether the rest were absorbed or escaped, and
-    /// a count that merged them could not say which.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        At most `count()`
-    /// @invariant   Equals the number of entries whose status is `live`
-    /// @errors      noexcept
-    /// @complexity  O(n)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.state.status_round_trips_through_the_buffer
+    /**
+     * @brief How many particles are still `live`.
+     *
+     * The number a report quotes, and the reason `Status` exists: a run that ends with 12 000 of 20 000
+     * particles left has two different explanations depending on whether the rest were absorbed or escaped, and
+     * a count that merged them could not say which.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        At most `count()`
+     * @invariant   Equals the number of entries whose status is `live`
+     * @errors      noexcept
+     * @complexity  O(n)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.state.status_round_trips_through_the_buffer
+     */
     [[nodiscard]] std::size_t live_count() const noexcept;
 
-    /// @brief How many particles have one particular status.
-    ///
-    /// @param status The status to count.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        At most `count()`
-    /// @invariant   The three counts sum to `count()`
-    /// @errors      noexcept
-    /// @complexity  O(n)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.state.status_round_trips_through_the_buffer
+    /**
+     * @brief How many particles have one particular status.
+     *
+     * @param status The status to count.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        At most `count()`
+     * @invariant   The three counts sum to `count()`
+     * @errors      noexcept
+     * @complexity  O(n)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.state.status_round_trips_through_the_buffer
+     */
     [[nodiscard]] std::size_t count_with(Status status) const noexcept;
 
-    /// @brief Whether every array is the length the count says.
-    ///
-    /// Checked before a step rather than assumed, for the reason `StateView::is_consistent` exists: a batch whose
-    /// arrays disagree is one a kernel would read past the end of, and the read would be a plausible number
-    /// rather than a crash.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        True exactly when all four arrays hold `count()` entries
-    /// @invariant   True for an empty batch
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       particles.state.layout_is_declared_not_assumed
+    /**
+     * @brief Whether every array is the length the count says.
+     *
+     * Checked before a step rather than assumed, for the reason `StateView::is_consistent` exists: a batch whose
+     * arrays disagree is one a kernel would read past the end of, and the read would be a plausible number
+     * rather than a crash.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        True exactly when all four arrays hold `count()` entries
+     * @invariant   True for an empty batch
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       particles.state.layout_is_declared_not_assumed
+     */
     [[nodiscard]] bool is_consistent() const noexcept;
 
 private:

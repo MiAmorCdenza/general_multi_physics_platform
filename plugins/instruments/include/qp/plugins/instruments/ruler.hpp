@@ -176,32 +176,36 @@ public:
 
     ~GraduatedInstrument() override;
 
-    /// @brief What this device is and what it measures.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      main
-    /// @pre         none
-    /// @post        none
-    /// @invariant   The reference stays valid for the object's lifetime
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       instrument.ruler.reports_the_tick_it_can_see
+    /**
+     * @brief What this device is and what it measures.
+     *
+     * @ownership   borrows from this object
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   The reference stays valid for the object's lifetime
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       instrument.ruler.reports_the_tick_it_can_see
+     */
     [[nodiscard]] const qp::runtime::InstrumentDesc& describe() const noexcept override;
 
-    /// @brief The increment this instrument is currently set to, in SI units.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        A positive value, never finer than `describe().finest_resolution`
-    /// @invariant   Unchanged by `measure`
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       instrument.ruler.an_adjustable_scale_snaps_to_its_ticks
+    /**
+     * @brief The increment this instrument is currently set to, in SI units.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        A positive value, never finer than `describe().finest_resolution`
+     * @invariant   Unchanged by `measure`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       instrument.ruler.an_adjustable_scale_snaps_to_its_ticks
+     */
     [[nodiscard]] double resolution() const noexcept override;
 
     /**

@@ -132,18 +132,20 @@ enum class DocumentRefusal : std::uint8_t {
     non_finite_number = 11,
 };
 
-/// @brief Stable short name of a refusal, for a message or a log line.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        Non-null for every enumerator
-/// @invariant   Distinct codes have distinct names
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       persist.refusal.codes_are_named
+/**
+ * @brief Stable short name of a refusal, for a message or a log line.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        Non-null for every enumerator
+ * @invariant   Distinct codes have distinct names
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       persist.refusal.codes_are_named
+ */
 [[nodiscard]] constexpr const char* to_string(DocumentRefusal r) noexcept {
     switch (r) {
         case DocumentRefusal::ok: return "ok";
@@ -264,18 +266,20 @@ public:
     IDocumentFormat(const IDocumentFormat&) = delete;
     IDocumentFormat& operator=(const IDocumentFormat&) = delete;
 
-    /// @brief The format this object implements. Its `name` is what a log line and a record should use.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      main
-    /// @pre         none
-    /// @post        none
-    /// @invariant   The returned reference stays valid for the object's lifetime
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       persist.format.describes_itself
+    /**
+     * @brief The format this object implements. Its `name` is what a log line and a record should use.
+     *
+     * @ownership   borrows from this object
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   The returned reference stays valid for the object's lifetime
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       persist.format.describes_itself
+     */
     [[nodiscard]] virtual const DocumentFormatDesc& format() const noexcept = 0;
 
     /**

@@ -210,88 +210,98 @@ public:
      */
     [[nodiscard]] qp::diag::Result<void> advance(std::size_t steps, double dt);
 
-    /// @brief The particles this run owns. Never moved after `build`.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      main
-    /// @pre         none
-    /// @post        The batch, empty before a successful `build`
-    /// @invariant   Its address is stable for the object's lifetime
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.run.a_graph_becomes_a_run
+    /**
+     * @brief The particles this run owns. Never moved after `build`.
+     *
+     * @ownership   borrows from this object
+     * @thread      main
+     * @pre         none
+     * @post        The batch, empty before a successful `build`
+     * @invariant   Its address is stable for the object's lifetime
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.run.a_graph_becomes_a_run
+     */
     [[nodiscard]] const qp::graph::particles::ParticleState& state() const noexcept { return state_; }
 
-    /// @brief The steps this run drives, and the counters a report quotes.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      main
-    /// @pre         none
-    /// @post        An empty report before a successful `build`
-    /// @invariant   The same numbers the executor holds
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.run.a_graph_becomes_a_run
+    /**
+     * @brief The steps this run drives, and the counters a report quotes.
+     *
+     * @ownership   borrows from this object
+     * @thread      main
+     * @pre         none
+     * @post        An empty report before a successful `build`
+     * @invariant   The same numbers the executor holds
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.run.a_graph_becomes_a_run
+     */
     [[nodiscard]] const qp::graph::particles::AdvanceReport& advance_report() const noexcept;
 
-    /// @brief What the run has done, in the vocabulary `IGraphRunProvider` hands a caller.
-    ///
-    /// The counters the executor keeps, plus the particle census the state knows, in one value. Every field is
-    /// derived rather than stored: a second copy of a counter is a second answer to "how far did this get", and
-    /// the two would agree until one of them was updated.
-    ///
-    /// @ownership   owns (the returned report carries a string)
-    /// @thread      main
-    /// @pre         none
-    /// @post        A consistent report; all zeros before a successful `build`
-    /// @invariant   `live + absorbed + escaped == particles`
-    /// @errors      noexcept
-    /// @complexity  O(particles)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.run.a_provider_builds_a_run_from_a_graph
+    /**
+     * @brief What the run has done, in the vocabulary `IGraphRunProvider` hands a caller.
+     *
+     * The counters the executor keeps, plus the particle census the state knows, in one value. Every field is
+     * derived rather than stored: a second copy of a counter is a second answer to "how far did this get", and
+     * the two would agree until one of them was updated.
+     *
+     * @ownership   owns (the returned report carries a string)
+     * @thread      main
+     * @pre         none
+     * @post        A consistent report; all zeros before a successful `build`
+     * @invariant   `live + absorbed + escaped == particles`
+     * @errors      Allocates the report's sentence; a failure to allocate propagates
+     * @complexity  O(particles)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.run.a_provider_builds_a_run_from_a_graph
+     */
     [[nodiscard]] qp::graph::execution::GraphRunReport report() const override;
 
-    /// @brief Where the particles are, as `x, y, z` triples in **earth radii**.
-    ///
-    /// Converted from the SI the state holds, because this is the one number a caller draws with and a canvas
-    /// whose axes are in metres is a canvas nobody can read. The conversion is here rather than in the view for
-    /// the reason every other conversion in this kit is at its boundary: the kit owns the unit system, and a
-    /// caller that had to know `R_E` to draw a picture would be a caller that had to know the physics.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        `size()` is `3 * state().count()`, or zero
-    /// @invariant   One triple per particle, in slot order
-    /// @errors      noexcept
-    /// @complexity  O(particles)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.run.a_provider_builds_a_run_from_a_graph
+    /**
+     * @brief Where the particles are, as `x, y, z` triples in **earth radii**.
+     *
+     * Converted from the SI the state holds, because this is the one number a caller draws with and a canvas
+     * whose axes are in metres is a canvas nobody can read. The conversion is here rather than in the view for
+     * the reason every other conversion in this kit is at its boundary: the kit owns the unit system, and a
+     * caller that had to know `R_E` to draw a picture would be a caller that had to know the physics.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        `size()` is `3 * state().count()`, or zero
+     * @invariant   One triple per particle, in slot order
+     * @errors      Allocates the returned triples; a failure to allocate propagates
+     * @complexity  O(particles)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.run.a_provider_builds_a_run_from_a_graph
+     */
     [[nodiscard]] std::vector<double> positions() const override;
 
-    /// @brief The field tables this run reads, so a view item can trace them.
-    ///
-    /// Returns the store the run was built over -- borrowed or owned, whichever it is -- and falls back to
-    /// `IGraphRun`'s shared empty set when there is none. Calling the base rather than holding a second empty set
-    /// here is deliberate: two empty stores are two answers to "how many fields are there", and the only reason
-    /// to have one would be to avoid a virtual call in a function that runs once per drawing.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      main
-    /// @pre         none
-    /// @post        The built store, or an empty set before a successful `build`
-    /// @invariant   The reference stays valid until this object is destroyed or rebuilt
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.run.a_provider_builds_a_run_from_a_graph
+    /**
+     * @brief The field tables this run reads, so a view item can trace them.
+     *
+     * Returns the store the run was built over -- borrowed or owned, whichever it is -- and falls back to
+     * `IGraphRun`'s shared empty set when there is none. Calling the base rather than holding a second empty set
+     * here is deliberate: two empty stores are two answers to "how many fields are there", and the only reason
+     * to have one would be to avoid a virtual call in a function that runs once per drawing.
+     *
+     * @ownership   borrows from this object
+     * @thread      main
+     * @pre         none
+     * @post        The built store, or an empty set before a successful `build`
+     * @invariant   The reference stays valid until this object is destroyed or rebuilt
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.run.a_provider_builds_a_run_from_a_graph
+     */
     [[nodiscard]] const qp::graph::field::FieldSet& fields() const noexcept override;
 
     /// @brief The channels this run records, by name.
@@ -325,43 +335,47 @@ public:
     /// @brief The distance from the origin, in metres. See `kSpeedChannel`.
     static constexpr const char* kRadiusChannel = "radius";
 
-    /// @brief Names the run's record, so its samples carry the identity the ledger issued.
-    ///
-    /// Also where the channels are declared, which is deliberate: the count has to exist before the first sample
-    /// or `Trace::append` refuses a sample whose width does not match, and a run that recorded before being named
-    /// would append into a trace nobody can look up. Called after a successful build and before the first step.
-    ///
-    /// @param run The id the ledger issued. `RunId{}` records nothing but still declares the channels.
-    ///
-    /// @ownership   value
-    /// @thread      main
-    /// @pre         none
-    /// @post        `trace().run()` is `run`, and every step after this appends one sample
-    /// @invariant   Declaring the channels twice does not double them: the trace is rebuilt
-    /// @errors      noexcept
-    /// @complexity  O(channels)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.run.the_recorded_channels_are_the_ones_a_report_names
+    /**
+     * @brief Names the run's record, so its samples carry the identity the ledger issued.
+     *
+     * Also where the channels are declared, which is deliberate: the count has to exist before the first sample
+     * or `Trace::append` refuses a sample whose width does not match, and a run that recorded before being named
+     * would append into a trace nobody can look up. Called after a successful build and before the first step.
+     *
+     * @param run The id the ledger issued. `RunId{}` records nothing but still declares the channels.
+     *
+     * @ownership   value
+     * @thread      main
+     * @pre         none
+     * @post        `trace().run()` is `run`, and every step after this appends one sample
+     * @invariant   Declaring the channels twice does not double them: the trace is rebuilt
+     * @errors      noexcept
+     * @complexity  O(channels)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.run.the_recorded_channels_are_the_ones_a_report_names
+     */
     void set_run(qp::runtime::RunId run) noexcept override;
 
-    /// @brief What this run recorded: one sample per host step, plus the initial condition.
-    ///
-    /// The **first particle** is the one recorded, which is the convention `GraphRun` already sets and for the same
-    /// reason: a trace is a time series about something, and a channel that silently averaged a population would
-    /// be a different quantity with the same name. A population aggregate is a legitimate channel; it is a
-    /// different one, and it arrives with a different name when a course needs it.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      main
-    /// @pre         none
-    /// @post        Empty of samples before `set_run`, and one sample per step after it
-    /// @invariant   Every sample's width is four, whatever a step did
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.run.the_recorded_channels_are_the_ones_a_report_names
+    /**
+     * @brief What this run recorded: one sample per host step, plus the initial condition.
+     *
+     * The **first particle** is the one recorded, which is the convention `GraphRun` already sets and for the same
+     * reason: a trace is a time series about something, and a channel that silently averaged a population would
+     * be a different quantity with the same name. A population aggregate is a legitimate channel; it is a
+     * different one, and it arrives with a different name when a course needs it.
+     *
+     * @ownership   borrows from this object
+     * @thread      main
+     * @pre         none
+     * @post        Empty of samples before `set_run`, and one sample per step after it
+     * @invariant   Every sample's width is four, whatever a step did
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.run.the_recorded_channels_are_the_ones_a_report_names
+     */
     [[nodiscard]] const qp::runtime::Trace& trace() const noexcept override;
 
     /// @brief How many steps of the preferred cadence make one gyro-period.
@@ -379,42 +393,44 @@ public:
     /// stays a button press rather than a wait. It is the same number the window uses, arrived at from this side.
     static constexpr std::size_t kDefaultRunSteps = 4096;
 
-    /// @brief How long one run of this kit is: enough steps to resolve the gyration, and no more.
-    ///
-    /// ## The measurement that made this necessary
-    ///
-    /// The window's own cadence -- 4096 steps of `1e-4` seconds, chosen and measured for a laboratory oscillator --
-    /// is **8.7 milliseconds** in this kit's units, because one normalized time unit is the light crossing time of
-    /// an earth radius (0.0213 s). A proton's gyro-period at six earth radii is **0.63 seconds**. So the ring the
-    /// kit launches completed one seventy-third of a single gyration over a whole run: the particles were drawn
-    /// almost exactly where they started, and every dynamic feature -- gyration, bounce, drift, convection -- was
-    /// invisible. Nothing in the kit was wrong; the run was simply too short to be about anything.
-    ///
-    /// ## What this answers, and what it deliberately does not
-    ///
-    /// `steps` stays at the window's own count, because a step count is a **budget** and the budget is the
-    /// caller's; what this run knows is the **time scale**. So `dt` is `1/32` of a gyro-period at the launch
-    /// radius, computed from the emitted species' charge-to-mass ratio and the field actually sampled there. That
-    /// resolves the fastest process by a comfortable margin (about eleven degrees of gyration per step, with the
-    /// kernel's own sub-stepping as the safety net for a particle that drifts into a stronger field) and makes the
-    /// run 4096/32 = 128 gyro-periods long -- 81 seconds at six earth radii.
-    ///
-    /// **It does not reach the drift.** The gradient-curvature drift period at that radius is hours, so no fixed
-    /// step of a Boris push can show it: resolving it needs either millions of steps or a guiding-centre model, and
-    /// the kit has neither. That limitation is stated here rather than discovered by a user who wonders why the
-    /// ring does not move.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        A cadence whose `dt` resolves the gyration, or nothing when there is no field to compute one
-    ///              from -- in which case the caller's default applies and its own limits are the honest answer
-    /// @invariant   Depends only on the launched species and the field, never on the caller
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.run.the_cadence_resolves_the_gyration
+    /**
+     * @brief How long one run of this kit is: enough steps to resolve the gyration, and no more.
+     *
+     * ## The measurement that made this necessary
+     *
+     * The window's own cadence -- 4096 steps of `1e-4` seconds, chosen and measured for a laboratory oscillator --
+     * is **8.7 milliseconds** in this kit's units, because one normalized time unit is the light crossing time of
+     * an earth radius (0.0213 s). A proton's gyro-period at six earth radii is **0.63 seconds**. So the ring the
+     * kit launches completed one seventy-third of a single gyration over a whole run: the particles were drawn
+     * almost exactly where they started, and every dynamic feature -- gyration, bounce, drift, convection -- was
+     * invisible. Nothing in the kit was wrong; the run was simply too short to be about anything.
+     *
+     * ## What this answers, and what it deliberately does not
+     *
+     * `steps` stays at the window's own count, because a step count is a **budget** and the budget is the
+     * caller's; what this run knows is the **time scale**. So `dt` is `1/32` of a gyro-period at the launch
+     * radius, computed from the emitted species' charge-to-mass ratio and the field actually sampled there. That
+     * resolves the fastest process by a comfortable margin (about eleven degrees of gyration per step, with the
+     * kernel's own sub-stepping as the safety net for a particle that drifts into a stronger field) and makes the
+     * run 4096/32 = 128 gyro-periods long -- 81 seconds at six earth radii.
+     *
+     * **It does not reach the drift.** The gradient-curvature drift period at that radius is hours, so no fixed
+     * step of a Boris push can show it: resolving it needs either millions of steps or a guiding-centre model, and
+     * the kit has neither. That limitation is stated here rather than discovered by a user who wonders why the
+     * ring does not move.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        A cadence whose `dt` resolves the gyration, or nothing when there is no field to compute one
+     *              from -- in which case the caller's default applies and its own limits are the honest answer
+     * @invariant   Depends only on the launched species and the field, never on the caller
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.run.the_cadence_resolves_the_gyration
+     */
     [[nodiscard]] std::optional<qp::graph::execution::RunCadence> preferred_cadence() const noexcept override;
 
     /**
@@ -451,96 +467,108 @@ public:
                                                    const qp::graph::Declarations& declared,
                                                    const qp::graph::INodeCatalog& catalog);
 
-    /// @brief The plan the run was built from, for a caller that wants to see what it became.
-    ///
-    /// @ownership   borrows from this object
-    /// @thread      main
-    /// @pre         none
-    /// @post        The built plan, empty before a successful `build`
-    /// @invariant   Its kernels are alive for as long as this object is
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.run.a_graph_becomes_a_run
+    /**
+     * @brief The plan the run was built from, for a caller that wants to see what it became.
+     *
+     * @ownership   borrows from this object
+     * @thread      main
+     * @pre         none
+     * @post        The built plan, empty before a successful `build`
+     * @invariant   Its kernels are alive for as long as this object is
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.run.a_graph_becomes_a_run
+     */
     [[nodiscard]] const BuiltPlan& plan() const noexcept { return plan_; }
 
-    /// @brief The initial condition the run launched, so a report can say what the experiment was.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        The spec, or a default-constructed one before a successful `build`
-    /// @invariant   The particles in `state()` were produced from it
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.run.a_graph_becomes_a_run
+    /**
+     * @brief The initial condition the run launched, so a report can say what the experiment was.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        The spec, or a default-constructed one before a successful `build`
+     * @invariant   The particles in `state()` were produced from it
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.run.a_graph_becomes_a_run
+     */
     [[nodiscard]] const EmitterSpec& emitter() const noexcept { return emitter_; }
 
-    /// @brief The bytes of baked field the run reads, for a report that has to say what it cost.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        Zero before a successful `build`
-    /// @invariant   Equals the borrowed store's own total
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.run.a_graph_becomes_a_run
+    /**
+     * @brief The bytes of baked field the run reads, for a report that has to say what it cost.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        Zero before a successful `build`
+     * @invariant   Equals the borrowed store's own total
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.run.a_graph_becomes_a_run
+     */
     [[nodiscard]] std::uint64_t baked_bytes() const noexcept {
         return fields_ == nullptr ? 0U : fields_->bytes();
     }
 
-    /// @brief Whether a run was built and prepared.
-    ///
-    /// True for a **field-only** run as well: a graph that declared a field and no particles has been built, its
-    /// bake is in the store, and `advance` is a legal call that does nothing. The alternative -- reporting false
-    /// because there is no executor -- would make the one state a caller can test say "this run does not work"
-    /// about a run whose whole purpose is to have baked.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        True exactly when `advance` can be called
-    /// @invariant   False after a failed `build`
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.run.a_rebuild_replaces_the_run,
-    ///              magnetosphere.render.a_field_becomes_a_family_of_curves
+    /**
+     * @brief Whether a run was built and prepared.
+     *
+     * True for a **field-only** run as well: a graph that declared a field and no particles has been built, its
+     * bake is in the store, and `advance` is a legal call that does nothing. The alternative -- reporting false
+     * because there is no executor -- would make the one state a caller can test say "this run does not work"
+     * about a run whose whole purpose is to have baked.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        True exactly when `advance` can be called
+     * @invariant   False after a failed `build`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.run.a_rebuild_replaces_the_run,
+     *              magnetosphere.render.a_field_becomes_a_family_of_curves
+     */
     [[nodiscard]] bool built() const noexcept { return executor_ != nullptr || field_only_; }
 
-    /// @brief Why `build_particle_plan` refused, when the refusal was `plan_rejected`.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        `ok` unless the last build was refused by the plan builder
-    /// @invariant   The last build's answer, not a guess
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.run.a_run_without_a_field_is_refused
+    /**
+     * @brief Why `build_particle_plan` refused, when the refusal was `plan_rejected`.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        `ok` unless the last build was refused by the plan builder
+     * @invariant   The last build's answer, not a guess
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.run.a_run_without_a_field_is_refused
+     */
     [[nodiscard]] PlanBuildRefusal plan_build() const noexcept { return plan_refusal_; }
 
-    /// @brief Why `ParticleExecutor::prepare` refused, when the refusal was `executor_rejected`.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        `ok` unless the last build was refused by the executor
-    /// @invariant   The last build's answer, not a guess
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.run.a_run_without_a_field_is_refused
+    /**
+     * @brief Why `ParticleExecutor::prepare` refused, when the refusal was `executor_rejected`.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        `ok` unless the last build was refused by the executor
+     * @invariant   The last build's answer, not a guess
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.run.a_run_without_a_field_is_refused
+     */
     [[nodiscard]] qp::graph::particles::PlanRefusal executor_refusal() const noexcept {
         return executor_refusal_;
     }
@@ -598,38 +626,42 @@ public:
     /// @brief Stable name, for the status line and for the ledger.
     static constexpr const char* kName = "magnetosphere";
 
-    /// @brief The name a caller reads.
-    ///
-    /// @ownership   observes
-    /// @thread      any
-    /// @pre         none
-    /// @post        `kName`
-    /// @invariant   Constant
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.run.a_provider_builds_a_run_from_a_graph
+    /**
+     * @brief The name a caller reads.
+     *
+     * @ownership   observes
+     * @thread      any
+     * @pre         none
+     * @post        `kName`
+     * @invariant   Constant
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.run.a_provider_builds_a_run_from_a_graph
+     */
     [[nodiscard]] std::string_view name() const noexcept override { return kName; }
 
-    /// @brief Whether the graph holds a node of one of this kit's three types.
-    ///
-    /// Decided by the type name each **node** carries rather than by looking the type up in the catalog: a graph
-    /// whose type is missing from the catalog is a validation finding, and a run provider that answered "not
-    /// mine" for it would hide that finding behind a "nothing to run" sentence.
-    ///
-    /// @param graph The graph.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        True when at least one occupied slot holds a field, emitter or pusher node
-    /// @invariant   Never inspects parameters or edges
-    /// @errors      noexcept
-    /// @complexity  O(nodes)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.run.a_provider_builds_a_run_from_a_graph
+    /**
+     * @brief Whether the graph holds a node of one of this kit's three types.
+     *
+     * Decided by the type name each **node** carries rather than by looking the type up in the catalog: a graph
+     * whose type is missing from the catalog is a validation finding, and a run provider that answered "not
+     * mine" for it would hide that finding behind a "nothing to run" sentence.
+     *
+     * @param graph The graph.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        True when at least one occupied slot holds a field, emitter or pusher node
+     * @invariant   Never inspects parameters or edges
+     * @errors      noexcept
+     * @complexity  O(nodes)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.run.a_provider_builds_a_run_from_a_graph
+     */
     [[nodiscard]] bool claims(const qp::graph::Graph& graph) const noexcept override;
 
     /**

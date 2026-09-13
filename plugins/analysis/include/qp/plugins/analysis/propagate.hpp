@@ -86,16 +86,18 @@ struct Term final {
     double coefficient = 1.0;
 };
 
-/// @brief A value and its standard uncertainty: what a propagation produces.
-///
-/// @ownership   owns
-/// @thread      main
-/// @pre         none
-/// @post        none
-/// @invariant   `sigma >= 0`
-/// @errors      noexcept
-/// @frozen      no
-/// @tests       propagate.analysis.a_mean_divides_the_uncertainty_by_root_n
+/**
+ * @brief A value and its standard uncertainty: what a propagation produces.
+ *
+ * @ownership   owns
+ * @thread      main
+ * @pre         none
+ * @post        none
+ * @invariant   `sigma >= 0`
+ * @errors      noexcept
+ * @frozen      no
+ * @tests       propagate.analysis.a_mean_divides_the_uncertainty_by_root_n
+ */
 struct Uncertain final {
     double value = 0.0;
     double sigma = 0.0;

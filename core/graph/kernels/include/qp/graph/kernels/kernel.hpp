@@ -186,18 +186,20 @@ struct ClampPolicy final {
     /// and it does not want to.
     double limit = 1.0e12;
 
-    /// @brief Clamp nothing. A non-finite value is the caller's problem.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        `finite_only` is false
-    /// @invariant   The identity policy: applying it never changes a value
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       kernel.clamp_policy.presets
+    /**
+     * @brief Clamp nothing. A non-finite value is the caller's problem.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        `finite_only` is false
+     * @invariant   The identity policy: applying it never changes a value
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       kernel.clamp_policy.presets
+     */
     [[nodiscard]] static constexpr ClampPolicy none() noexcept {
         ClampPolicy p;
         p.finite_only = false;
@@ -205,25 +207,27 @@ struct ClampPolicy final {
         return p;
     }
 
-    /// @brief Refuse to write a non-finite value, with no magnitude bound.
-    ///
-    /// `limit` is set to 0 explicitly, and `apply` reads 0 as "no bound". Returning a
-    /// default-constructed policy instead would inherit the member initialiser `1.0e12` and
-    /// silently impose a magnitude bound on a policy documented as having none -- so a large
-    /// but perfectly finite value would come back altered while the caller had every reason
-    /// to expect it untouched. The default exists for callers who construct the struct
-    /// directly; it is not a decision either preset should inherit by accident.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        `finite_only` is true and no finite value is altered
-    /// @invariant   Finite inputs pass through unchanged, bit for bit
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       kernel.clamp_policy.presets
+    /**
+     * @brief Refuse to write a non-finite value, with no magnitude bound.
+     *
+     * `limit` is set to 0 explicitly, and `apply` reads 0 as "no bound". Returning a
+     * default-constructed policy instead would inherit the member initialiser `1.0e12` and
+     * silently impose a magnitude bound on a policy documented as having none -- so a large
+     * but perfectly finite value would come back altered while the caller had every reason
+     * to expect it untouched. The default exists for callers who construct the struct
+     * directly; it is not a decision either preset should inherit by accident.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        `finite_only` is true and no finite value is altered
+     * @invariant   Finite inputs pass through unchanged, bit for bit
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       kernel.clamp_policy.presets
+     */
     [[nodiscard]] static constexpr ClampPolicy finite() noexcept {
         ClampPolicy p;
         p.finite_only = true;
@@ -231,18 +235,20 @@ struct ClampPolicy final {
         return p;
     }
 
-    /// @brief Refuse non-finite values and bound the magnitude.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         `max_abs` is finite and positive
-    /// @post        `limit == max_abs`
-    /// @invariant   A value within `[-max_abs, max_abs]` passes through unchanged
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       kernel.clamp_policy.presets
+    /**
+     * @brief Refuse non-finite values and bound the magnitude.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         `max_abs` is finite and positive
+     * @post        `limit == max_abs`
+     * @invariant   A value within `[-max_abs, max_abs]` passes through unchanged
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       kernel.clamp_policy.presets
+     */
     [[nodiscard]] static constexpr ClampPolicy bounded(double max_abs) noexcept {
         ClampPolicy p;
         p.finite_only = true;

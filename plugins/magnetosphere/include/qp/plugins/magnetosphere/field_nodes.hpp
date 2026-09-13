@@ -98,38 +98,42 @@ struct GridSpec final {
     std::uint32_t ny = 0;
     std::uint32_t nz = 0;
 
-    /// @brief How many sample points the grid holds.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        `nx * ny * nz`, computed in 64 bits so a typo cannot wrap into a small number
-    /// @invariant   Never overflows for any counts a `std::uint32_t` can hold
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.the_dipole_is_baked_onto_the_grid_it_declares
+    /**
+     * @brief How many sample points the grid holds.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        `nx * ny * nz`, computed in 64 bits so a typo cannot wrap into a small number
+     * @invariant   Never overflows for any counts a `std::uint32_t` can hold
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.the_dipole_is_baked_onto_the_grid_it_declares
+     */
     [[nodiscard]] std::uint64_t point_count() const noexcept {
         return static_cast<std::uint64_t>(nx) * ny * nz;
     }
 
-    /// @brief The position of node `(i, j, k)`, in metres.
-    ///
-    /// @param i Index along `x`.
-    /// @param j Index along `y`.
-    /// @param k Index along `z`.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        `origin + (i * sx, j * sy, k * sz)`
-    /// @invariant   Agrees with `BakedField::node_position` for the same grid
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.the_dipole_is_baked_onto_the_grid_it_declares
+    /**
+     * @brief The position of node `(i, j, k)`, in metres.
+     *
+     * @param i Index along `x`.
+     * @param j Index along `y`.
+     * @param k Index along `z`.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        `origin + (i * sx, j * sy, k * sz)`
+     * @invariant   Agrees with `BakedField::node_position` for the same grid
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.the_dipole_is_baked_onto_the_grid_it_declares
+     */
     [[nodiscard]] Vec3 node_position(std::uint32_t i, std::uint32_t j, std::uint32_t k) const noexcept {
         return Vec3{origin_m.x + static_cast<double>(i) * spacing_m.x,
                     origin_m.y + static_cast<double>(j) * spacing_m.y,
@@ -881,16 +885,18 @@ public:
     static constexpr double kFlareFieldExponent = 0.5;
     static constexpr double kDefaultSheetThicknessM = 2.0 * kEarthRadiusM;
 
-    /// @brief What a current-sheet node's parameters say.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        none
-    /// @invariant   `half_thickness_m > 0`
-    /// @errors      noexcept
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_implies
+    /**
+     * @brief What a current-sheet node's parameters say.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   `half_thickness_m > 0`
+     * @errors      noexcept
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_implies
+     */
     struct SheetSpec final {
         /// The lobe field the sheet saturates to, in tesla.
         double b0_tesla = kDefaultSheetB0;
@@ -915,21 +921,23 @@ public:
         double hinge_degrees = 0.0;
     };
 
-    /// @brief A current-sheet node's parameters, read from the node itself.
-    ///
-    /// @param node The node. Borrowed.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        The three numbers the node carries, or the defaults for the ones it does not -- including a
-    ///              hinge of zero, because a socket is not a parameter and a node read on its own has no wire
-    /// @invariant   One reader, two sources, as every other parameter reader in this kit
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_implies
+    /**
+     * @brief A current-sheet node's parameters, read from the node itself.
+     *
+     * @param node The node. Borrowed.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        The three numbers the node carries, or the defaults for the ones it does not -- including a
+     *              hinge of zero, because a socket is not a parameter and a node read on its own has no wire
+     * @invariant   One reader, two sources, as every other parameter reader in this kit
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_implies
+     */
     [[nodiscard]] static SheetSpec read_sheet(const graph::Node& node) noexcept;
 
     /**
@@ -994,24 +1002,26 @@ public:
      */
     [[nodiscard]] static ImfSpec read_imf_from(const graph::InputView& inputs) noexcept;
 
-    /// @brief The same reader for an evaluator's own inputs.
-    ///
-    /// The difference from the reader above is the hinge: an `InputView` carries the values that arrived on
-    /// wires as well as the node's own parameters, so this is the reader through which a wired tilt reaches the
-    /// bake. `read_sheet` cannot see one, which is the honest limitation of reading a node instead of inputs.
-    ///
-    /// @param inputs The evaluator's inputs. Borrowed for the call.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        The same values `read_sheet` gives for the same ports, plus the hinge when one is wired
-    /// @invariant   One reader, two sources
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_implies
+    /**
+     * @brief The same reader for an evaluator's own inputs.
+     *
+     * The difference from the reader above is the hinge: an `InputView` carries the values that arrived on
+     * wires as well as the node's own parameters, so this is the reader through which a wired tilt reaches the
+     * bake. `read_sheet` cannot see one, which is the honest limitation of reading a node instead of inputs.
+     *
+     * @param inputs The evaluator's inputs. Borrowed for the call.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        The same values `read_sheet` gives for the same ports, plus the hinge when one is wired
+     * @invariant   One reader, two sources
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.a_current_sheet_carries_the_current_it_implies
+     */
     [[nodiscard]] static SheetSpec read_sheet_from(const graph::InputView& inputs) noexcept;
 
     /// @brief Mixes two fields along `x` **without opening a divergence**: the port of the reference's
@@ -1093,16 +1103,18 @@ public:
     /// @brief The reference implementation's factor, kept so that reproducing its fields is one number away.
     static constexpr double kReferenceBlendCorrection = 0.1;
 
-    /// @brief What a blend node's parameters say.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        none
-    /// @invariant   `width_m > 0` and `correction` in `[0, 1]` for any spec `read_blend` produces
-    /// @errors      noexcept
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.a_blend_does_not_open_a_divergence
+    /**
+     * @brief What a blend node's parameters say.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   `width_m > 0` and `correction` in `[0, 1]` for any spec `read_blend` produces
+     * @errors      noexcept
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.a_blend_does_not_open_a_divergence
+     */
     struct BlendSpec final {
         /// Where the weight is one half, in metres.
         double transition_m = kDefaultBlendTransitionM;
@@ -1113,36 +1125,40 @@ public:
         double correction = kDefaultBlendCorrection;
     };
 
-    /// @brief A blend node's parameters, read from the node itself.
-    ///
-    /// @param node The node. Borrowed.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        The three numbers the node carries, or the defaults for the ones it does not
-    /// @invariant   One reader, two sources, as every other parameter reader in this kit
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.a_blend_does_not_open_a_divergence
+    /**
+     * @brief A blend node's parameters, read from the node itself.
+     *
+     * @param node The node. Borrowed.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        The three numbers the node carries, or the defaults for the ones it does not
+     * @invariant   One reader, two sources, as every other parameter reader in this kit
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.a_blend_does_not_open_a_divergence
+     */
     [[nodiscard]] static BlendSpec read_blend(const graph::Node& node) noexcept;
 
-    /// @brief The same reader for an evaluator's own inputs.
-    ///
-    /// @param inputs The evaluator's inputs. Borrowed for the call.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        The same values `read_blend` gives for the same ports
-    /// @invariant   One reader, two sources
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.a_blend_does_not_open_a_divergence
+    /**
+     * @brief The same reader for an evaluator's own inputs.
+     *
+     * @param inputs The evaluator's inputs. Borrowed for the call.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        The same values `read_blend` gives for the same ports
+     * @invariant   One reader, two sources
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.a_blend_does_not_open_a_divergence
+     */
     [[nodiscard]] static BlendSpec read_blend_from(const graph::InputView& inputs) noexcept;
 
     /// @brief Moves a field onto **another lattice**: the reference's `resample`, and the one node whose whole job is
@@ -1289,16 +1305,18 @@ public:
     /// @brief The lowest `cos theta` the surface is asked about: within a ten-thousandth of the antipode.
     static constexpr double kMagnetopauseMinCosine = -0.9999;
 
-    /// @brief What a magnetopause node's parameters say.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        none
-    /// @invariant   `standoff_m > 0`, `flaring >= 0` and `width_m > 0` for any spec `read_magnetopause` produces
-    /// @errors      noexcept
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose
+    /**
+     * @brief What a magnetopause node's parameters say.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   `standoff_m > 0`, `flaring >= 0` and `width_m > 0` for any spec `read_magnetopause` produces
+     * @errors      noexcept
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose
+     */
     struct MagnetopauseSpec final {
         /// The nose's distance, in metres.
         double standoff_m = kDefaultMagnetopauseStandoffRe * kEarthRadiusM;
@@ -1308,36 +1326,40 @@ public:
         double width_m = kDefaultMagnetopauseWidthM;
     };
 
-    /// @brief A magnetopause node's parameters, read from the node itself.
-    ///
-    /// @param node The node. Borrowed.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        The three numbers the node carries, or the defaults for the ones it does not
-    /// @invariant   One reader, two sources, as every other parameter reader in this kit
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose
+    /**
+     * @brief A magnetopause node's parameters, read from the node itself.
+     *
+     * @param node The node. Borrowed.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        The three numbers the node carries, or the defaults for the ones it does not
+     * @invariant   One reader, two sources, as every other parameter reader in this kit
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose
+     */
     [[nodiscard]] static MagnetopauseSpec read_magnetopause(const graph::Node& node) noexcept;
 
-    /// @brief The same reader for an evaluator's own inputs.
-    ///
-    /// @param inputs The evaluator's inputs. Borrowed for the call.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        The same values `read_magnetopause` gives for the same ports
-    /// @invariant   One reader, two sources
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose
+    /**
+     * @brief The same reader for an evaluator's own inputs.
+     *
+     * @param inputs The evaluator's inputs. Borrowed for the call.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        The same values `read_magnetopause` gives for the same ports
+     * @invariant   One reader, two sources
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.the_magnetopause_is_a_surface_with_a_nose
+     */
     [[nodiscard]] static MagnetopauseSpec read_magnetopause_from(const graph::InputView& inputs) noexcept;
 
     /// @brief Mixes two fields by **any** weight field, with the correction that keeps the result divergence-free.
@@ -1430,16 +1452,18 @@ public:
     /// @brief The reference's second band boundary: five hundred kilometres.
     static constexpr double kDefaultAtmosphereBoundary2M = 500.0e3;
 
-    /// @brief What an atmosphere node's parameters say.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        none
-    /// @invariant   `scale_height_m > 0` and `nu0_per_s >= 0`
-    /// @errors      noexcept
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_does
+    /**
+     * @brief What an atmosphere node's parameters say.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   `scale_height_m > 0` and `nu0_per_s >= 0`
+     * @errors      noexcept
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_does
+     */
     struct AtmosphereSpec final {
         /// The drag rate at `reference_m`, in per second.
         double nu0_per_s = kDefaultAtmosphereNu0;
@@ -1462,52 +1486,58 @@ public:
         double boundary2_m = kDefaultAtmosphereBoundary2M;
     };
 
-    /// @brief An atmosphere node's parameters, read from the node itself.
-    ///
-    /// A **negative** rate and a non-positive scale height are refused by `bake_atmosphere` rather than clamped here,
-    /// which is the split `field.mask` also uses: the reader reports what the node says, and the bake decides what
-    /// can be baked. Clamping a negative rate to zero here would turn a user's sign error into a silent no-op.
-    ///
-    /// @param node The node. Borrowed.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        The three numbers the node carries, or the defaults for the ones it does not
-    /// @invariant   Reads each port once, through the same `InputView` shape the evaluator is handed
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_does
+    /**
+     * @brief An atmosphere node's parameters, read from the node itself.
+     *
+     * A **negative** rate and a non-positive scale height are refused by `bake_atmosphere` rather than clamped here,
+     * which is the split `field.mask` also uses: the reader reports what the node says, and the bake decides what
+     * can be baked. Clamping a negative rate to zero here would turn a user's sign error into a silent no-op.
+     *
+     * @param node The node. Borrowed.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        The three numbers the node carries, or the defaults for the ones it does not
+     * @invariant   Reads each port once, through the same `InputView` shape the evaluator is handed
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_does
+     */
     [[nodiscard]] static AtmosphereSpec read_atmosphere(const graph::Node& node) noexcept;
 
-    /// @brief The same reader for an evaluator's own inputs.
-    ///
-    /// @param inputs The evaluator's inputs. Borrowed for the call.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        The same values `read_atmosphere` gives for the same ports
-    /// @invariant   One reader, two sources
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_does
+    /**
+     * @brief The same reader for an evaluator's own inputs.
+     *
+     * @param inputs The evaluator's inputs. Borrowed for the call.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        The same values `read_atmosphere` gives for the same ports
+     * @invariant   One reader, two sources
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_does
+     */
     [[nodiscard]] static AtmosphereSpec read_atmosphere_from(const graph::InputView& inputs) noexcept;
 
-    /// @brief What a mask node's parameters say.
-    ///
-    /// @ownership   owns
-    /// @thread      main
-    /// @pre         none
-    /// @post        none
-    /// @invariant   `r0_m <= r1_m`
-    /// @errors      noexcept
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.a_mask_weights_the_region_it_names
+    /**
+     * @brief What a mask node's parameters say.
+     *
+     * @ownership   owns
+     * @thread      main
+     * @pre         none
+     * @post        none
+     * @invariant   `r0_m <= r1_m`
+     * @errors      noexcept
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.a_mask_weights_the_region_it_names
+     */
     struct MaskSpec final {
         /// Which region the weight covers.
         MaskRegion region = MaskRegion::sphere;
@@ -1517,61 +1547,67 @@ public:
         double r1_m = kDefaultMaskR1Re * kEarthRadiusM;
     };
 
-    /// @brief Names one region, for a report or a log line.
-    ///
-    /// @param region The region to name.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        One of the four names, never null
-    /// @invariant   Total
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.a_mask_weights_the_region_it_names
+    /**
+     * @brief Names one region, for a report or a log line.
+     *
+     * @param region The region to name.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        One of the four names, never null
+     * @invariant   Total
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.a_mask_weights_the_region_it_names
+     */
     [[nodiscard]] static const char* to_string(MaskRegion region) noexcept;
 
-    /// @brief A mask node's parameters, read from the node itself.
-    ///
-    /// Reads **before** `bake_mask` and not inside it, for the reason `read_from` gives about the grid: the node's
-    /// parameters are interpreted in one place, and a second reader is a second answer to "which port is r0".
-    ///
-    /// @param node The node. Borrowed.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        An ordered radius pair, and the region the node names
-    /// @invariant   Out-of-range values take the defaults rather than failing: a half-filled node is the
-    ///              ordinary state of a graph being edited, and refusing to bake it would mean the picture
-    ///              disappears while the user is still typing
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.a_mask_weights_the_region_it_names
+    /**
+     * @brief A mask node's parameters, read from the node itself.
+     *
+     * Reads **before** `bake_mask` and not inside it, for the reason `read_from` gives about the grid: the node's
+     * parameters are interpreted in one place, and a second reader is a second answer to "which port is r0".
+     *
+     * @param node The node. Borrowed.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        An ordered radius pair, and the region the node names
+     * @invariant   Out-of-range values take the defaults rather than failing: a half-filled node is the
+     *              ordinary state of a graph being edited, and refusing to bake it would mean the picture
+     *              disappears while the user is still typing
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.a_mask_weights_the_region_it_names
+     */
     [[nodiscard]] static MaskSpec read_mask(const graph::Node& node) noexcept;
 
-    /// @brief The same reader for an evaluator's own inputs, so "which port is `r0`" has one answer.
-    ///
-    /// Two sources and one implementation, exactly as `read_from` is: the node's parameters are put into the same
-    /// `InputView` shape the evaluator is handed. A second reader for the same three ports would be a second place
-    /// the meaning of port 2 is written down, and the two would agree until one of them was edited.
-    ///
-    /// @param inputs The evaluator's inputs. Borrowed for the call.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        An ordered radius pair and the region the inputs name
-    /// @invariant   Out-of-range region indices take `sphere`, as `read_mask` does
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.field_nodes.a_mask_weights_the_region_it_names
+    /**
+     * @brief The same reader for an evaluator's own inputs, so "which port is `r0`" has one answer.
+     *
+     * Two sources and one implementation, exactly as `read_from` is: the node's parameters are put into the same
+     * `InputView` shape the evaluator is handed. A second reader for the same three ports would be a second place
+     * the meaning of port 2 is written down, and the two would agree until one of them was edited.
+     *
+     * @param inputs The evaluator's inputs. Borrowed for the call.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        An ordered radius pair and the region the inputs name
+     * @invariant   Out-of-range region indices take `sphere`, as `read_mask` does
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.a_mask_weights_the_region_it_names
+     */
     [[nodiscard]] static MaskSpec read_mask_from(const graph::InputView& inputs) noexcept;
 
     /// @brief The grid a dipole node starts with: eight earth radii either way, one node per earth radius.

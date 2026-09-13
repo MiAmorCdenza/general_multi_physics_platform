@@ -92,18 +92,20 @@ public:
     /// overflow, and `from_bytes` is handed whatever the user picked.
     static constexpr int kMaxDepth = 16;
 
-    /// @brief The format this class implements.
-    ///
-    /// @ownership   borrows (returns a reference to a function-local static, valid for the process)
-    /// @thread      main
-    /// @pre         none
-    /// @post        `name` is non-empty and `extensions` holds at least one entry
-    /// @invariant   The same object every call, so a registry can hold the reference
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       persist.qpjson.describes_itself
+    /**
+     * @brief The format this class implements.
+     *
+     * @ownership   borrows (returns a reference to a function-local static, valid for the process)
+     * @thread      main
+     * @pre         none
+     * @post        `name` is non-empty and `extensions` holds at least one entry
+     * @invariant   The same object every call, so a registry can hold the reference
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       persist.qpjson.describes_itself
+     */
     [[nodiscard]] const qp::authoring::DocumentFormatDesc& format() const noexcept override;
 
     /**

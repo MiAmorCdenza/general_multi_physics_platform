@@ -223,36 +223,40 @@ public:
      */
     [[nodiscard]] graph::kernels::ClampPolicy clamp_policy() const noexcept;
 
-    /// @brief How many values this operator has clamped since it was prepared.
-    ///
-    /// C8 requires that numerical error not be mistaken for physics, and a run that has been
-    /// clamped looks exactly like one that has not unless somebody says so. Reset by
-    /// `prepare`, so the count describes the current configuration.
-    ///
-    /// @ownership   pure
-    /// @thread      eval (read after a run)
-    /// @pre         none
-    /// @post        none
-    /// @invariant   Zero immediately after a successful `prepare`
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.mechanics.merge_clamps_and_reports_it
+    /**
+     * @brief How many values this operator has clamped since it was prepared.
+     *
+     * C8 requires that numerical error not be mistaken for physics, and a run that has been
+     * clamped looks exactly like one that has not unless somebody says so. Reset by
+     * `prepare`, so the count describes the current configuration.
+     *
+     * @ownership   pure
+     * @thread      eval (read after a run)
+     * @pre         none
+     * @post        none
+     * @invariant   Zero immediately after a successful `prepare`
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.mechanics.merge_clamps_and_reports_it
+     */
     [[nodiscard]] std::uint64_t clamps_fired() const noexcept { return clamps_fired_; }
 
-    /// @brief Whether `prepare` has succeeded at least once.
-    ///
-    /// @ownership   pure
-    /// @thread      any
-    /// @pre         none
-    /// @post        none
-    /// @invariant   True for every object whose last `prepare` returned ok
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.mechanics.merge_refuses_partial_restitution
+    /**
+     * @brief Whether `prepare` has succeeded at least once.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        none
+     * @invariant   True for every object whose last `prepare` returned ok
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.mechanics.merge_refuses_partial_restitution
+     */
     [[nodiscard]] bool is_prepared() const noexcept { return prepared_; }
 
 private:

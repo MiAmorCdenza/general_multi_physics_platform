@@ -122,33 +122,37 @@ public:
     FaultLog(const FaultLog&) = delete;
     FaultLog& operator=(const FaultLog&) = delete;
 
-    /// @brief Records a fault against `label` and returns the entry, filled in.
-    ///
-    /// @ownership   owns the returned row
-    /// @thread      main
-    /// @pre         none
-    /// @post        `label`'s count is one higher, and `quarantined` is true once it reaches `kFaultLimit`
-    /// @invariant   A quarantined label stays quarantined: nothing here clears a strike, because a plugin
-    ///              that misbehaved three times has earned a restart rather than a retry
-    /// @errors      May allocate; allocation failure terminates
-    /// @complexity  O(labels)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.guard.the_host_stops_calling_a_broken_plugin
+    /**
+     * @brief Records a fault against `label` and returns the entry, filled in.
+     *
+     * @ownership   owns the returned row
+     * @thread      main
+     * @pre         none
+     * @post        `label`'s count is one higher, and `quarantined` is true once it reaches `kFaultLimit`
+     * @invariant   A quarantined label stays quarantined: nothing here clears a strike, because a plugin
+     *              that misbehaved three times has earned a restart rather than a retry
+     * @errors      May allocate; allocation failure terminates
+     * @complexity  O(labels)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.guard.the_host_stops_calling_a_broken_plugin
+     */
     [[nodiscard]] Fault record(std::string label, diag::ErrorCode code, std::string what);
 
-    /// @brief Whether `label` has crossed the limit.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        true exactly when `label` has `kFaultLimit` or more faults
-    /// @invariant   Monotonic per label
-    /// @errors      noexcept
-    /// @complexity  O(labels)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       plugin.guard.the_host_stops_calling_a_broken_plugin
+    /**
+     * @brief Whether `label` has crossed the limit.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        true exactly when `label` has `kFaultLimit` or more faults
+     * @invariant   Monotonic per label
+     * @errors      noexcept
+     * @complexity  O(labels)
+     * @nondet      none
+     * @frozen      no
+     * @tests       plugin.guard.the_host_stops_calling_a_broken_plugin
+     */
     [[nodiscard]] bool is_quarantined(std::string_view label) const noexcept;
 
     /// @brief The faults recorded so far, in the order they happened.

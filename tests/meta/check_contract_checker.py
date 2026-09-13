@@ -188,13 +188,32 @@ def main() -> int:
         else:
             print("  [OK  ] 裸词按名字精确匹配，路径片段仍按子串匹配")
 
+    # -- C7: a claim in a comment the gate cannot read -----------------------
+    #
+    # The rule reads block comments and leaves doc-comment lines as prose, and it **fails the gate** now that the
+    # tree has none. Both directions are asserted here, on fixtures: the counterexample file carries one claim the
+    # gate cannot see, and the compliant file -- whose contracts are all blocks -- must produce nothing. A rule
+    # nobody has watched fire is a rule nobody has checked, which is why the scan is a function rather than a loop
+    # inside main.
+    c7_sites = cc.scan_unreadable_claims([FIXTURES])
+    counterexample = [site for site in c7_sites if "unreadable_claim.hpp" in site]
+    compliant = [site for site in c7_sites if "violations.hpp" in site]
+    if len(counterexample) != 1:
+        failures.append(f"C7 反例样本里应当恰好有 1 处不可读声明，实测 {len(counterexample)}")
+        print("  [FAIL] C7 反例样本未被扫描到")
+    elif compliant:
+        failures.append(f"C7 在合规样本里误报了 {len(compliant)} 处：{compliant[:2]}")
+        print("  [FAIL] C7 对合规样本误报")
+    else:
+        print("  [OK  ] C7 抓到反例样本、且对合规样本无误报")
+
     if failures:
         print("\n门禁自检失败：", file=sys.stderr)
         for f in failures:
             print("  - " + f, file=sys.stderr)
         return 1
 
-    print("门禁自检通过：四类违规均被抓到，合规样本无误报。")
+    print("门禁自检通过：五类违规均被抓到，合规样本无误报。")
     return 0
 
 

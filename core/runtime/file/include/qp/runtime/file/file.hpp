@@ -90,18 +90,20 @@ enum class FileOutcome : std::uint8_t {
     unwritable = 3,
 };
 
-/// @brief Stable short name of an outcome, for a message or a log line.
-///
-/// @ownership   pure
-/// @thread      any
-/// @pre         none
-/// @post        Non-null for every enumerator
-/// @invariant   Distinct codes have distinct names
-/// @errors      noexcept
-/// @complexity  O(1)
-/// @nondet      none
-/// @frozen      no
-/// @tests       file.names_are_stable
+/**
+ * @brief Stable short name of an outcome, for a message or a log line.
+ *
+ * @ownership   pure
+ * @thread      any
+ * @pre         none
+ * @post        Non-null for every enumerator
+ * @invariant   Distinct codes have distinct names
+ * @errors      noexcept
+ * @complexity  O(1)
+ * @nondet      none
+ * @frozen      no
+ * @tests       file.names_are_stable
+ */
 [[nodiscard]] constexpr const char* to_string(FileOutcome outcome) noexcept {
     switch (outcome) {
         case FileOutcome::ok: return "ok";
