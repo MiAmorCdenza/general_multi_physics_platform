@@ -67,6 +67,7 @@
 #include <qp/plugins/magnetosphere/field_nodes.hpp>
 #include <qp/plugins/magnetosphere/plan.hpp>
 #include <qp/plugins/magnetosphere/run.hpp>
+#include <qp/plugins/magnetosphere/source_nodes.hpp>
 #include <qp/plugins/magnetosphere/field_lines_item.hpp>
 #include <qp/plugins/magnetosphere/render_nodes.hpp>
 #include <qp/plugins/magnetosphere/view_item.hpp>
@@ -242,15 +243,17 @@ int main(int argc, char** argv) {
     const std::size_t mounted_pushers = qp::plugins::magnetosphere::PusherNodes::mount(content_host);
     const std::size_t mounted_emitters = qp::plugins::magnetosphere::EmitterNodes::mount(content_host);
     const std::size_t mounted_render_items = qp::plugins::magnetosphere::RenderNodes::mount(content_host);
+    const std::size_t mounted_drivers = qp::plugins::magnetosphere::SourceNodes::mount(content_host);
     // **Each count is compared against its own expected number**, and the first version of this check is why: it
     // summed the three field-side counts and compared the total against a literal 3, so adding the electric field
     // node made a healthy application print `mounted 6 of 3 node types` on every launch. The literal had been
     // right when it was written and nothing tied it to the kit it was counting, which is the same shape as the
     // stale expectations this repository keeps finding in tests -- a number that describes another module's
     // inventory does not live in this one.
-    if (mounted_field_types != 14 || mounted_pushers != 2 || mounted_emitters != 1) {
+    if (mounted_field_types != 14 || mounted_pushers != 2 || mounted_emitters != 1 || mounted_drivers != 1) {
         qWarning().noquote() << "magnetosphere: mounted" << mounted_field_types << "of 14 field types,"
-                             << mounted_pushers << "of 2 pushers and" << mounted_emitters << "of 1 emitter";
+                             << mounted_pushers << "of 2 pushers," << mounted_emitters << "of 1 emitter and"
+                             << mounted_drivers << "of 1 driver";
     }
     if (mounted_render_items != 2) {
         qWarning().noquote() << "magnetosphere: mounted" << mounted_render_items << "of 2 render items";
@@ -291,6 +294,7 @@ int main(int argc, char** argv) {
         using qp::plugins::magnetosphere::FieldNodes;
         using qp::plugins::magnetosphere::PusherNodes;
         using qp::plugins::magnetosphere::RenderNodes;
+        using qp::plugins::magnetosphere::SourceNodes;
 
         const std::size_t dipole = node(FieldNodes::kDipoleType, "dipole");
         set(dipole, FieldNodes::kPortTiltDegrees, qp::ports::Value{0.0});
@@ -317,6 +321,9 @@ int main(int argc, char** argv) {
         set(boundary, FieldNodes::kPortMagnetopauseWidth, qp::ports::Value{1.0 * re});
         grid(boundary, FieldNodes::kPortMagnetopauseOrigin0);
 
+        const std::size_t driver = node(SourceNodes::kKpType, "Kp");
+        set(driver, SourceNodes::kPortKp, qp::ports::Value{4.0});
+
         const std::size_t mix = node(FieldNodes::kMixType, "inside + outside");
         set(mix, FieldNodes::kPortMixCorrection, qp::ports::Value{1.0});
 
@@ -332,8 +339,8 @@ int main(int argc, char** argv) {
         const std::size_t pusher = node(PusherNodes::kBorisType, "boris");
         set(pusher, PusherNodes::kPortMaxRangeRe, qp::ports::Value{20.0});
 
-        node(RenderNodes::kParticlesType, "particles");
-        node(RenderNodes::kFieldLinesType, "field lines");
+        const std::size_t particles = node(RenderNodes::kParticlesType, "particles");
+        const std::size_t lines = node(RenderNodes::kFieldLinesType, "field lines");
 
         const auto wire = [&flagship](std::size_t from, qp::graph::PortNumber from_port, std::size_t to,
                                       qp::graph::PortNumber to_port) {
@@ -349,11 +356,14 @@ int main(int argc, char** argv) {
         wire(sum, FieldNodes::kPortField, mix, FieldNodes::kPortMixA);
         wire(sheath, FieldNodes::kPortField, mix, FieldNodes::kPortMixB);
         wire(boundary, FieldNodes::kPortWeight, mix, FieldNodes::kPortMixWeight);
+        // The driver: one index that decides the boundary's standoff and flaring, rather than two numbers typed into
+        // the boundary. This is what source.kp exists for, and the demo shows the wire.
+        wire(driver, SourceNodes::kPortKpOut, boundary, FieldNodes::kPortMagnetopauseKp);
         wire(mix, FieldNodes::kPortMixOut, emitter, EmitterNodes::kPortMagnetic);
         wire(mix, FieldNodes::kPortMixOut, pusher, PusherNodes::kPortMagnetic);
         wire(emitter, EmitterNodes::kPortState, pusher, PusherNodes::kPortStateIn);
-        wire(pusher, PusherNodes::kPortStateOut, 8, RenderNodes::kPortState);
-        wire(mix, FieldNodes::kPortMixOut, 9, RenderNodes::kPortField);
+        wire(pusher, PusherNodes::kPortStateOut, particles, RenderNodes::kPortState);
+        wire(mix, FieldNodes::kPortMixOut, lines, RenderNodes::kPortField);
 
         // **Checked before it is offered.** A demo this build cannot assemble is reported here, at startup, with
         // the sentence the check produced -- rather than appearing in the menu and failing halfway through.

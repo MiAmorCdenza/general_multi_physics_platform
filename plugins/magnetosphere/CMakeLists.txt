@@ -55,6 +55,7 @@ add_library(qp_plugins_magnetosphere STATIC
     src/render_nodes.cpp
     src/rk4.cpp
     src/run.cpp
+    src/source_nodes.cpp
     src/trace.cpp
     src/view_item.cpp)
 

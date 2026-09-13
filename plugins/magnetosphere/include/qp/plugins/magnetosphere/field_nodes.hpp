@@ -755,6 +755,17 @@ public:
     /// @brief Where the **magnetopause** node's grid starts: after its three parameters.
     static constexpr qp::graph::PortNumber kPortMagnetopauseOrigin0 = 4;
 
+    /// @brief The optional **driver socket**: wire a Kp index here and it decides the surface.
+    ///
+    /// Numbered after the nine grid ports because it was added after them, and that is the rule this file follows
+    /// everywhere: a type's ports are its own, and a new one goes at the end so that a saved document keeps meaning
+    /// what it meant. Wire a `source.kp` here and both the standoff distance and the flaring come from the
+    /// reference's Kp model (`SourceNodes::standoff_re_for_kp`, `flaring_for_kp`); leave it empty and the two
+    /// parameters below are the model, exactly as before this socket existed. **The wired value wins**, which is the
+    /// answer this kit gives to "can a parameter be wired?" -- the parameter stays typed and keeps its meaning
+    /// alone, the socket is optional, and the choice is visible on the canvas rather than buried in a node.
+    static constexpr qp::graph::PortNumber kPortMagnetopauseKp = 13;
+
     /// @brief The default standoff distance, in earth radii: the textbook ten at ordinary solar wind pressure.
     ///
     /// The reference computes it from `Kp` (`r0 = 10 / pdyn^(1/3)` with `pdyn = 2 + Kp/2`), and that computation is

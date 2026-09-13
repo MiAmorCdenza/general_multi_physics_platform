@@ -20,6 +20,7 @@
 #include <qp/plugins/magnetosphere/baked_field.hpp>
 #include <qp/plugins/magnetosphere/dipole.hpp>
 #include <qp/plugins/magnetosphere/geomagnetic.hpp>
+#include <qp/plugins/magnetosphere/source_nodes.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -1254,6 +1255,20 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
                                  "layer; one earth radius is a boundary's own thickness, and the draping is a "
                                  "different node's job.";
     magnetopause.inputs.push_back(boundary_width);
+    // The optional driver socket, after the grid ports: a Kp index on a wire decides the surface, and an empty
+    // socket leaves the two parameters above as the model. See `kPortMagnetopauseKp`.
+    graph::PortDesc magnetopause_kp;
+    magnetopause_kp.number = kPortMagnetopauseKp;
+    magnetopause_kp.name = "kp";
+    magnetopause_kp.label = "Kp (optional)";
+    magnetopause_kp.description = "Wire a `source.kp` here and the standoff distance and the flaring come from that "
+                                  "index -- the reference's own model, in the one place that knows how Kp becomes "
+                                  "geometry. Left empty, the two parameters above are the surface.";
+    magnetopause_kp.type = qp::ports::kScalarF64;
+    magnetopause_kp.connectable = true;
+    magnetopause_kp.required = false;
+    magnetopause_kp.unit_symbol = "1";
+    magnetopause.inputs.push_back(magnetopause_kp);
     // Its own nine grid ports, after its three parameters.
     for (graph::PortNumber offset = 0; offset < 9; ++offset) {
         const char* names[9] = {"origin_x", "origin_y", "origin_z", "spacing_x", "spacing_y",
@@ -1541,6 +1556,19 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
     graph::NodeId id, const graph::NodeDesc& desc,
     const std::vector<std::pair<graph::PortNumber, qp::ports::Value>>& inputs) {
     using Outcome = std::vector<std::pair<graph::PortNumber, qp::ports::Value>>;
+    if (desc.type_name == SourceNodes::kKpType) {
+        // A driver is the shortest clause in this function and the reason there is no second evaluator: it publishes
+        // the number it carries, and `EvalContext` allows this plugin exactly one evaluator for every type it
+        // registers. The value is read from the node through `inputs`, which is where a node's own parameters
+        // arrive -- so a parameter and a socket are the same code path here, which is what makes the driver's value
+        // indistinguishable from a typed one once it is on the wire.
+        const graph::InputView driver_view{inputs};
+        const double kp = real_or(driver_view, SourceNodes::kPortKp, SourceNodes::kDefaultKp);
+        Outcome out;
+        out.emplace_back(SourceNodes::kPortKpOut,
+                         qp::ports::Value{std::clamp(kp, SourceNodes::kMinKp, SourceNodes::kMaxKp)});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
     if (desc.type_name == FieldNodes::kCurrentSheetType) {
         const graph::InputView sheet_view{inputs};
         const FieldNodes::SheetSpec spec = FieldNodes::read_sheet_from(sheet_view);
@@ -1664,8 +1692,16 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
         // A producer with its own grid, like the mask: the smooth boundary declares where it is sampled rather than
         // borrowing the lattice of a field it is not given.
         const graph::InputView magnetopause_view{inputs};
-        const FieldNodes::MagnetopauseSpec magnetopause_spec =
-            FieldNodes::read_magnetopause_from(magnetopause_view);
+        FieldNodes::MagnetopauseSpec magnetopause_spec = FieldNodes::read_magnetopause_from(magnetopause_view);
+        // **The driver, if one is wired.** One place knows how `Kp` becomes geometry -- `SourceNodes` -- and this
+        // asks it rather than repeating the formula, which is the whole reason the conversion lives on the driver.
+        // An empty socket leaves the two parameters in charge, so a graph written before this port existed keeps
+        // its surface to the last bit.
+        const qp::ports::Value kp = magnetopause_view.get(FieldNodes::kPortMagnetopauseKp);
+        if (kp.valid() && std::isfinite(kp.to_double())) {
+            magnetopause_spec.standoff_m = SourceNodes::standoff_re_for_kp(kp.to_double()) * kEarthRadiusM;
+            magnetopause_spec.flaring = SourceNodes::flaring_for_kp(kp.to_double());
+        }
         const GridSpec magnetopause_grid =
             FieldNodes::read_from(magnetopause_view, FieldNodes::kPortMagnetopauseOrigin0);
         const gfield::FieldKey magnetopause_key{id.index, FieldNodes::kPortWeight};

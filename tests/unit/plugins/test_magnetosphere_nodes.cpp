@@ -34,6 +34,7 @@
 #include <qp/plugins/magnetosphere/field_nodes.hpp>
 #include <qp/plugins/magnetosphere/geomagnetic.hpp>
 #include <qp/plugins/magnetosphere/plan.hpp>
+#include <qp/plugins/magnetosphere/source_nodes.hpp>
 #include <qp/plugins/magnetosphere/units.hpp>
 
 #include <cmath>
@@ -126,6 +127,7 @@ struct Scene final {
         // of them could not be composed out of the others: no wiring of sums and products keeps a field
         // divergence-free (the two blends), and none of them moves a field onto another lattice (the resampler).
         REQUIRE(FieldNodes::mount(host) == 14);
+        REQUIRE(SourceNodes::mount(host) == 1);
         REQUIRE(PusherNodes::mount(host) == 2);
     }
 
@@ -2004,6 +2006,122 @@ TEST_CASE("magnetosphere.field_nodes.a_mix_blends_the_potentials_not_the_fields"
     const graph::PortDesc* mixed_out = types[13].find_port(FieldNodes::kPortMixOut, true);
     REQUIRE(mixed_out != nullptr);
     REQUIRE(mixed_out->unit_symbol == std::string{"T"});
+}
+
+TEST_CASE("magnetosphere.source.the_kp_index_moves_the_magnetopause", "[magnetosphere]") {
+    // **The first driver, and the promise `field.magnetopause` made when it was written**: "the standoff distance is
+    // a driver's job: when this kit has one, Kp becomes a socket and this parameter becomes the fallback". Three
+    // things are checked here, in the order a reader would ask them: the model's two formulas, the declaration of
+    // the node that publishes the index, and -- the one that matters -- that **the surface actually moves** when the
+    // index is on a wire rather than typed into the boundary.
+    REQUIRE(relative_to(SourceNodes::standoff_re_for_kp(2.0), 10.0 / std::cbrt(3.0)) < 1.0e-15);
+    REQUIRE(relative_to(SourceNodes::flaring_for_kp(2.0), 0.59) < 1.0e-15);
+
+    // The direction is the physics: **more activity, less cavity**. Over the whole index range the nose comes in
+    // from 7.94 to 5.36 earth radii, and the flaring grows with it.
+    REQUIRE(SourceNodes::standoff_re_for_kp(0.0) > SourceNodes::standoff_re_for_kp(4.0));
+    REQUIRE(SourceNodes::standoff_re_for_kp(4.0) > SourceNodes::standoff_re_for_kp(9.0));
+    // The ends of the range, against the **formula** rather than against a decimal typed here: a typed constant is
+    // what this repository keeps finding stale, and the two ends are what turn "monotone" into a statement about a
+    // range. The decimal I wrote first was wrong in the fifth digit, and the assertion said so.
+    REQUIRE(relative_to(SourceNodes::standoff_re_for_kp(0.0), 10.0 / std::cbrt(2.0)) < 1.0e-15);
+    REQUIRE(relative_to(SourceNodes::standoff_re_for_kp(9.0), 10.0 / std::cbrt(6.5)) < 1.0e-15);
+    REQUIRE(SourceNodes::flaring_for_kp(9.0) > SourceNodes::flaring_for_kp(0.0));
+    // And out of range is clamped rather than extrapolated: below zero is not a quieter day, it is a different scale.
+    REQUIRE(SourceNodes::standoff_re_for_kp(-5.0) == SourceNodes::standoff_re_for_kp(0.0));
+    REQUIRE(SourceNodes::flaring_for_kp(99.0) == SourceNodes::flaring_for_kp(9.0));
+
+    // The reader: a node with no parameter gets the default, a node with a number gets it, and a node carrying a
+    // value off the scale gets the scale's end -- clamping, not refusing, for the reason the parameter readers give
+    // everywhere: a half-filled node is a graph being edited.
+    qp::graph::Node fresh;
+    fresh.type_name = SourceNodes::kKpType;
+    REQUIRE(SourceNodes::read_kp(fresh) == SourceNodes::kDefaultKp);
+    fresh.set_param(SourceNodes::kPortKp, qp::ports::Value{6.0});
+    REQUIRE(SourceNodes::read_kp(fresh) == 6.0);
+    fresh.set_param(SourceNodes::kPortKp, qp::ports::Value{12.0});
+    REQUIRE(SourceNodes::read_kp(fresh) == SourceNodes::kMaxKp);
+    fresh.set_param(SourceNodes::kPortKp, qp::ports::Value{std::nan("")});
+    REQUIRE(SourceNodes::read_kp(fresh) == SourceNodes::kDefaultKp);
+
+    // The declaration: one type, one numeric output, and the index itself typed in rather than wired.
+    const std::vector<graph::NodeDesc> drivers = SourceNodes::node_types();
+    REQUIRE(drivers.size() == 1);
+    REQUIRE(drivers.front().type_name == SourceNodes::kKpType);
+    REQUIRE(drivers.front().has_compute);
+    REQUIRE(drivers.front().allow_in_field_domain);
+    REQUIRE_FALSE(drivers.front().allow_in_particle_domain);
+    const graph::PortDesc* published = drivers.front().find_port(SourceNodes::kPortKpOut, true);
+    REQUIRE(published != nullptr);
+    REQUIRE(published->type == qp::ports::kScalarF64);
+    // A scalar **value**, not a scalar field: a table would need a lattice, and a number has none.
+    REQUIRE(published->type != qp::ports::kScalarField);
+    REQUIRE_FALSE(drivers.front().find_port(SourceNodes::kPortKp, false)->connectable);
+
+    // **The surface follows the wire.** A driver at Kp = 6 into a magnetopause whose own parameter says ten earth
+    // radii: the index must win, and the nose must stand where the Kp model puts it. The weight is baked on a fine
+    // slab and the half level is found by bisection along the sunward axis -- the same measurement the
+    // magnetopause's own case makes, which is what makes the two comparable.
+    const double re = kEarthRadiusM;
+    const Vec3 slab_origin{-20.0 * re, -20.0 * re, -0.2 * re};
+    const Vec3 slab_spacing{0.1 * re, 0.1 * re, 0.1 * re};
+
+    Scene scene;
+    const graph::NodeId driver = scene.add(SourceNodes::kKpType);
+    scene.set(driver, SourceNodes::kPortKp, 6.0);
+    const graph::NodeId boundary = scene.add(FieldNodes::kMagnetopauseType);
+    scene.set(boundary, FieldNodes::kPortMagnetopauseStandoff, 10.0 * re);
+    scene.set(boundary, FieldNodes::kPortMagnetopauseFlaring, 0.58);
+    scene.set(boundary, FieldNodes::kPortMagnetopauseWidth, 1.0 * re);
+    for (graph::PortNumber axis = 0; axis < 3; ++axis) {
+        scene.set(boundary, FieldNodes::kPortMagnetopauseOrigin0 + axis,
+                  axis == 0 ? slab_origin.x : (axis == 1 ? slab_origin.y : slab_origin.z));
+        scene.set(boundary, FieldNodes::kPortMagnetopauseOrigin0 + 3 + axis,
+                  axis == 0 ? slab_spacing.x : (axis == 1 ? slab_spacing.y : slab_spacing.z));
+        scene.set(boundary, FieldNodes::kPortMagnetopauseOrigin0 + 6 + axis, axis == 2 ? 5.0 : 401.0);
+    }
+    scene.wire(driver, SourceNodes::kPortKpOut, boundary, FieldNodes::kPortMagnetopauseKp);
+    REQUIRE(scene.bake().has_value());
+    const gfield::FieldValue weight =
+        scene.fields.view(gfield::FieldKey{boundary.index, FieldNodes::kPortWeight});
+    REQUIRE(gfield::is_readable(weight));
+    REQUIRE(weight.is_scalar());
+
+    const auto nose = [&](const gfield::FieldValue& table) {
+        double low = 0.5 * re;
+        double high = 19.5 * re;
+        for (int step = 0; step < 80; ++step) {
+            const double middle = 0.5 * (low + high);
+            if (sample_baked_scalar(table, slab_origin, slab_spacing, Vec3{middle, 0.0, 0.0}) > 0.5) {
+                low = middle;
+            } else {
+                high = middle;
+            }
+        }
+        return 0.5 * (low + high) / re;
+    };
+    const double driven = nose(weight);
+    CAPTURE(driven, SourceNodes::standoff_re_for_kp(6.0));
+    REQUIRE(relative_to(driven, SourceNodes::standoff_re_for_kp(6.0)) < 0.01);
+
+    // And with the socket **empty** the parameter is the surface, unchanged: a graph written before this port
+    // existed keeps the boundary it described.
+    Scene without;
+    const graph::NodeId boundary_alone = without.add(FieldNodes::kMagnetopauseType);
+    without.set(boundary_alone, FieldNodes::kPortMagnetopauseStandoff, 10.0 * re);
+    without.set(boundary_alone, FieldNodes::kPortMagnetopauseFlaring, 0.58);
+    without.set(boundary_alone, FieldNodes::kPortMagnetopauseWidth, 1.0 * re);
+    for (graph::PortNumber axis = 0; axis < 3; ++axis) {
+        without.set(boundary_alone, FieldNodes::kPortMagnetopauseOrigin0 + axis,
+                    axis == 0 ? slab_origin.x : (axis == 1 ? slab_origin.y : slab_origin.z));
+        without.set(boundary_alone, FieldNodes::kPortMagnetopauseOrigin0 + 3 + axis,
+                    axis == 0 ? slab_spacing.x : (axis == 1 ? slab_spacing.y : slab_spacing.z));
+        without.set(boundary_alone, FieldNodes::kPortMagnetopauseOrigin0 + 6 + axis, axis == 2 ? 5.0 : 401.0);
+    }
+    REQUIRE(without.bake().has_value());
+    const double alone = nose(without.fields.view(gfield::FieldKey{boundary_alone.index, FieldNodes::kPortWeight}));
+    REQUIRE(relative_to(alone, 10.0) < 0.01);
+    REQUIRE(driven < alone);
 }
 
 TEST_CASE("magnetosphere.field_nodes.the_dipole_is_baked_onto_the_grid_it_declares", "[magnetosphere]") {

@@ -68,7 +68,14 @@ BlueprintCheck check_blueprint(const qp::graph::NodeTypeRegistry& catalog,
             const qp::ports::ConnectionCheck verdict = qp::ports::check_connection(
                 *from_type, qp::ports::PortDirection::output, *to_type, qp::ports::PortDirection::input);
             if (!verdict.acceptable()) {
-                return BlueprintCheck{false, std::string{"a wire is refused: "} + qp::ports::to_string(verdict.verdict)};
+                // **Which wire**, by index and by port: a refusal that says only "a wire is refused" is what sent a
+                // reader looking through ten nodes for the one that did not connect, which is exactly the hunt this
+                // check exists to save.
+                return BlueprintCheck{false,
+                                      "the wire from node " + std::to_string(wire.from) + " port " +
+                                          std::to_string(wire.from_port) + " to node " + std::to_string(wire.to) +
+                                          " port " + std::to_string(wire.to_port) + " is refused: " +
+                                          qp::ports::to_string(verdict.verdict)};
             }
         }
     } catch (...) {

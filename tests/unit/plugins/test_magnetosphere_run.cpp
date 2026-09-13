@@ -32,6 +32,7 @@
 #include <qp/plugins/magnetosphere/run.hpp>
 
 #include <qp/plugins/magnetosphere/rk4.hpp>
+#include <qp/plugins/magnetosphere/source_nodes.hpp>
 #include <qp/plugins/magnetosphere/view_item.hpp>
 #include <qp/plugins/magnetosphere/units.hpp>
 
@@ -84,6 +85,7 @@ struct Scene final {
         // the multiplier, the convection field, the corotation field, the atmosphere, the current sheet, the blend,
         // the resampler, the magnetopause and the mix.
         REQUIRE(FieldNodes::mount(host) == 14);
+        REQUIRE(SourceNodes::mount(host) == 1);
         REQUIRE(PusherNodes::mount(host) == 2);
         REQUIRE(EmitterNodes::mount(host) == 1);
         // The render item too, or `build_plan` cannot look its descriptor up and silently records no
