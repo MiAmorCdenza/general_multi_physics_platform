@@ -154,6 +154,9 @@ RunRefusal MagnetosphereRun::build_with_own_fields(const graph::Graph& g, const 
 
     // The bake, with this kit's own evaluator and no cache: pressing Run means "bake what the graph says now".
     DipoleEvaluator evaluator{*owned_fields_};
+    // The graph, because a node with field inputs can only reach its inputs' **data** through the wiring: see
+    // `set_graph`'s own comment for why the value it is handed cannot carry the key.
+    evaluator.set_graph(g);
     graph::EvalResult result;
     const graph::EvalContext ctx{&catalog, &qp::ports::builtin_registry(), &evaluator, nullptr};
     const auto baked = graph::evaluate_graph(g, ctx, result);

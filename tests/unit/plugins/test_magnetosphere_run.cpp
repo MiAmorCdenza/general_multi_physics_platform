@@ -76,8 +76,8 @@ struct Scene final {
     graph::Declarations declared{};
 
     Scene() {
-        // Two field models now: the dipole and the uniform field.
-        REQUIRE(FieldNodes::mount(host) == 2);
+        // Three field models now: the dipole, the uniform field and the sum.
+        REQUIRE(FieldNodes::mount(host) == 3);
         REQUIRE(PusherNodes::mount(host) == 1);
         REQUIRE(EmitterNodes::mount(host) == 1);
         // The render item too, or `build_plan` cannot look its descriptor up and silently records no
@@ -107,6 +107,9 @@ struct Scene final {
 
     [[nodiscard]] qp::diag::Result<graph::EvalStats> bake() {
         result = graph::EvalResult{};
+        // The evaluator borrows the graph, exactly as `MagnetosphereRun` hands it over: a node with field inputs
+        // can reach its inputs' samples only by following their wires.
+        evaluator.set_graph(g);
         return graph::evaluate_graph(g, ctx(), result);
     }
 
@@ -850,4 +853,82 @@ TEST_CASE("magnetosphere.field_nodes.a_uniform_field_is_uniform", "[magnetospher
     gfield::FieldSet refused;
     REQUIRE_FALSE(bake_uniform(Vec3{0.0, 0.0, std::nan("")}, grid, gfield::FieldKey{1, 1}, refused));
     REQUIRE(refused.size() == 0);
+}
+
+
+TEST_CASE("magnetosphere.field_nodes.two_fields_add_where_the_graph_says", "[magnetosphere]") {
+    // **The composition principle as a node.** The reference implementation states it: each node outputs one
+    // independent field and composition happens by wiring. A sum node is what makes that a sentence a graph can
+    // say, and this case is what makes the sentence checkable -- the sum at every node is the two addends added,
+    // and the addends were reached through their **wires**, not through their descriptions.
+    //
+    // That last part is the interesting one: `ports::Value`'s field handle carries a `LatticeDesc` and no key, so
+    // an evaluator cannot find its inputs' samples in the store unless it can resolve `(node, port)`. It does
+    // that by borrowing the graph, which is what `set_graph` is for and what this case exercises.
+    Scene scene;
+    const graph::NodeId dipole = scene.add_dipole(0.0);
+    const graph::NodeId uniform = scene.add(FieldNodes::kUniformType);
+    scene.set(uniform, FieldNodes::kPortField0, 0.0);
+    scene.set(uniform, FieldNodes::kPortField1, 0.0);
+    scene.set(uniform, FieldNodes::kPortField2, 1.0e-4);
+    // The **same lattice** as the dipole's, which the sum requires: two tables that disagree about their
+    // geometry are refused rather than fitted.
+    // The **same lattice as the dipole's**, which is 0.25 earth radii and 65 nodes: two tables that disagree
+    // about their geometry are not a sum, and the first version of this case set a one-radii grid here and got a
+    // refused bake -- which is the refusal working.
+    for (graph::PortNumber axis = 0; axis < 3; ++axis) {
+        scene.set(uniform, FieldNodes::kPortUniformOrigin0 + axis, -8.0 * kEarthRadiusM);
+        scene.set(uniform, FieldNodes::kPortUniformSpacing0 + axis, 0.25 * kEarthRadiusM);
+        scene.set(uniform, FieldNodes::kPortUniformCount0 + axis, 65.0);
+    }
+    const graph::NodeId sum = scene.add(FieldNodes::kSumType);
+    for (graph::PortNumber axis = 0; axis < 3; ++axis) {
+        scene.set(sum, FieldNodes::kPortOrigin0 + axis, -8.0 * kEarthRadiusM);
+        scene.set(sum, FieldNodes::kPortSpacing0 + axis, 0.25 * kEarthRadiusM);
+        scene.set(sum, FieldNodes::kPortCount0 + axis, 65.0);
+    }
+    scene.wire(dipole, FieldNodes::kPortField, sum, FieldNodes::kPortAddendA);
+    scene.wire(uniform, FieldNodes::kPortField, sum, FieldNodes::kPortAddendB);
+
+    REQUIRE(scene.bake().has_value());
+    REQUIRE(scene.fields.size() == 3);
+
+    const gfield::FieldValue left = scene.fields.view(gfield::FieldKey{dipole.index, FieldNodes::kPortField});
+    const gfield::FieldValue right = scene.fields.view(gfield::FieldKey{uniform.index, FieldNodes::kPortField});
+    const gfield::FieldValue total = scene.fields.view(gfield::FieldKey{sum.index, FieldNodes::kPortField});
+    REQUIRE(gfield::is_readable(total));
+    REQUIRE(total.point_count() == left.point_count());
+    REQUIRE(total.desc.count[0] == 65);
+
+    // Every node, not a sample: a sum that wrote one correct entry would pass a spot check.
+    for (std::uint64_t point = 0; point < total.point_count(); ++point) {
+        for (std::uint32_t component = 0; component < 3; ++component) {
+            const double expected = gfield::get_component(left, point, component) +
+                                    gfield::get_component(right, point, component);
+            REQUIRE(gfield::get_component(total, point, component) == expected);
+        }
+    }
+
+    // The sum is a **field of its own**, under its own key, and the addends are untouched: a node that wrote into
+    // an input's buffer would make a graph's second reader see the first reader's arithmetic.
+    REQUIRE(scene.fields.contains(gfield::FieldKey{sum.index, FieldNodes::kPortField}));
+    const std::uint64_t probe = (8ULL * 17 + 8) * 17 + 8;
+    REQUIRE(gfield::get_component(left, probe, 2) < 0.0);          // the dipole alone, still southward
+    REQUIRE(gfield::get_component(total, probe, 2) > 0.0);         // and the sum has lifted it: 1e-4 beats 3e-5
+
+    // Two addends that disagree about their geometry are refused rather than fitted, and the refusal is visible
+    // as a bake that fails rather than as a plausible field.
+    Scene mismatched;
+    const graph::NodeId small = mismatched.add_dipole(0.0);
+    const graph::NodeId coarse = mismatched.add(FieldNodes::kUniformType);
+    for (graph::PortNumber axis = 0; axis < 3; ++axis) {
+        mismatched.set(coarse, FieldNodes::kPortUniformOrigin0 + axis, -8.0 * kEarthRadiusM);
+        mismatched.set(coarse, FieldNodes::kPortUniformSpacing0 + axis, 1.0 * kEarthRadiusM);
+        mismatched.set(coarse, FieldNodes::kPortUniformCount0 + axis, 9.0);   // nine nodes, not sixty-five
+    }
+    const graph::NodeId bad_sum = mismatched.add(FieldNodes::kSumType);
+    mismatched.wire(small, FieldNodes::kPortField, bad_sum, FieldNodes::kPortAddendA);
+    mismatched.wire(coarse, FieldNodes::kPortField, bad_sum, FieldNodes::kPortAddendB);
+    REQUIRE_FALSE(mismatched.bake().has_value());
+    REQUIRE_FALSE(mismatched.fields.contains(gfield::FieldKey{bad_sum.index, FieldNodes::kPortField}));
 }

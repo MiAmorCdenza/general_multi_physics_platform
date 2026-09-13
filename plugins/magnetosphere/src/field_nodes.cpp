@@ -148,6 +148,28 @@ bool bake_uniform(const Vec3& value, const GridSpec& grid, gfield::FieldKey key,
     return fields.publish(key, desc, std::move(table.data()));
 }
 
+bool bake_sum(const gfield::FieldValue& a, const gfield::FieldValue& b, gfield::FieldKey key,
+              gfield::FieldSet& fields) {
+    if (!gfield::is_readable(a) || !gfield::is_readable(b)) return false;
+    if (a.kind() != gfield::Kind::Volume || b.kind() != gfield::Kind::Volume) return false;
+    if (!a.is_vector() || !b.is_vector()) return false;
+    if (a.desc.element != qp::abi::ElementType::f64 || b.desc.element != qp::abi::ElementType::f64) return false;
+    // The lattices must **agree**, not merely be addable: two tables with different counts describe different
+    // regions, and fitting one to the other would be inventing a field neither model produced.
+    for (int axis = 0; axis < 3; ++axis) {
+        if (a.desc.count[axis] != b.desc.count[axis]) return false;
+    }
+    const auto* left = static_cast<const double*>(a.data);
+    const auto* right = static_cast<const double*>(b.data);
+    if (left == nullptr || right == nullptr) return false;
+
+    const std::size_t values = static_cast<std::size_t>(a.point_count()) * 3;
+    std::vector<double> sums(values);
+    for (std::size_t i = 0; i < values; ++i) sums[i] = left[i] + right[i];
+
+    return fields.publish(key, a.desc, std::move(sums));
+}
+
 std::vector<graph::NodeDesc> FieldNodes::node_types() {
     graph::NodeDesc dipole;
     dipole.type_name = kDipoleType;
@@ -234,7 +256,62 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {
     uniform_out.unit_symbol = "T";
     uniform.outputs.push_back(uniform_out);
 
-    return {std::move(dipole), std::move(uniform)};
+    graph::NodeDesc sum;
+    sum.type_name = kSumType;
+    sum.label = "Add fields";
+    sum.description = "Adds two magnetic fields node by node. The composition principle as a node: wire the "
+                      "models you want and add them, rather than looking for a node that already contains the "
+                      "combination.";
+    sum.category = "field";
+    sum.version = 1;
+    sum.allow_in_field_domain = true;
+    sum.allow_in_particle_domain = false;
+    sum.has_compute = true;
+    const auto socket = [](graph::PortNumber number, const char* name, const char* label) {
+        graph::PortDesc port;
+        port.number = number;
+        port.name = name;
+        port.label = label;
+        port.description = "A field to add. Both addends must be baked onto the same lattice; a sum of two "
+                           "different geometries is refused rather than fitted.";
+        port.type = qp::ports::kVectorField;
+        port.connectable = true;
+        // Required, unlike a pusher's optional sockets: a sum with one addend is not a sum, and a node that
+        // silently produced its single input would be a graph that looks composed and is not.
+        port.required = true;
+        port.unit_symbol = "T";
+        return port;
+    };
+    sum.inputs.push_back(socket(kPortAddendA, "a", "Field A"));
+    sum.inputs.push_back(socket(kPortAddendB, "b", "Field B"));
+    sum.inputs.push_back(parameter(kPortOrigin0, "origin_x", "Grid origin x", "m", kEarthRadiusM));
+    sum.inputs.push_back(parameter(kPortOrigin1, "origin_y", "Grid origin y", "m", kEarthRadiusM));
+    sum.inputs.push_back(parameter(kPortOrigin2, "origin_z", "Grid origin z", "m", kEarthRadiusM));
+    sum.inputs.push_back(parameter(kPortSpacing0, "spacing_x", "Grid spacing x", "m", 0.1 * kEarthRadiusM));
+    sum.inputs.push_back(parameter(kPortSpacing1, "spacing_y", "Grid spacing y", "m", 0.1 * kEarthRadiusM));
+    sum.inputs.push_back(parameter(kPortSpacing2, "spacing_z", "Grid spacing z", "m", 0.1 * kEarthRadiusM));
+    sum.inputs.push_back(parameter(kPortCount0, "count_x", "Nodes along x", "", 1.0));
+    sum.inputs.push_back(parameter(kPortCount1, "count_y", "Nodes along y", "", 1.0));
+    sum.inputs.push_back(parameter(kPortCount2, "count_z", "Nodes along z", "", 1.0));
+    graph::PortDesc sum_out;
+    sum_out.number = kPortField;
+    sum_out.name = "field";
+    sum_out.label = "Magnetic field";
+    sum_out.description = "The sum, as a volume of tesla vectors on the same lattice as the addends.";
+    sum_out.type = qp::ports::kVectorField;
+    sum_out.connectable = true;
+    sum_out.required = false;
+    sum_out.unit_symbol = "T";
+    sum.outputs.push_back(sum_out);
+
+    return {std::move(dipole), std::move(uniform), std::move(sum)};
+}
+
+gfield::FieldValue DipoleEvaluator::input_field(const graph::NodeId id, const graph::PortNumber port) const noexcept {
+    if (graph_ == nullptr) return gfield::FieldValue{};
+    const graph::Edge* edge = graph_->incoming(graph::PortRef{id, port, graph::PortDirection::input});
+    if (edge == nullptr) return gfield::FieldValue{};
+    return fields_->view(gfield::FieldKey{edge->from.node.index, edge->from.port});
 }
 
 std::size_t FieldNodes::mount(qp::host::PluginHost& host) noexcept {
@@ -249,6 +326,22 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
     graph::NodeId id, const graph::NodeDesc& desc,
     const std::vector<std::pair<graph::PortNumber, qp::ports::Value>>& inputs) {
     using Outcome = std::vector<std::pair<graph::PortNumber, qp::ports::Value>>;
+    if (desc.type_name == FieldNodes::kSumType) {
+        const graph::InputView sum_view{inputs};
+        const GridSpec sum_grid = FieldNodes::read_from(sum_view);
+        const gfield::FieldKey sum_key{id.index, FieldNodes::kPortField};
+        const gfield::FieldValue a = input_field(id, FieldNodes::kPortAddendA);
+        const gfield::FieldValue b = input_field(id, FieldNodes::kPortAddendB);
+        if (!bake_sum(a, b, sum_key, *fields_)) {
+            // A sum whose addends are missing or whose lattices disagree is refused rather than approximated,
+            // and the refusal travels as an error code because the run's own refusal vocabulary is one layer up.
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        (void)sum_grid;   // the addends' own lattice is the sum's: the grid ports are what a plan builder reads
+        Outcome out;
+        out.emplace_back(FieldNodes::kPortField, qp::ports::Value{fields_->view(sum_key).desc});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
     if (desc.type_name == FieldNodes::kUniformType) {
         const graph::InputView uniform_view{inputs};
         const Vec3 value{real_or(uniform_view, FieldNodes::kPortField0, 0.0),

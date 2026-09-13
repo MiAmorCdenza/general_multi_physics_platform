@@ -78,8 +78,8 @@ struct Scene final {
     graph::EvalResult result{};
 
     Scene() {
-        // Two field models now: the dipole and the uniform field.
-        REQUIRE(FieldNodes::mount(host) == 2);
+        // Three field models now: the dipole, the uniform field and the sum.
+        REQUIRE(FieldNodes::mount(host) == 3);
         REQUIRE(PusherNodes::mount(host) == 1);
     }
 
@@ -118,6 +118,9 @@ struct Scene final {
 
     [[nodiscard]] qp::diag::Result<graph::EvalStats> bake() {
         result = graph::EvalResult{};
+        // The evaluator borrows the graph, exactly as `MagnetosphereRun` hands it over: a node with field inputs
+        // can reach its inputs' samples only by following their wires.
+        evaluator.set_graph(g);
         return graph::evaluate_graph(g, ctx(), result);
     }
 };
@@ -170,9 +173,10 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // Two field models: the dipole and the uniform field. Each is a **type of its own** with its own port
     // numbers, which is the composition principle -- a shielding field is `mul(convection, shield)`, not a
     // switch inside a node -- and what the uniform field was added to make demonstrable.
-    REQUIRE(types.size() == 2);
+    REQUIRE(types.size() == 3);
     REQUIRE(types[0].type_name == FieldNodes::kDipoleType);
     REQUIRE(types[1].type_name == FieldNodes::kUniformType);
+    REQUIRE(types[2].type_name == FieldNodes::kSumType);
     const graph::NodeDesc& dipole = types.front();
     REQUIRE(dipole.type_name == FieldNodes::kDipoleType);
     REQUIRE(dipole.valid());
@@ -220,8 +224,8 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // Mounting is what makes the type reachable from a running program rather than only from a test fixture. The
     // second mount registers nothing, because a name that is taken is left alone rather than duplicated.
     qp::host::PluginHost host{qp::plugin::Capability::node_types};
-    // Two field models now: the dipole and the uniform field.
-        REQUIRE(FieldNodes::mount(host) == 2);
+    // Three field models now: the dipole, the uniform field and the sum.
+        REQUIRE(FieldNodes::mount(host) == 3);
     REQUIRE(host.node_types().find(FieldNodes::kDipoleType) != nullptr);
     REQUIRE(FieldNodes::mount(host) == 0);
 }

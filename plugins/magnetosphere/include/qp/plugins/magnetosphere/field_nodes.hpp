@@ -157,6 +157,19 @@ public:
     /// one by hand; this node is what puts that in the palette.
     static constexpr const char* kUniformType = "field.uniform";
 
+    /// @brief The **sum** of two fields: the composition principle as a node.
+    ///
+    /// The reference implementation states the principle this exists for: each node outputs **one** independent
+    /// force field, and composition happens by **wiring the graph** -- a shielding field is the sum of the two
+    /// models, not a switch inside one node. Without a node like this, "composition by wiring" is a sentence
+    /// rather than something a graph can say.
+    static constexpr const char* kSumType = "field.sum";
+
+    /// @brief The two fields to add. Both required: a sum with one addend is not a sum.
+    static constexpr qp::graph::PortNumber kPortAddendA = 1;
+    /// @brief The second addend.
+    static constexpr qp::graph::PortNumber kPortAddendB = 2;
+
     /// @brief The uniform field's three components, in tesla: `x`, `y`, `z`.
     static constexpr qp::graph::PortNumber kPortField0 = 1;
     /// @brief The uniform field's `y` component, in tesla.
@@ -382,6 +395,30 @@ public:
                                 qp::graph::field::FieldSet& fields);
 
 /**
+ * @brief Adds two published fields node by node and publishes the result under `key`.
+ *
+ * @param a    The first addend. Must be a readable vector volume of f64.
+ * @param b    The second addend, on the **same lattice**: a sum of two tables that disagree about their geometry
+ *             is not a sum, and it is refused rather than fitted.
+ * @param key  Who is publishing, for the store's key.
+ * @param fields The store. Mutated on success.
+ *
+ * @ownership   observes `fields`
+ * @thread      main
+ * @pre         none
+ * @post        On true, `fields.view(key)` is `a + b` at every node
+ * @invariant   On false the store is unchanged
+ * @errors      Returns false -- never throws -- for an unreadable addend, for lattices whose counts disagree, or
+ *              for a non-f64 element type
+ * @complexity  O(points)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.two_fields_add_where_the_graph_says
+ */
+[[nodiscard]] bool bake_sum(const qp::graph::field::FieldValue& a, const qp::graph::field::FieldValue& b,
+                            qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
+
+/**
  * @brief The node evaluator that bakes this kit's field types into a store.
  *
  * @ownership   observes the store, which must outlive it
@@ -414,6 +451,37 @@ public:
     explicit DipoleEvaluator(qp::graph::field::FieldSet& fields) noexcept : fields_(&fields) {}
 
     /**
+     * @brief Tells the evaluator which graph it is baking, so a node with **field inputs** can find them.
+     *
+     * A `field.sum` node reads two field inputs, and what it needs is not their descriptors but their **data**.
+     * `ports::Value`'s `field_handle` carries a `LatticeDesc` and no key -- deliberately, because a value must not
+     * carry a pointer into somebody else's lifetime -- so the only way to the samples is the store, and the store
+     * is keyed by `(node, port)`. `INodeEvaluator::evaluate` is handed neither: its own id, its own description
+     * and its inputs' **values**, not their origins.
+     *
+     * So the evaluator borrows the graph, which the composition root already has when it starts a bake, and
+     * resolves each field input the way the plan builder resolves a socket: follow the edge into `(id, port)`.
+     * No frozen interface changes, and the wiring is read from the one place that owns it.
+     *
+     * Reopening condition, written down rather than implied: **when a second evaluator needs the graph**, its
+     * home is `EvalContext`, which whoever drives can carry without every evaluator holding a pointer of its own.
+     *
+     * @param graph The graph being baked. Borrowed; it must outlive the bake.
+     *
+     * @ownership   observes `graph`
+     * @thread      main
+     * @pre         `graph` outlives every `evaluate` call made after this
+     * @post        `evaluate` can resolve the inputs of a node with field sockets
+     * @invariant   The evaluator never modifies the graph
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.field_nodes.two_fields_add_where_the_graph_says
+     */
+    void set_graph(const qp::graph::Graph& graph) noexcept { graph_ = &graph; }
+
+    /**
      * @brief Bakes the node's field and answers with a handle naming it.
      *
      * **A node of another type produces nothing, and that is deliberate.** `evaluate_graph` walks the whole
@@ -444,7 +512,12 @@ public:
         const std::vector<std::pair<qp::graph::PortNumber, qp::ports::Value>>& inputs) override;
 
 private:
+    /// @brief The field a socket of `id` is wired to, or an unreadable value when nothing is or it is not baked.
+    [[nodiscard]] qp::graph::field::FieldValue input_field(qp::graph::NodeId id,
+                                                          qp::graph::PortNumber port) const noexcept;
+
     qp::graph::field::FieldSet* fields_;
+    const qp::graph::Graph* graph_ = nullptr;
 };
 
 }  // namespace qp::plugins::magnetosphere
