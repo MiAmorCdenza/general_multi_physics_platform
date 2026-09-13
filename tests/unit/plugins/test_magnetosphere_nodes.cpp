@@ -82,7 +82,7 @@ struct Scene final {
         // mask, the multiplier and the convection field. Each is a **type of its own** with its own port numbers,
         // which is the composition principle -- a shielding field is `mul(convection, shield)`, not a switch
         // inside a node.
-        REQUIRE(FieldNodes::mount(host) == 7);
+        REQUIRE(FieldNodes::mount(host) == 8);
         REQUIRE(PusherNodes::mount(host) == 1);
     }
 
@@ -177,7 +177,7 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // mask, the multiplier and the convection field. Each is a **type of its own** with its own port numbers,
     // which is the composition principle -- a shielding field is `mul(convection, shield)`, not a switch inside a
     // node.
-    REQUIRE(types.size() == 7);
+    REQUIRE(types.size() == 8);
     REQUIRE(types[0].type_name == FieldNodes::kDipoleType);
     REQUIRE(types[1].type_name == FieldNodes::kUniformType);
     REQUIRE(types[2].type_name == FieldNodes::kSumType);
@@ -244,9 +244,9 @@ TEST_CASE("magnetosphere.field_nodes.the_type_declares_the_ports_the_evaluator_r
     // Mounting is what makes the type reachable from a running program rather than only from a test fixture. The
     // second mount registers nothing, because a name that is taken is left alone rather than duplicated.
     qp::host::PluginHost host{qp::plugin::Capability::node_types};
-    // Seven field models now, and the count is asserted rather than assumed: it is the one place a new type
+    // Eight field models now, and the count is asserted rather than assumed: it is the one place a new type
     // announces itself in the test suite, so a type that silently failed to register is a failure here.
-    REQUIRE(FieldNodes::mount(host) == 7);
+    REQUIRE(FieldNodes::mount(host) == 8);
     REQUIRE(host.node_types().find(FieldNodes::kDipoleType) != nullptr);
     REQUIRE(FieldNodes::mount(host) == 0);
 }
@@ -440,7 +440,7 @@ TEST_CASE("magnetosphere.field_nodes.a_field_scales_by_its_weight", "[magnetosph
     // where the weight belongs are both refused by `check_connection`, so the multiplier's own check is the second
     // line of defence rather than the only one.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 7);
+    REQUIRE(types.size() == 8);
     REQUIRE(types[5].type_name == FieldNodes::kMulType);
     REQUIRE(types[5].has_compute);
     const graph::PortDesc* mul_field = types[5].find_port(FieldNodes::kPortMulField, false);
@@ -566,7 +566,7 @@ TEST_CASE("magnetosphere.field_nodes.the_convection_field_is_the_potentials_grad
 
     // The type is declared like the others and allowed only where a bake is.
     const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
-    REQUIRE(types.size() == 7);
+    REQUIRE(types.size() == 8);
     REQUIRE(types[6].type_name == FieldNodes::kConvectionType);
     REQUIRE(types[6].has_compute);
     REQUIRE(types[6].allow_in_field_domain);
@@ -579,6 +579,195 @@ TEST_CASE("magnetosphere.field_nodes.the_convection_field_is_the_potentials_grad
     const GridSpec too_small{Vec3{}, Vec3{1.0, 1.0, 1.0}, 1, 1, 1};
     REQUIRE_FALSE(bake_convection(amplitude, too_small, key, fields));
     REQUIRE_FALSE(bake_convection(std::numeric_limits<double>::quiet_NaN(), grid, key, fields));
+}
+
+TEST_CASE("magnetosphere.field_nodes.corotation_is_the_rotation_the_field_allows", "[magnetosphere]") {
+    // **The second E-field model, and the one that makes the first mean something.** In the real magnetosphere
+    // convection and corotation compete, and the radius where they balance is the plasmapause; a graph with only
+    // the convection field shows a magnetosphere that never rotates.
+    //
+    // `E = -(Omega x r) x B` has one property that can be checked without trusting anything: `|E| / |B|` is the
+    // **rigid rotation speed** `Omega r`. That is what "corotating" means, so the case asserts it directly -- and
+    // it asserts it as a speed in metres per second, because a number a textbook quotes is a number a reader can
+    // disagree with.
+    const GridSpec grid{Vec3{-10.0 * kEarthRadiusM, -10.0 * kEarthRadiusM, -10.0 * kEarthRadiusM},
+                        Vec3{0.5 * kEarthRadiusM, 0.5 * kEarthRadiusM, 0.5 * kEarthRadiusM},
+                        41, 41, 41};
+    const double tilt = 0.0;
+    gfield::FieldSet fields;
+    const gfield::FieldKey dipole_key{11, FieldNodes::kPortField};
+    const gfield::FieldKey corotation_key{12, FieldNodes::kPortCorotationOut};
+    REQUIRE(bake_dipole(tilt, kDipoleMomentAm2, grid, dipole_key, fields));
+    const gfield::FieldValue dipole = fields.view(dipole_key);
+    REQUIRE(bake_corotation(dipole, grid.origin_m, grid.spacing_m, grid, corotation_key, fields));
+    const gfield::FieldValue corotation = fields.view(corotation_key);
+    REQUIRE(gfield::is_readable(corotation));
+    REQUIRE(corotation.is_vector());
+    REQUIRE(corotation.desc.dimension.T == -3);
+    REQUIRE(corotation.desc.dimension.I == -1);
+
+    const auto close = [](double got, double want) {
+        const double scale = std::max(std::abs(want), 1.0e-300);
+        return std::abs(got - want) / scale < 1.0e-9;
+    };
+    const auto sample = [&](const gfield::FieldValue& table, const Vec3& point) {
+        return sample_baked(table, grid.origin_m, grid.spacing_m, point);
+    };
+
+    // The equatorial plane at four radii: `E` radial, `|E|/|B| = Omega r`, and the drift purely azimuthal.
+    for (const double r_re : {2.0, 4.0, 6.0, 9.0}) {
+        const Vec3 point{r_re * kEarthRadiusM, 0.0, 0.0};
+        const Vec3 b = sample(dipole, point);
+        const Vec3 e = sample(corotation, point);
+        REQUIRE(norm2(b) > 0.0);
+        // Radial: `E` is along `+x` at this point, which is outward.
+        REQUIRE(e.x > 0.0);
+        REQUIRE(close(e.y, 0.0));
+        REQUIRE(close(e.z, 0.0));
+        // **The rigid rotation speed**, which is the definition of corotation rather than a consequence of it.
+        const double speed = norm(e) / norm(b);
+        REQUIRE(close(speed, kEarthRotationRateSI * r_re * kEarthRadiusM));
+        // And the drift it produces is azimuthal: `E x B` has no radial component in the equatorial plane.
+        const Vec3 drift = cross(e, b);
+        REQUIRE(close(dot(drift, Vec3{1.0, 0.0, 0.0}), 0.0));
+    }
+    // At four earth radii that speed is **1.86 km/s** -- the number a course quotes for the outer plasmasphere,
+    // and it falls out of `Omega r` with no free parameter anywhere in this node.
+    const double speed_at_four =
+        norm(sample(corotation, Vec3{4.0 * kEarthRadiusM, 0.0, 0.0})) /
+        norm(sample(dipole, Vec3{4.0 * kEarthRadiusM, 0.0, 0.0}));
+    REQUIRE(speed_at_four > 1500.0);
+    REQUIRE(speed_at_four < 2200.0);
+
+    // **Where the two fields balance.** `|E_corot| = Omega B0 / r_re^2` (in earth radii) and `|E_conv| = 2 A r`,
+    // so the crossing solves `r^3 = Omega B0 / (2A)`. Both models are baked here and the crossing is **measured**
+    // by scanning, then compared with the algebra -- two independent models meeting where theory says, which is
+    // the only kind of agreement worth asserting.
+    const double amplitude = FieldNodes::kDefaultConvectionA;
+    const gfield::FieldKey convection_key{13, FieldNodes::kPortField};
+    REQUIRE(bake_convection(amplitude, grid, convection_key, fields));
+    const gfield::FieldValue convection = fields.view(convection_key);
+    const auto ratio_at = [&](double r_re) {
+        const Vec3 point{r_re * kEarthRadiusM, 0.0, 0.0};
+        const double corot = norm(sample(corotation, point));
+        const double conv = norm(sample(convection, point));
+        return conv / corot;
+    };
+    // Inside the balance radius corotation wins (ratio < 1), outside convection does.
+    REQUIRE(ratio_at(2.0) < 1.0);
+    REQUIRE(ratio_at(20.0) > 1.0);
+    // Bisection, so the measured crossing is a number rather than a guess at which sample to read.
+    double low = 2.0;
+    double high = 20.0;
+    for (int step = 0; step < 60; ++step) {
+        const double mid = 0.5 * (low + high);
+        if (ratio_at(mid) < 1.0) {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    const double measured = 0.5 * (low + high);
+    const double predicted =
+        std::cbrt(kEarthRotationRateSI * kEquatorialSurfaceFieldT / (2.0 * amplitude));
+    REQUIRE(std::abs(measured - predicted) / predicted < 0.02);
+    // With this kit's default amplitude that radius is 8.97 earth radii -- inside the dipole's ten, so the picture
+    // a graph of these two nodes draws has a corotating core and a convecting outer region.
+    REQUIRE(predicted > 8.0);
+    REQUIRE(predicted < 10.0);
+
+    // A field that is zero where it is sampled gives a zero electric field rather than a refusal: no field to
+    // corotate in is no corotation, and that is the model's own answer.
+    const gfield::FieldKey zero_key{14, FieldNodes::kPortField};
+    REQUIRE(bake_uniform(Vec3{0.0, 0.0, 0.0}, grid, zero_key, fields, tesla_dimension()));
+    const gfield::FieldKey zero_corotation{15, FieldNodes::kPortCorotationOut};
+    REQUIRE(bake_corotation(fields.view(zero_key), grid.origin_m, grid.spacing_m, grid, zero_corotation, fields));
+    const gfield::FieldValue nothing = fields.view(zero_corotation);
+    REQUIRE(gfield::is_readable(nothing));
+    for (std::uint64_t point = 0; point < nothing.point_count(); ++point) {
+        REQUIRE(gfield::get_component(nothing, point, 0) == 0.0);
+    }
+    // And an unreadable input, or a grid that cannot be baked, is refused.
+    REQUIRE_FALSE(bake_corotation(gfield::FieldValue{}, grid.origin_m, grid.spacing_m, grid, corotation_key, fields));
+    const GridSpec too_small{Vec3{}, Vec3{1.0, 1.0, 1.0}, 1, 1, 1};
+    REQUIRE_FALSE(bake_corotation(dipole, grid.origin_m, grid.spacing_m, too_small, corotation_key, fields));
+
+    // The type declares one socket and no grid parameters, which is the decision this node makes: it bakes on the
+    // lattice of the field it reads, so there is no second grid to disagree with the first.
+    const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
+    REQUIRE(types.size() == 8);
+    REQUIRE(types[7].type_name == FieldNodes::kCorotationType);
+    REQUIRE(types[7].has_compute);
+    REQUIRE(types[7].inputs.size() == 1);
+    REQUIRE(types[7].inputs.front().number == FieldNodes::kPortCorotationMagnetic);
+    REQUIRE(types[7].inputs.front().type == qp::ports::kVectorField);
+    REQUIRE(types[7].inputs.front().connectable);
+    REQUIRE(types[7].inputs.front().required);
+}
+
+TEST_CASE("magnetosphere.field_nodes.a_wired_field_reports_the_grid_it_was_baked_on", "[magnetosphere]") {
+    // **One resolver, three callers.** `abi::LatticeDesc` carries counts and not positions, so anything that has to
+    // sample a published field needs the geometry of the node that baked it -- and there are now three such
+    // callers: the plan builder filling a pusher's grid slots, the corotation bake sampling `B`, and any future
+    // node that reads a field pointwise.
+    //
+    // The behaviour this case pins is a **widening**: `plan.cpp` used to do the walk itself and refuse any source
+    // that was not a dipole (`grid_unknown`), which was honest and meant a pusher could only ever be wired to a
+    // dipole's field. The kit has eight field types now, and six of them declare a grid.
+    Scene scene;
+    const graph::NodeId uniform = scene.add(FieldNodes::kUniformType);
+    for (graph::PortNumber axis = 0; axis < 3; ++axis) {
+        scene.set(uniform, FieldNodes::kPortUniformOrigin0 + axis, -5.0 * kEarthRadiusM);
+        scene.set(uniform, FieldNodes::kPortUniformSpacing0 + axis, 0.25 * kEarthRadiusM);
+        scene.set(uniform, FieldNodes::kPortUniformCount0 + axis, 41.0);
+    }
+    const graph::NodeId pusher = scene.add(PusherNodes::kBorisType);
+    scene.wire(uniform, FieldNodes::kPortField, pusher, PusherNodes::kPortMagnetic);
+
+    // The solver the plan builder uses now says which grid it is, rather than refusing.
+    GridSpec resolved;
+    REQUIRE(resolve_field_origin(scene.g, pusher, PusherNodes::kPortMagnetic, resolved));
+    REQUIRE(resolved.nx == 41);
+    REQUIRE(resolved.spacing_m.x == 0.25 * kEarthRadiusM);
+    REQUIRE(resolved.origin_m.x == -5.0 * kEarthRadiusM);
+    // And `resolve_field` -- the plan builder's own entry point -- agrees, which is what makes the widening real
+    // rather than a second code path that happens to work.
+    REQUIRE(scene.bake().has_value());
+    gfield::FieldValue bound;
+    GridSpec planned;
+    REQUIRE(resolve_field(scene.g, pusher, PusherNodes::kPortMagnetic, scene.fields, bound, planned) ==
+            PlanBuildRefusal::ok);
+    REQUIRE(gfield::is_readable(bound));
+    REQUIRE(planned.nx == resolved.nx);
+
+    // **The walk continues through a node that has no grid of its own.** A multiplier is defined on the lattice its
+    // inputs share, so asking *it* for a grid is asking the wrong node: the resolver follows its first socket back
+    // to the uniform field, and a caller that stopped at the multiplier would get a refusal it cannot explain.
+    const graph::NodeId mask = scene.add(FieldNodes::kMaskType);
+    // The mask's own nine grid ports, by offset: origin, then spacing, then counts -- the order its descriptor
+    // declares and the order every reader of this kit assumes.
+    for (graph::PortNumber offset = 0; offset < 9; ++offset) {
+        const double value = offset < 3 ? -5.0 * kEarthRadiusM
+                                         : (offset < 6 ? 0.25 * kEarthRadiusM : 41.0);
+        scene.set(mask, FieldNodes::kPortMaskOrigin0 + offset, value);
+    }
+    const graph::NodeId product = scene.add(FieldNodes::kMulType);
+    scene.wire(uniform, FieldNodes::kPortField, product, FieldNodes::kPortMulField);
+    scene.wire(mask, FieldNodes::kPortWeight, product, FieldNodes::kPortMulWeight);
+    const graph::NodeId second_pusher = scene.add(PusherNodes::kBorisType);
+    scene.wire(product, FieldNodes::kPortMulOut, second_pusher, PusherNodes::kPortMagnetic);
+    GridSpec through_mul;
+    REQUIRE(resolve_field_origin(scene.g, second_pusher, PusherNodes::kPortMagnetic, through_mul));
+    REQUIRE(through_mul.nx == 41);
+    REQUIRE(through_mul.origin_m.x == -5.0 * kEarthRadiusM);
+
+    // A socket with nothing wired is not a grid, and neither is a wire to a node that is gone: the resolver
+    // answers false so that the caller can make its own refusal rather than sampling a box it invented.
+    const graph::NodeId lonely = scene.add(PusherNodes::kBorisType);
+    GridSpec nothing;
+    REQUIRE_FALSE(resolve_field_origin(scene.g, lonely, PusherNodes::kPortMagnetic, nothing));
+    const graph::Graph empty;
+    REQUIRE_FALSE(resolve_field_origin(empty, graph::NodeId{}, PusherNodes::kPortMagnetic, nothing));
 }
 
 TEST_CASE("magnetosphere.field_nodes.the_dipole_is_baked_onto_the_grid_it_declares", "[magnetosphere]") {

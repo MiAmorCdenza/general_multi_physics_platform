@@ -65,6 +65,20 @@ inline constexpr double kSpeedOfLightSI = 299792458.0;
 /// separately.
 inline constexpr double kEarthGravityParameterSI = 3.986004418e14;
 
+/// @brief The length of a sidereal day, in seconds. IERS: 86164.0905 s, which is one rotation against the stars
+/// rather than against the Sun.
+///
+/// The distinction is the whole reason this constant exists rather than 86400: corotation is the plasma moving
+/// **with the planet**, and the planet turns once per sidereal day. Using the solar day would put every corotation
+/// drift 0.27% slow -- a discrepancy no picture would show and every measurement of a drift period would.
+inline constexpr double kSiderealDayS = 86164.0905;
+
+/// @brief The Earth's rotation rate, in radians per second: `2 pi / kSiderealDayS`.
+///
+/// Written as the expression it stands for, as every constant in this file is: the number below is the quotient,
+/// and a reader who wants to check it against a handbook needs the division rather than its result.
+inline const double kEarthRotationRateSI = 2.0 * 3.14159265358979323846 / kSiderealDayS;
+
 /// @brief The vacuum magnetic permeability over four pi, in henries per metre.
 ///
 /// The `mu_0 / 4pi` that turns a magnetic dipole moment into a field. It is `1e-7` exactly in the SI

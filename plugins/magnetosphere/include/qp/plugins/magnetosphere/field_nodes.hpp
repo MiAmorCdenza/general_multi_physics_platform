@@ -363,6 +363,39 @@ public:
     /// that changing the default is a decision rather than a nudge.
     static constexpr double kDefaultConvectionA = 1.5e-12;
 
+    /// @brief The **corotation** electric field: the field a plasma moving with the planet sees.
+    ///
+    /// The second of `efield.py`'s three, and the one that has to exist for the convection field to mean anything:
+    /// in the real magnetosphere the two compete, and the radius at which they balance is the plasmapause. A graph
+    /// with only the convection field shows a magnetosphere that never rotates.
+    ///
+    /// ## The model, and the one thing it derives rather than assumes
+    ///
+    /// A plasma corotating with the Earth moves at `v = Omega x r`, and the electric field it sees is
+    /// `E = -v x B = -(Omega x r) x B`. With `Omega` along `+z` and the dipole's field along `-z` at the equator,
+    /// the product is **radially outward**:
+    ///
+    ///     E = Omega B(r) * (x, y, 0)          |E| = Omega B(r) r
+    ///
+    /// so `|E| / |B| = Omega r` -- the drift speed is the rigid rotation speed, which is what "corotating" means
+    /// and what this node's case asserts. `B(r)` is **read from an input field** rather than assumed to be a
+    /// dipole: this node does not model the magnetic field, it reacts to whatever field is wired into it, and a
+    /// graph that wired a shielded or compressed field gets corotation in *that* field.
+    ///
+    /// ## Why it takes a field and not a magnitude
+    ///
+    /// A scalar `|B|` parameter would be simpler and wrong in a way that is hard to see: `B` varies by three orders
+    /// of magnitude across the region a magnetosphere picture covers, so a single number would put the corotation
+    /// speed right at one radius and wrong everywhere else. The input is a vector field, so the direction is
+    /// available as well -- and using the local **vector** rather than its magnitude is what makes this correct for
+    /// a field that is not perpendicular to the equatorial plane, where the corotation field has a component along
+    /// the field lines that a scalar model would miss.
+    static constexpr const char* kCorotationType = "field.corotation";
+    /// @brief The magnetic field to corotate in. A `kVectorField`; the node derives its `E` from it.
+    static constexpr qp::graph::PortNumber kPortCorotationMagnetic = 1;
+    /// @brief The corotation field, in volts per metre.
+    static constexpr qp::graph::PortNumber kPortCorotationOut = 1;
+
     /// @brief What a mask node's parameters say.
     ///
     /// @ownership   owns
@@ -724,6 +757,86 @@ public:
  */
 [[nodiscard]] bool bake_convection(double amplitude_v_per_m2, const GridSpec& grid,
                                    qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
+
+/**
+ * @brief Bakes the corotation field, `E = -(Omega x r) x B`, from a magnetic field that is already published.
+ *
+ * The magnetic field is read **through the sampler**, at every node, from the table the input node published: the
+ * geometry travels beside the value for the same reason the pusher is handed six parameter slots for it, and the
+ * caller is the one that knows where the samples are.
+ *
+ * A node where the field is unreadable or zero is left at **zero**, not refused: a field that vanishes somewhere
+ * is a real configuration (a null point, or the edge of a lattice whose samples stop), and `E = 0` there is the
+ * model's own answer -- corotation in no field is no electric field. Refusing the whole bake instead would make a
+ * graph with one bad corner undrawable.
+ *
+ * @param magnetic The magnetic field to corotate in. Must be a readable f64 volume of vectors.
+ * @param origin_m  Where the magnetic table's node `(0, 0, 0)` is, in metres.
+ * @param spacing_m The magnetic table's node spacing, in metres.
+ * @param grid  Where to bake this field. At least two nodes an axis and a positive spacing.
+ * @param key   Who is publishing it.
+ * @param fields The store. Borrowed; the samples are moved into it on success.
+ *
+ * @ownership   owns the samples it publishes on success
+ * @thread      main
+ * @pre         none
+ * @post        On true, `fields.view(key)` is a readable vector volume of volt-per-metre values, equal at every
+ *              node to `(Omega x r) x B` reversed in sign, evaluated with the field sampled there
+ * @invariant   On false the store is unchanged
+ * @errors      Returns false rather than throwing, for an unreadable magnetic field or an un-bakeable grid
+ * @complexity  O(points)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.corotation_is_the_rotation_the_field_allows
+ */
+[[nodiscard]] bool bake_corotation(const qp::graph::field::FieldValue& magnetic, const Vec3& origin_m,
+                                   const Vec3& spacing_m, const GridSpec& grid,
+                                   qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);
+
+/**
+ * @brief Where a wired field's samples are: the node that baked them, and the grid that node declared.
+ *
+ * ## Why this is one function and not a clause in each caller
+ *
+ * `abi::LatticeDesc` carries **counts and not positions**, so every consumer that has to sample a published field
+ * needs two things the value cannot tell it: which node produced the table, and what geometry that node declared.
+ * There are now three such consumers -- the plan builder (filling a pusher's six grid slots), the corotation bake
+ * (sampling `B` at every node) and any future node that reads a field pointwise -- and a rule written in three
+ * places is a rule that agrees until one of them is edited.
+ *
+ * `plan.cpp` had the first version of this: it walked the wire, and then **refused any source that was not a
+ * dipole** (`grid_unknown`). That was honest -- it named what it could not do -- and it also meant a pusher could
+ * only ever be wired to a dipole's field, which stopped being true the moment this kit had other producers. The
+ * refusal is replaced by the table below.
+ *
+ * ## The combinators have no grid of their own, so the walk continues through them
+ *
+ * `field.sum` and `field.mul` publish on **their input's** lattice -- a sum of two tables is defined on the lattice
+ * they share, and a multiplier is the same -- so asking *them* for a grid is asking the wrong node. This function
+ * therefore follows the wire back through any node that has no grid of its own until it reaches one that does.
+ * That is one rule about this kit rather than a special case per type: a node either declares a grid or forwards to
+ * whoever fed it.
+ *
+ * @param graph    The graph. Borrowed.
+ * @param consumer The node whose socket is wired.
+ * @param socket   The input port to follow.
+ * @param out      Filled on true: the publishing node and the grid it declared.
+ *
+ * @ownership   observes `graph`
+ * @thread      main
+ * @pre         none
+ * @post        On true, `out.node` is the node that baked the field on that socket and `out.grid` is what it
+ *              declared; on false `out` is untouched and the caller has a refusal to make
+ * @invariant   Never follows more hops than the graph has nodes, so a cycle terminates rather than hanging
+ * @errors      Returns false -- never throws -- for a socket that is not wired, a wire whose source no longer
+ *              exists, a source type this build does not know, or a walk that fails to reach a grid
+ * @complexity  O(hops)
+ * @nondet      none
+ * @frozen      no
+ * @tests       magnetosphere.field_nodes.a_wired_field_reports_the_grid_it_was_baked_on
+ */
+[[nodiscard]] bool resolve_field_origin(const qp::graph::Graph& graph, qp::graph::NodeId consumer,
+                                        qp::graph::PortNumber socket, GridSpec& out) noexcept;
 
 /**
  * @brief The node evaluator that bakes this kit's field types into a store.

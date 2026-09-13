@@ -111,7 +111,70 @@ namespace {
     return is_finite(grid.origin_m);
 }
 
+/// @brief The port a field type's grid starts at, or false for a type that has no grid of its own.
+///
+/// One table, and it is deliberately here rather than in each caller: these are the same numbers each type's
+/// descriptor publishes, and a caller that guessed an offset would read `count_z` where `origin_x` belongs --
+/// producing a grid that is internally consistent and in the wrong place, which is the failure `plan.hpp` warns
+/// about at length.
+[[nodiscard]] bool grid_origin_port(const std::string& type_name, graph::PortNumber& out) noexcept {
+    if (type_name == FieldNodes::kDipoleType || type_name == FieldNodes::kSumType) {
+        out = FieldNodes::kPortOrigin0;   // the dipole's numbering; the sum shares it
+        return true;
+    }
+    if (type_name == FieldNodes::kUniformType) {
+        out = FieldNodes::kPortUniformOrigin0;
+        return true;
+    }
+    if (type_name == FieldNodes::kUniformElectricType) {
+        out = FieldNodes::kPortElectricOrigin0;
+        return true;
+    }
+    if (type_name == FieldNodes::kMaskType) {
+        out = FieldNodes::kPortMaskOrigin0;
+        return true;
+    }
+    if (type_name == FieldNodes::kConvectionType) {
+        out = FieldNodes::kPortConvectionOrigin0;
+        return true;
+    }
+    // `field.mul` is the one type that declares no grid at all: a product is defined on the lattice its inputs
+    // share, so it forwards. A caller reaching here with `mul` has failed to follow the wire, which is what the
+    // walk below exists to do.
+    return false;
+}
+
 }  // namespace
+
+bool resolve_field_origin(const graph::Graph& graph, graph::NodeId consumer, graph::PortNumber socket,
+                          GridSpec& out) noexcept {
+    graph::NodeId current = consumer;
+    graph::PortNumber port = socket;
+    // Bounded by the node count rather than by a constant: a graph cannot have a longer acyclic path than it has
+    // nodes, and `graph/structure` refuses cycles at connect time. The bound is here so that this function is
+    // total even if that refusal is ever loosened -- a hung editor is worse than a refusal.
+    for (std::size_t hop = 0; hop <= graph.slots().size(); ++hop) {
+        const graph::Edge* edge = graph.incoming(graph::PortRef{current, port, graph::PortDirection::input});
+        if (edge == nullptr) return false;   // nothing wired
+        const graph::NodeId source_id = edge->from.node;
+        const graph::Node* source = graph.find_node(source_id);
+        if (source == nullptr) return false;
+        graph::PortNumber origin = 0;
+        if (grid_origin_port(source->type_name, origin)) {
+            out = FieldNodes::read_from(*source, origin);
+            return true;
+        }
+        // A node with no grid of its own: follow what feeds *it*. `mul` reads the field on its first socket and
+        // the weight on its second, and it is the first that carries the lattice.
+        if (source->type_name == FieldNodes::kMulType) {
+            current = source_id;
+            port = FieldNodes::kPortMulField;
+            continue;
+        }
+        return false;   // a type this build does not know how to ask
+    }
+    return false;
+}
 
 bool bake_dipole(double tilt_degrees, double moment_am2, const GridSpec& grid, gfield::FieldKey key,
                  gfield::FieldSet& fields) {
@@ -299,6 +362,34 @@ bool bake_convection(double amplitude_v_per_m2, const GridSpec& grid, gfield::Fi
                 const Vec3 point = grid.node_position(i, j, k);
                 table.set_node(i, j, k,
                                Vec3{-2.0 * amplitude_v_per_m2 * point.y, -2.0 * amplitude_v_per_m2 * point.x, 0.0});
+            }
+        }
+    }
+    const qp::abi::LatticeDesc desc = table.view(volt_per_metre_dimension()).desc;
+    return fields.publish(key, desc, std::move(table.data()));
+}
+
+bool bake_corotation(const gfield::FieldValue& magnetic, const Vec3& origin_m, const Vec3& spacing_m,
+                     const GridSpec& grid, gfield::FieldKey key, gfield::FieldSet& fields) {
+    if (!gfield::is_readable(magnetic)) return false;
+    if (magnetic.kind() != gfield::Kind::Volume || !magnetic.is_vector()) return false;
+    if (magnetic.desc.element != qp::abi::ElementType::f64) return false;
+    if (!bakeable(grid)) return false;
+
+    BakedField table{grid.origin_m, grid.spacing_m, grid.nx, grid.ny, grid.nz};
+    const Vec3 omega{0.0, 0.0, kEarthRotationRateSI};
+    for (std::uint32_t i = 0; i < grid.nx; ++i) {
+        for (std::uint32_t j = 0; j < grid.ny; ++j) {
+            for (std::uint32_t k = 0; k < grid.nz; ++k) {
+                const Vec3 point = grid.node_position(i, j, k);
+                const Vec3 b = sample_baked(magnetic, origin_m, spacing_m, point);
+                // `E = -(Omega x r) x B`, written through the BAC-CAB identity as `B x (Omega x r)`, because the
+                // expanded form is the one that can be checked by hand: `B x (Omega x r) = Omega (B . r) -
+                // r (B . Omega)`. In the equatorial plane with the dipole's southward field that is `Omega B r`,
+                // **radially outward** -- the field a plasma moving with the planet sees, whose `E x B` is the
+                // rigid rotation. A zero field gives a zero electric field, which is the model's own answer
+                // rather than a special case: no field to corotate in, no corotation.
+                table.set_node(i, j, k, cross(b, cross(omega, point)));
             }
         }
     }
@@ -627,8 +718,44 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     c_out.unit_symbol = "V/m";
     convection.outputs.push_back(c_out);
 
-    return {std::move(dipole),     std::move(uniform), std::move(sum), std::move(electric),
-            std::move(mask),       std::move(mul),     std::move(convection)};
+    // ---------------- the corotation field ----------------
+    graph::NodeDesc corotation;
+    corotation.type_name = kCorotationType;
+    corotation.label = "Corotation E field";
+    corotation.description = "The electric field a plasma moving with the Earth sees: E = -(Omega x r) x B, from "
+                             "the magnetic field wired into it. Beside the convection field it is the other half "
+                             "of the real picture -- inside the radius where the two balance the plasma rotates "
+                             "with the planet, outside it convects.";
+    corotation.category = "field";
+    corotation.version = 1;
+    corotation.allow_in_field_domain = true;
+    corotation.allow_in_particle_domain = false;
+    corotation.has_compute = true;
+    graph::PortDesc corotation_magnetic;
+    corotation_magnetic.number = kPortCorotationMagnetic;
+    corotation_magnetic.name = "magnetic";
+    corotation_magnetic.label = "Magnetic field";
+    corotation_magnetic.description = "The field to corotate in, wired from any field node's output. **This node "
+                                      "has no grid of its own**: it bakes on the lattice of the field it reads, "
+                                      "because `E` is defined pointwise from `B` and asking the user for a second "
+                                      "grid would be asking for a way to put the two in different places.";
+    corotation_magnetic.type = qp::ports::kVectorField;
+    corotation_magnetic.connectable = true;
+    corotation_magnetic.required = true;
+    corotation.inputs.push_back(corotation_magnetic);
+    graph::PortDesc r_out;
+    r_out.number = kPortCorotationOut;
+    r_out.name = "field";
+    r_out.label = "Electric field";
+    r_out.description = "The corotation field, as a volume of volt-per-metre vectors on the input's lattice.";
+    r_out.type = qp::ports::kVectorField;
+    r_out.connectable = true;
+    r_out.required = false;
+    r_out.unit_symbol = "V/m";
+    corotation.outputs.push_back(r_out);
+
+    return {std::move(dipole),     std::move(uniform), std::move(sum),    std::move(electric),
+            std::move(mask),       std::move(mul),     std::move(convection), std::move(corotation)};
 }
 
 gfield::FieldValue DipoleEvaluator::input_field(const graph::NodeId id, const graph::PortNumber port) const noexcept {
@@ -650,6 +777,25 @@ qp::diag::Result<std::vector<std::pair<graph::PortNumber, qp::ports::Value>>> Di
     graph::NodeId id, const graph::NodeDesc& desc,
     const std::vector<std::pair<graph::PortNumber, qp::ports::Value>>& inputs) {
     using Outcome = std::vector<std::pair<graph::PortNumber, qp::ports::Value>>;
+    if (desc.type_name == FieldNodes::kCorotationType) {
+        // The field to corotate in, and **its** geometry: the node bakes on the lattice it reads, so the two
+        // cannot be put in different places. `resolve_field_origin` is the resolver the plan builder uses, and it
+        // walks back through the combinators that have no grid of their own.
+        const gfield::FieldValue magnetic = input_field(id, FieldNodes::kPortCorotationMagnetic);
+        GridSpec source_grid;
+        if (graph_ == nullptr ||
+            !resolve_field_origin(*graph_, id, FieldNodes::kPortCorotationMagnetic, source_grid)) {
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        const gfield::FieldKey corotation_key{id.index, FieldNodes::kPortCorotationOut};
+        if (!bake_corotation(magnetic, source_grid.origin_m, source_grid.spacing_m, source_grid, corotation_key,
+                             *fields_)) {
+            return qp::diag::Result<Outcome>{qp::diag::ErrorCode::invalid_argument};
+        }
+        Outcome out;
+        out.emplace_back(FieldNodes::kPortCorotationOut, qp::ports::Value{fields_->view(corotation_key).desc});
+        return qp::diag::Result<Outcome>{std::move(out)};
+    }
     if (desc.type_name == FieldNodes::kConvectionType) {
         const graph::InputView convection_view{inputs};
         const double amplitude = real_or(convection_view, FieldNodes::kPortConvectionA,

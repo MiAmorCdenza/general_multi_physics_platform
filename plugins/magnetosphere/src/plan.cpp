@@ -221,11 +221,12 @@ PlanBuildRefusal resolve_field(const graph::Graph& graph, const graph::NodeId co
     if (edge == nullptr) return PlanBuildRefusal::ok;   // nothing wired: the caller decides if that is a refusal
     out = fields.view(gfield::FieldKey{edge->from.node.index, edge->from.port});
     if (!gfield::is_readable(out)) return PlanBuildRefusal::field_not_baked;
-    const graph::Node* source = graph.find_node(edge->from.node);
-    if (source == nullptr || source->type_name != FieldNodes::kDipoleType) {
-        return PlanBuildRefusal::grid_unknown;
-    }
-    grid = FieldNodes::read_from(*source);
+    // **The geometry comes from the node that baked it**, through the one resolver that knows how to ask every
+    // type. This function used to do the walk itself and refuse anything that was not a dipole, which was honest
+    // and also meant a pusher could only ever be wired to a dipole's field -- untrue since the kit gained a
+    // uniform field, a sum, an electric field, a mask, a multiplier and a convection field. The refusal moved into
+    // `resolve_field_origin`, which follows the combinators back to whoever declared a grid.
+    if (!resolve_field_origin(graph, consumer, socket, grid)) return PlanBuildRefusal::grid_unknown;
     return PlanBuildRefusal::ok;
 }
 
