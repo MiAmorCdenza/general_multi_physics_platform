@@ -561,8 +561,40 @@ public:
     static constexpr qp::graph::PortNumber kPortAtmosphereScaleHeight = 2;
     /// @brief Where `nu0` is quoted, in metres.
     static constexpr qp::graph::PortNumber kPortAtmosphereReference = 3;
-    /// @brief Where the **atmosphere** node's grid starts: after the three parameters.
-    static constexpr qp::graph::PortNumber kPortAtmosphereOrigin0 = 4;
+    /// @brief Whether the profile has one scale height or three: the reference's `drag_single` and `drag_layered`.
+    ///
+    /// ## What the second profile is, and the one thing it does differently from the reference
+    ///
+    /// The reference ships two atmosphere nodes. `drag_single` is `nu0 exp(-h / H)` -- which is what this kit's node
+    /// already was, with the reference radius and the scale height as **parameters** rather than the two numbers it
+    /// hard-codes -- and `drag_layered` is three bands with three scale heights and two boundaries at 100 km and
+    /// 500 km.
+    ///
+    /// **The reference's three bands do not meet, and the numbers are not small.** Evaluated at their own
+    /// boundaries its bands jump by a factor of **2683** at 100 km and **1101** at 500 km:
+    ///
+    ///     1000 exp(-100/8) = 3.7e-3   against   10 exp(0)  = 10      at 100 km
+    ///     10 exp(-400/40)  = 4.5e-4   against   0.5 exp(0) = 0.5     at 500 km
+    ///
+    /// A drag coefficient that multiplies by two and a half thousand across a hundred-kilometre line is a force
+    /// discontinuity, and a particle whose step lands on the far side of it is being decelerated by a different
+    /// model. This port **anchors each band to the value the previous one reached at the boundary** -- which is how
+    /// a piecewise exponential atmosphere is written everywhere else, and which keeps everything the second profile
+    /// is for (a scale height that changes with altitude) while removing the jump. The case measures both: the
+    /// ratio across each boundary in this node, and the ratio the reference's own three expressions produce.
+    ///
+    /// `exponential` is index zero, so a graph written before this port bakes the same table **bit for bit**.
+    static constexpr qp::graph::PortNumber kPortAtmosphereLayers = 4;
+    /// @brief The middle band's scale height, in metres. Used by the three-band profile.
+    static constexpr qp::graph::PortNumber kPortAtmosphereScaleHeight2 = 5;
+    /// @brief The outer band's scale height, in metres. Used by the three-band profile.
+    static constexpr qp::graph::PortNumber kPortAtmosphereScaleHeight3 = 6;
+    /// @brief Where the first band ends, as an altitude above the reference radius, in metres.
+    static constexpr qp::graph::PortNumber kPortAtmosphereBoundary1 = 7;
+    /// @brief Where the second band ends, as an altitude above the reference radius, in metres.
+    static constexpr qp::graph::PortNumber kPortAtmosphereBoundary2 = 8;
+    /// @brief Where the **atmosphere** node's grid starts: after the five parameters.
+    static constexpr qp::graph::PortNumber kPortAtmosphereOrigin0 = 9;
     /// @brief The drag table, a scalar lattice in per second.
     static constexpr qp::graph::PortNumber kPortAtmosphereOut = 1;
 
@@ -1385,6 +1417,18 @@ public:
     static constexpr double kDefaultAtmosphereScaleHeightM = 100.0e3;
     /// @brief Where the default `nu0` is quoted, in metres: the equator's surface.
     static constexpr double kDefaultAtmosphereReferenceM = kEarthRadiusM;
+    /// @brief The reference's middle band's scale height, in metres: forty kilometres.
+    ///
+    /// Its own three numbers, kept because they are the shape a layered atmosphere is meant to have -- thin near the
+    /// surface, thicker outward -- and because the case measures the jumps its formulas produce and has to read them
+    /// from somewhere. The first band's scale height is this node's existing `scale_height` parameter.
+    static constexpr double kDefaultAtmosphereScaleHeight2M = 40.0e3;
+    /// @brief The reference's outer band's scale height, in metres: a hundred kilometres.
+    static constexpr double kDefaultAtmosphereScaleHeight3M = 100.0e3;
+    /// @brief The reference's first band boundary, in metres above the reference radius: a hundred kilometres.
+    static constexpr double kDefaultAtmosphereBoundary1M = 100.0e3;
+    /// @brief The reference's second band boundary: five hundred kilometres.
+    static constexpr double kDefaultAtmosphereBoundary2M = 500.0e3;
 
     /// @brief What an atmosphere node's parameters say.
     ///
@@ -1403,6 +1447,19 @@ public:
         double scale_height_m = kDefaultAtmosphereScaleHeightM;
         /// Where `nu0_per_s` is quoted, in metres.
         double reference_m = kDefaultAtmosphereReferenceM;
+        /// Whether the scale height changes twice, at `boundary1_m` and `boundary2_m`.
+        ///
+        /// A `bool` in the spec rather than the enum index it is read from: the spec is the model's vocabulary and
+        /// the panel's stops at the reader -- the division `SheetSpec::flaring` and `ImfSpec::polarity` also make.
+        bool layered = false;
+        /// The middle band's scale height, in metres.
+        double scale_height2_m = kDefaultAtmosphereScaleHeight2M;
+        /// The outer band's scale height, in metres.
+        double scale_height3_m = kDefaultAtmosphereScaleHeight3M;
+        /// Where the first band ends, in metres above the reference radius.
+        double boundary1_m = kDefaultAtmosphereBoundary1M;
+        /// Where the second band ends, in metres above the reference radius.
+        double boundary2_m = kDefaultAtmosphereBoundary2M;
     };
 
     /// @brief An atmosphere node's parameters, read from the node itself.
@@ -1944,11 +2001,13 @@ public:
  *              exponential above evaluated there
  * @invariant   On false the store is unchanged
  * @errors      Returns false -- never throws -- for a negative rate, a non-positive or non-finite scale height or
- *              reference, or a grid that cannot be baked
+ *              reference, a layered profile whose two extra scale heights are not positive or whose boundaries are
+ *              not ordered, or a grid that cannot be baked
  * @complexity  O(points)
  * @nondet      none
  * @frozen      no
- * @tests       magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_does
+ * @tests       magnetosphere.field_nodes.an_atmosphere_thins_the_way_an_exponential_does,
+ *              magnetosphere.field_nodes.the_layered_atmosphere_has_no_jump
  */
 [[nodiscard]] bool bake_atmosphere(const FieldNodes::AtmosphereSpec& spec, const GridSpec& grid,
                                    qp::graph::field::FieldKey key, qp::graph::field::FieldSet& fields);

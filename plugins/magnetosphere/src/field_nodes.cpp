@@ -528,6 +528,14 @@ FieldNodes::AtmosphereSpec FieldNodes::read_atmosphere_from(const graph::InputVi
     spec.nu0_per_s = real_or(inputs, kPortAtmosphereNu0, kDefaultAtmosphereNu0);
     spec.scale_height_m = real_or(inputs, kPortAtmosphereScaleHeight, kDefaultAtmosphereScaleHeightM);
     spec.reference_m = real_or(inputs, kPortAtmosphereReference, kDefaultAtmosphereReferenceM);
+    // The profile: index zero -- the enum's default, and the model this node always was -- is the single
+    // exponential. Anything that is not the layered index leaves it single rather than inventing a third profile.
+    const qp::ports::Value layers = inputs.get(kPortAtmosphereLayers);
+    spec.layered = layers.valid() && layers.as_i64() == 1;
+    spec.scale_height2_m = real_or(inputs, kPortAtmosphereScaleHeight2, kDefaultAtmosphereScaleHeight2M);
+    spec.scale_height3_m = real_or(inputs, kPortAtmosphereScaleHeight3, kDefaultAtmosphereScaleHeight3M);
+    spec.boundary1_m = real_or(inputs, kPortAtmosphereBoundary1, kDefaultAtmosphereBoundary1M);
+    spec.boundary2_m = real_or(inputs, kPortAtmosphereBoundary2, kDefaultAtmosphereBoundary2M);
     return spec;
 }
 
@@ -546,6 +554,16 @@ bool bake_atmosphere(const FieldNodes::AtmosphereSpec& spec, const GridSpec& gri
     if (!std::isfinite(spec.nu0_per_s) || spec.nu0_per_s < 0.0) return false;
     if (!std::isfinite(spec.scale_height_m) || !(spec.scale_height_m > 0.0)) return false;
     if (!std::isfinite(spec.reference_m)) return false;
+    if (spec.layered) {
+        // The bands must be positive and ordered, and each must be a scale height rather than a wall. **Refused
+        // rather than sorted**, for the reason the mask refuses a reversed shell: a caller that swapped two
+        // boundaries has described a profile this model does not have, and reordering them would silently bake the
+        // other one.
+        if (!std::isfinite(spec.scale_height2_m) || !(spec.scale_height2_m > 0.0)) return false;
+        if (!std::isfinite(spec.scale_height3_m) || !(spec.scale_height3_m > 0.0)) return false;
+        if (!std::isfinite(spec.boundary1_m) || !std::isfinite(spec.boundary2_m)) return false;
+        if (!(spec.boundary1_m > 0.0) || !(spec.boundary2_m > spec.boundary1_m)) return false;
+    }
 
     // Hertz: a rate is an inverse time, which is a real `FieldDim` and the unit the drag socket documents.
     const qp::abi::LatticeDesc desc =
@@ -558,7 +576,29 @@ bool bake_atmosphere(const FieldNodes::AtmosphereSpec& spec, const GridSpec& gri
         for (std::uint32_t j = 0; j < grid.ny; ++j) {
             for (std::uint32_t k = 0; k < grid.nz; ++k) {
                 const double radius = norm(grid.node_position(i, j, k));
-                rates[at++] = spec.nu0_per_s * std::exp(-(radius - spec.reference_m) / spec.scale_height_m);
+                const double altitude = radius - spec.reference_m;
+                if (!spec.layered) {
+                    rates[at++] = spec.nu0_per_s * std::exp(-altitude / spec.scale_height_m);
+                    continue;
+                }
+                // **The bands are anchored, not independent.** Each continues from the value the previous one
+                // reached at its own boundary, which is what makes the profile continuous: the reference's three
+                // expressions meet a factor of 2683 (at 100 km) and 1101 (at 500 km) apart, and a drag coefficient
+                // that jumps by two and a half thousand across a line is a different model on either side of it.
+                // See `kPortAtmosphereLayers` for those numbers and for why the second profile is worth having.
+                //
+                // The first band is written exactly as the single profile is, which is what makes the unlayered
+                // default the same arithmetic -- and therefore the same bytes -- as before this port existed.
+                const double at_first = spec.nu0_per_s * std::exp(-spec.boundary1_m / spec.scale_height_m);
+                if (altitude < spec.boundary1_m) {
+                    rates[at++] = spec.nu0_per_s * std::exp(-altitude / spec.scale_height_m);
+                } else if (altitude < spec.boundary2_m) {
+                    rates[at++] = at_first * std::exp(-(altitude - spec.boundary1_m) / spec.scale_height2_m);
+                } else {
+                    const double at_second =
+                        at_first * std::exp(-(spec.boundary2_m - spec.boundary1_m) / spec.scale_height2_m);
+                    rates[at++] = at_second * std::exp(-(altitude - spec.boundary2_m) / spec.scale_height3_m);
+                }
             }
         }
     }
@@ -1878,6 +1918,18 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     atmosphere.allow_in_field_domain = true;
     atmosphere.allow_in_particle_domain = false;
     atmosphere.has_compute = true;
+    // The profile first, because it decides which of the numbers below mean anything -- the mask's own ordering.
+    graph::PortDesc atmosphere_layers = parameter(kPortAtmosphereLayers, "layers", "Profile", "", 1.0);
+    atmosphere_layers.type = qp::ports::kEnum;
+    atmosphere_layers.description = "One exponential, or three bands whose scale height changes at two altitudes. "
+                                    "The reference ships the second as a node of its own, and its bands do not "
+                                    "meet: they jump by 2683 and by 1101 at their own boundaries, which is a force "
+                                    "discontinuity a step can land on. Here each band continues from the value the "
+                                    "one below it reached, so the profile keeps the shape a layered atmosphere is "
+                                    "for and has no jump at all.";
+    atmosphere_layers.choice_names = {"exponential", "three_band"};
+    atmosphere_layers.choice_labels = {"Exponential (one scale height)", "Three bands"};
+    atmosphere.inputs.push_back(atmosphere_layers);
     graph::PortDesc nu0 = parameter(kPortAtmosphereNu0, "nu0", "Rate at r_ref", "1/s", 1.0e-3);
     nu0.description = "The drag rate quoted at the reference radius. Zero, the default, is no atmosphere at all: "
                       "a graph that wires this node and does not set a rate gets a drag of nothing rather than a "
@@ -1892,6 +1944,26 @@ std::vector<graph::NodeDesc> FieldNodes::node_types() {    graph::NodeDesc dipol
     reference.description = "Where the rate above is quoted. A parameter rather than the surface, because what "
                             "\"the rate at the surface\" means depends on where the model's surface is.";
     atmosphere.inputs.push_back(reference);
+    graph::PortDesc middle = parameter(kPortAtmosphereScaleHeight2, "scale_height2", "Scale height above band 1", "m",
+                                       1.0e4);
+    middle.description = "The second band's scale height, above the first boundary. The reference's own value is "
+                         "forty kilometres against the first band's eight, which is the shape a real atmosphere has: "
+                         "thicker as it thins out.";
+    atmosphere.inputs.push_back(middle);
+    graph::PortDesc outermost = parameter(kPortAtmosphereScaleHeight3, "scale_height3",
+                                          "Scale height above band 2", "m", 1.0e4);
+    outermost.description = "The third band's scale height. The reference's own value is a hundred kilometres.";
+    atmosphere.inputs.push_back(outermost);
+    graph::PortDesc boundary1 = parameter(kPortAtmosphereBoundary1, "boundary1", "Band 1 boundary", "m", 1.0e4);
+    boundary1.description = "The altitude above the reference radius where the scale height changes from the first "
+                            "value to the second. The reference's is a hundred kilometres; a caller that reverses "
+                            "the two boundaries is refused rather than sorted, because a reversed pair describes a "
+                            "profile this model does not have.";
+    atmosphere.inputs.push_back(boundary1);
+    graph::PortDesc boundary2 = parameter(kPortAtmosphereBoundary2, "boundary2", "Band 2 boundary", "m", 1.0e4);
+    boundary2.description = "The altitude where the scale height changes to the third value. The reference's is "
+                            "five hundred kilometres.";
+    atmosphere.inputs.push_back(boundary2);
     for (graph::PortNumber offset = 0; offset < 9; ++offset) {
         const char* names[9] = {"origin_x", "origin_y", "origin_z", "spacing_x", "spacing_y",
                                 "spacing_z", "count_x",  "count_y",   "count_z"};

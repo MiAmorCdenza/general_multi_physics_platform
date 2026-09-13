@@ -1919,6 +1919,191 @@ TEST_CASE("magnetosphere.field_nodes.the_boundary_publishes_its_own_radius", "[m
     REQUIRE(gfield::get_component(radius, (tail_column * grid.ny + 0) * grid.nz + nose_row, 0) > 4.0 * standoff);
 }
 
+TEST_CASE("magnetosphere.field_nodes.the_layered_atmosphere_has_no_jump", "[magnetosphere]") {
+    // **The reference's second atmosphere node, and the one number about it that had to change.** Its `drag_single`
+    // is what this kit's atmosphere node already was -- an exponential, with the reference radius and the scale
+    // height as parameters rather than hard-coded. Its `drag_layered` is three bands with three scale heights, and
+    // **its bands do not meet**: evaluated at their own boundaries they jump by a factor of 2683 at 100 km and 1101
+    // at 500 km. A drag coefficient that multiplies by two and a half thousand across a line is a force
+    // discontinuity, and a particle whose step lands on the far side of it is being decelerated by a different
+    // model. This port anchors each band to the value the one below reached, and the case measures both sides of
+    // that decision: the reference's jumps, and the absence of them here.
+    const double re = kEarthRadiusM;
+
+    // ---- The reference's own three expressions, evaluated at their own boundaries -----------------------------
+    //
+    // Written out from `nodes/atmosphere.py`: `nu = 1000 exp(-h/8)` below 100 km, `10 exp(-(h-100)/40)` from 100 to
+    // 500, `0.5 exp(-(h-500)/100)` above. The heights are kilometres there, which is why this reads them in
+    // kilometres and converts once.
+    const auto reference_layered = [](double altitude_km) {
+        if (altitude_km < 100.0) return 1000.0 * std::exp(-altitude_km / 8.0);
+        if (altitude_km < 500.0) return 10.0 * std::exp(-(altitude_km - 100.0) / 40.0);
+        return 0.5 * std::exp(-(altitude_km - 500.0) / 100.0);
+    };
+    const double jump_at_100 = reference_layered(100.0) / reference_layered(99.999999);
+    const double jump_at_500 = reference_layered(500.0) / reference_layered(499.999999);
+    INFO("the reference's own bands jump by " << jump_at_100 << " at 100 km and " << jump_at_500 << " at 500 km");
+    REQUIRE(jump_at_100 > 1000.0);
+    REQUIRE(jump_at_500 > 1000.0);
+
+    // ---- This node's profile, on a lattice that brackets both boundaries ------------------------------------
+    //
+    // A radial lattice rather than a box: the profile depends on `r` alone, so three columns of a thin slab describe
+    // it, and the boundaries are placed where the spacing brackets them.
+    const FieldNodes::AtmosphereSpec single = [] {
+        FieldNodes::AtmosphereSpec spec;
+        spec.nu0_per_s = 1000.0;
+        spec.reference_m = kEarthRadiusM;
+        spec.scale_height_m = 8.0e3;
+        return spec;
+    }();
+    REQUIRE(single.layered == false);
+
+    FieldNodes::AtmosphereSpec layered = single;
+    layered.layered = true;
+    layered.scale_height2_m = 40.0e3;
+    layered.scale_height3_m = 100.0e3;
+    layered.boundary1_m = 100.0e3;
+    layered.boundary2_m = 500.0e3;
+
+    // Ten kilometres a node: coarse enough that the boundaries fall between nodes (which is the realistic case and
+    // the one a jump would show up in), fine enough that the profile is resolved.
+    const GridSpec grid{Vec3{-1.0 * re, 0.0, 0.0}, Vec3{0.0, 0.0, 0.0}, 2, 2, 2};
+    (void)grid;
+    const auto profile_at = [&](const FieldNodes::AtmosphereSpec& spec, double altitude_m) {
+        // A one-point bake per altitude would be a hundred bakes; instead the case uses the expression the bake
+        // uses, which is legitimate here because what is under test is the *profile* rather than the lattice --
+        // and the lattice half is asserted separately, below, against the table.
+        const double h = altitude_m;
+        if (!spec.layered) return spec.nu0_per_s * std::exp(-h / spec.scale_height_m);
+        const double at_first = spec.nu0_per_s * std::exp(-spec.boundary1_m / spec.scale_height_m);
+        if (h < spec.boundary1_m) return spec.nu0_per_s * std::exp(-h / spec.scale_height_m);
+        if (h < spec.boundary2_m) return at_first * std::exp(-(h - spec.boundary1_m) / spec.scale_height2_m);
+        const double at_second = at_first * std::exp(-(spec.boundary2_m - spec.boundary1_m) / spec.scale_height2_m);
+        return at_second * std::exp(-(h - spec.boundary2_m) / spec.scale_height3_m);
+    };
+
+    // **Continuous**: the two branches agree at each boundary to the rounding, so the ratio across it is one.
+    const double here_at_100 = profile_at(layered, 100.0e3) / profile_at(layered, 100.0e3 - 1.0e-6);
+    const double here_at_500 = profile_at(layered, 500.0e3) / profile_at(layered, 500.0e3 - 1.0e-6);
+    INFO("this node's bands meet: " << here_at_100 << " at 100 km, " << here_at_500 << " at 500 km");
+    REQUIRE(relative_to(here_at_100, 1.0) < 1.0e-9);
+    REQUIRE(relative_to(here_at_500, 1.0) < 1.0e-9);
+    // ... and the ratio the reference's own bands produce across the same line is **2683**, which is what the
+    // anchoring removes. The assertion is an order-of-magnitude bound rather than the measured number: what the
+    // case is about is that one of the two is a jump and the other is not.
+    REQUIRE(jump_at_100 / here_at_100 > 1.0e3);
+    REQUIRE(jump_at_500 / here_at_500 > 1.0e3);
+
+    // **The scale heights are the model, and they are recovered from the profile by differencing its logarithm.**
+    // `-dh / d ln nu` is the local scale height, so each band answers with its own number: eight, forty and a
+    // hundred kilometres. That is the content of the second profile -- a slope that changes -- and it is asserted
+    // rather than assumed, because a profile that was continuous but had one slope would be the first profile.
+    const auto local_scale_height = [&](const FieldNodes::AtmosphereSpec& spec, double altitude_m) {
+        const double step = 1.0e3;
+        const double high = profile_at(spec, altitude_m + step);
+        const double low = profile_at(spec, altitude_m - step);
+        return -2.0 * step / std::log(high / low);
+    };
+    REQUIRE(relative_to(local_scale_height(layered, 50.0e3), 8.0e3) < 0.05);
+    REQUIRE(relative_to(local_scale_height(layered, 300.0e3), 40.0e3) < 0.05);
+    REQUIRE(relative_to(local_scale_height(layered, 800.0e3), 100.0e3) < 0.05);
+    // ... and the single profile answers with one number everywhere, which is the control that says the layering is
+    // what changed the slope and not the arithmetic.
+    REQUIRE(relative_to(local_scale_height(single, 50.0e3), 8.0e3) < 1.0e-9);
+    REQUIRE(relative_to(local_scale_height(single, 800.0e3), 8.0e3) < 1.0e-9);
+
+    // ---- The lattice half, on a real bake -------------------------------------------------------------------
+    //
+    // The unlayered profile must be **bit for bit** the table this node baked before the port existed, and the
+    // layered one must agree with the expression above at every node. Both are checked on a two-by-two-by-many slab
+    // whose nodes sit at known radii.
+    const GridSpec slab{Vec3{-2.0 * re, 0.0, 0.0}, Vec3{1.0 * re, 1.0 * re, 5.0e4}, 5, 2, 21};
+    gfield::FieldSet fields;
+    const gfield::FieldKey single_key{151, FieldNodes::kPortAtmosphereOut};
+    const gfield::FieldKey layered_key{152, FieldNodes::kPortAtmosphereOut};
+    REQUIRE(bake_atmosphere(single, slab, single_key, fields));
+    REQUIRE(bake_atmosphere(layered, slab, layered_key, fields));
+    const gfield::FieldValue flat = fields.view(single_key);
+    const gfield::FieldValue stepped = fields.view(layered_key);
+    REQUIRE(gfield::is_readable(flat));
+    REQUIRE(gfield::is_readable(stepped));
+    REQUIRE(flat.is_scalar());
+    REQUIRE(stepped.is_scalar());
+    REQUIRE(stepped.point_count() == flat.point_count());
+    // The radius of each node, from the slab's own geometry: three of the four x values are negative and the
+    // radius is sqrt(x^2 + y^2 + z^2) with y and z varying over the two rows and the twenty-one columns.
+    const auto radius_of = [&slab](std::uint64_t point) {
+        const std::uint64_t k = point % slab.nz;
+        const std::uint64_t j = (point / slab.nz) % slab.ny;
+        const std::uint64_t i = point / (static_cast<std::uint64_t>(slab.nz) * slab.ny);
+        return norm(Vec3{slab.origin_m.x + static_cast<double>(i) * slab.spacing_m.x,
+                         slab.origin_m.y + static_cast<double>(j) * slab.spacing_m.y,
+                         slab.origin_m.z + static_cast<double>(k) * slab.spacing_m.z});
+    };
+    for (std::uint64_t point = 0; point < flat.point_count(); ++point) {
+        const double altitude = radius_of(point) - single.reference_m;
+        // The **unlayered** table is compared with ==, and that is the claim the port has to keep: a graph written
+        // before these ports existed bakes the same bytes.
+        REQUIRE(gfield::get_component(flat, point, 0) ==
+                single.nu0_per_s * std::exp(-altitude / single.scale_height_m));
+        // The layered one is compared **relatively**, because its arithmetic is not one expression: the bake carries
+        // the rate at each boundary forward through a product, and this case recomputes that product in its own
+        // order. The values also span thirty orders of magnitude across the slab, so an equality here would be
+        // asserting that two differently-ordered expressions round identically -- which the hinge's case already
+        // measured to be false at 1e-15.
+        const double expected = profile_at(layered, altitude);
+        const double actual = gfield::get_component(stepped, point, 0);
+        // **The centre of the planet is inside this slab, and there the profile overflows.** Below the reference
+        // radius the exponential is evaluated at a negative altitude, so it grows instead of decaying, and the
+        // first node of the slab in `z` sits on the axis: `exp(+6378/8)` is `e^797`, which is an infinity in a
+        // double. That is not new -- the single profile has always done it, and this case asserts it below for that
+        // one too -- and it is out of reach in practice because a particle inside the body is retired by the
+        // pusher's own rule before it can sample there. What the comparison has to do is say so: two infinities are
+        // equal, and `relative_to` on a pair of them is a NaN that would look like a failure of the profile.
+        if (std::isinf(expected) || std::isinf(actual)) {
+            REQUIRE(actual == expected);
+            continue;
+        }
+        REQUIRE(relative_to(actual, expected) < 1.0e-12);
+    }
+
+    // ---- The declaration ------------------------------------------------------------------------------------
+    const std::vector<graph::NodeDesc> types = FieldNodes::node_types();
+    const graph::NodeDesc& atmosphere_type = type_named(types, FieldNodes::kAtmosphereType);
+    const graph::PortDesc* layers = atmosphere_type.find_port(FieldNodes::kPortAtmosphereLayers, false);
+    REQUIRE(layers != nullptr);
+    REQUIRE(layers->type == qp::ports::kEnum);
+    REQUIRE_FALSE(layers->connectable);
+    REQUIRE(layers->choice_names.size() == 2);
+    REQUIRE(layers->choice_names.front() == std::string{"exponential"});
+    REQUIRE(layers->choice_names.back() == std::string{"three_band"});
+    // The four numbers the second profile needs, and the grid **after** them: a port number is what a saved document
+    // stores, so the nine grid ports moved when these were added -- which is the one place this kit breaks its own
+    // "append at the end" rule, and it is safe here because the type is documented as never having shipped a
+    // document with the old numbering. See the declaration for the reasoning.
+    for (const graph::PortNumber number : {FieldNodes::kPortAtmosphereScaleHeight2, FieldNodes::kPortAtmosphereScaleHeight3,
+                                           FieldNodes::kPortAtmosphereBoundary1, FieldNodes::kPortAtmosphereBoundary2}) {
+        const graph::PortDesc* port = atmosphere_type.find_port(number, false);
+        REQUIRE(port != nullptr);
+        REQUIRE_FALSE(port->connectable);
+    }
+    REQUIRE(FieldNodes::kPortAtmosphereOrigin0 == FieldNodes::kPortAtmosphereBoundary2 + 1);
+
+    // **Refusals**: a reversed pair of boundaries, a zero or negative scale height, and a rate below zero. Each is a
+    // profile this model does not have, rather than a number to sort or clamp.
+    FieldNodes::AtmosphereSpec reversed = layered;
+    reversed.boundary1_m = 500.0e3;
+    reversed.boundary2_m = 100.0e3;
+    REQUIRE_FALSE(bake_atmosphere(reversed, slab, gfield::FieldKey{153, FieldNodes::kPortAtmosphereOut}, fields));
+    FieldNodes::AtmosphereSpec flat_band = layered;
+    flat_band.scale_height2_m = 0.0;
+    REQUIRE_FALSE(bake_atmosphere(flat_band, slab, gfield::FieldKey{153, FieldNodes::kPortAtmosphereOut}, fields));
+    FieldNodes::AtmosphereSpec negative_rate = single;
+    negative_rate.nu0_per_s = -1.0;
+    REQUIRE_FALSE(bake_atmosphere(negative_rate, slab, gfield::FieldKey{153, FieldNodes::kPortAtmosphereOut}, fields));
+}
+
 TEST_CASE("magnetosphere.field_nodes.the_tail_flares_and_follows_the_index", "[magnetosphere]") {
     // **The other two thirds of the reference's `tail.py`.** The hinge came first (that case); what is left is the
     // profile -- an unflared Harris sheet or a flaring one -- and the three numbers the reference derives from the
