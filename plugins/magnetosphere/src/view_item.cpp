@@ -55,6 +55,9 @@ graph::ViewScene ParticleViewItem::scene(const graph::ViewRequest& request) {
     out.y_min = -half;
     out.y_max = half;
     out.has_bounds = true;
+    // One earth radius, because this scene is in earth radii: `positions()` converts at the kit's boundary, so the
+    // planet is radius one by construction rather than by a number the widget would have to be told.
+    out.body_radius = 1.0;
     return out;
 }
 

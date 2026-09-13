@@ -172,6 +172,17 @@ struct ViewScene final {
     double y_max = 0.0;
     /// Whether the bounds mean anything. A scene with no bounds is drawn in whatever the host had.
     bool has_bounds = false;
+    /// The radius of a **body at the origin** to draw under everything else, in the item's own units.
+    ///
+    /// Zero means none, and zero is the default, which is the right default for a general scene: an item drawing a
+    /// laboratory oscillator has an origin but nothing at it. It is in the scene rather than in the widget because
+    /// the widget is the toolkit and the body is content -- the same split that already puts the *bounds* here
+    /// instead of letting the host infer them. The first two items this platform ships both draw a magnetosphere
+    /// and both set one earth radius, and a widget that knew that would be a widget that cannot draw anything else.
+    ///
+    /// It is a radius and not a flag because a scene drawn in earth radii wants a planet one earth radius across:
+    /// a flag would leave the host choosing a size, and the host does not know the units.
+    double body_radius = 0.0;
 
     /// @brief Whether there is anything to draw.
     ///

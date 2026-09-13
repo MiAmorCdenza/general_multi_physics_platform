@@ -43,6 +43,7 @@
 #include <qp/authoring/commands/session.hpp>
 #include <qp/authoring/document/document.hpp>
 #include <qp/authoring/portui/port_ui.hpp>
+#include <qp/graph/domain/view_items.hpp>
 #include <qp/graph/ir/node_type_registry.hpp>
 #include <qp/host/host.hpp>
 #include <qp/runtime/run/run.hpp>
@@ -53,6 +54,8 @@
 #include <qp/views/model/measurement_model.hpp>
 
 #include <memory>
+#include <utility>
+#include <vector>
 
 class QAction;
 class QLabel;
@@ -64,6 +67,7 @@ class FitPanel;
 class MeasurementPanel;
 class NodeGraphView;
 class PropertyPanel;
+class SceneView;
 
 /**
  * @brief The editing window: canvas on the left, properties on the right.
@@ -315,6 +319,12 @@ private:
     // once with two run ledgers.
     qp::views::model::ConfidenceModel confidence_{measurements_.trace()};
     ConfidencePanel* confidence_panel_ = nullptr;
+
+    // **One scene panel per mounted view item**, paired here rather than looked up by widget type when a run
+    // finishes. The pairing is the window's own fact -- it built the panels from `view_items()` at construction --
+    // and keeping it is what lets two items coexist without either of them drawing over the other. A panel is
+    // owned by its dock through Qt parentage; the pointer here is a view of that ownership, not a second owner.
+    std::vector<std::pair<qp::graph::IViewItem*, SceneView*>> scene_panels_{};
 
     // One fit session per window, over the same trace, for the same borrowing reason. The **fit** is not
     // performed here or in `views/model`: it is a plugin, and this layer is built where no plugin exists. The

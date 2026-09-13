@@ -137,6 +137,8 @@ graph::ViewScene FieldLinesViewItem::scene(const graph::ViewRequest& request) {
         out.y_min = -half;
         out.y_max = half;
         out.has_bounds = !out.polylines.empty();
+        // The body the traces stop at, one earth radius across, drawn under the curves.
+        out.body_radius = 1.0;
         return out;
     }
     return out;

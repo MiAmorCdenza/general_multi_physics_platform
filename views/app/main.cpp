@@ -67,6 +67,8 @@
 #include <qp/plugins/magnetosphere/field_nodes.hpp>
 #include <qp/plugins/magnetosphere/plan.hpp>
 #include <qp/plugins/magnetosphere/run.hpp>
+#include <qp/plugins/magnetosphere/field_lines_item.hpp>
+#include <qp/plugins/magnetosphere/render_nodes.hpp>
 #include <qp/plugins/magnetosphere/view_item.hpp>
 #endif
 
@@ -223,17 +225,22 @@ int main(int argc, char** argv) {
     // The kit's whole-graph run provider. The operator loop drives one operator over a state of a few doubles
     // per particle; this kit's graph has to be baked and launched first, so pressing Run on it goes through
     // `IGraphRunProvider` instead -- see `views/model/run_providers.hpp`.
-    // The drawing side of the same kit: the item that answers `render.particles`. Mounted beside the run
-    // provider, and the window offers it every declaration a run reports.
+    // The drawing side of the same kit: one item per render type it declares. Mounted beside the run provider,
+    // and the window offers every declaration to every item and keeps one panel per item -- which is why there
+    // are two here and not one: `render.particles` and `render.field_lines` are different declarations, and an
+    // item that claimed both would have to choose which picture to draw.
     qp::plugins::magnetosphere::ParticleViewItem particle_item;
     qp::graph::mount_view_item(&particle_item);
+    qp::plugins::magnetosphere::FieldLinesViewItem field_lines_item;
+    qp::graph::mount_view_item(&field_lines_item);
     qp::views::model::mount_run_provider(&magnetosphere_run);
     const std::size_t mounted_field_types = qp::plugins::magnetosphere::FieldNodes::mount(content_host);
     const std::size_t mounted_pushers = qp::plugins::magnetosphere::PusherNodes::mount(content_host);
     const std::size_t mounted_emitters = qp::plugins::magnetosphere::EmitterNodes::mount(content_host);
-    if (mounted_field_types + mounted_pushers + mounted_emitters != 3) {
+    const std::size_t mounted_render_items = qp::plugins::magnetosphere::RenderNodes::mount(content_host);
+    if (mounted_field_types + mounted_pushers + mounted_emitters != 3 || mounted_render_items != 2) {
         qWarning().noquote() << "magnetosphere: mounted" << mounted_field_types + mounted_pushers + mounted_emitters
-                             << "of 3 node types";
+                             << "of 3 node types and" << mounted_render_items << "of 2 render items";
     }
 #endif
 

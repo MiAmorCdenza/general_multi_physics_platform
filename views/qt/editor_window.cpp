@@ -18,7 +18,7 @@
 #include <qp/views/model/execution_binders.hpp>
 #include <qp/views/model/export_controller.hpp>
 
-#include "particle_view.hpp"
+#include "scene_view.hpp"
 #include "confidence_panel.hpp"
 #include "fit_panel.hpp"
 #include "measurement_panel.hpp"
@@ -187,15 +187,25 @@ EditorWindow::EditorWindow(qp::host::PluginHost& content, QWidget* parent) noexc
     // the readings say what was measured, and this says whether the numbers behind them can be
     // trusted. Putting them in different corners is how a user reads one and not the other.
     addDockWidget(Qt::RightDockWidgetArea, confidence_dock);
-    // The particles, in a dock of their own. The widget is found by type when a run finishes rather than held in
-    // a member, because the window already owns it by parentage and a second reference to a widget the dock
-    // owns is a second thing to keep in step. The scene it is handed is a **copy**: a widget that kept a pointer
-    // into a run would paint one run's picture beside another run's numbers.
-    auto* particle_dock = new QDockWidget(tr("Particles"), this);
-    auto* particle_view = new ParticleView(particle_dock);
-    particle_dock->setWidget(particle_view);
-    particle_dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
-    addDockWidget(Qt::RightDockWidgetArea, particle_dock);
+    // **One panel per view item**, built from the list the application mounted rather than from a hard-coded
+    // widget type. That is the change the second item forced: with one item, "find the particle panel" and "give
+    // this item a panel" were the same sentence, and with two they are not -- two items drawing into one canvas
+    // would overwrite each other, and the order they ran in would decide which picture the user saw.
+    //
+    // The list is walked **once, here**, and the panels are kept in a member: `run()` has to hand each item its own
+    // panel, and looking a panel up by position in `view_items()` at that point would be reading a list that a
+    // plugin could have changed. A map from item to widget is the honest form of the same thing, and it also keeps
+    // the pair visible in one place.
+    for (qp::graph::IViewItem* item : qp::graph::view_items()) {
+        if (item == nullptr) continue;
+        const QString title = QString::fromUtf8(item->name().data(), static_cast<int>(item->name().size()));
+        auto* dock = new QDockWidget(title, this);
+        auto* view = new SceneView(tr("%1: nothing to draw yet -- press Run.").arg(title), dock);
+        dock->setWidget(view);
+        dock->setFeatures(QDockWidget::NoDockWidgetFeatures);
+        addDockWidget(Qt::RightDockWidgetArea, dock);
+        scene_panels_.emplace_back(item, view);
+    }
     splitDockWidget(dock, confidence_dock, Qt::Vertical);
 
     fit_panel_ = new FitPanel(fit_, this);
@@ -867,22 +877,22 @@ void EditorWindow::run_once() {
     // before the failure branch on purpose: the declarations are filled whether or not the run succeeded --
     // what a graph declares is a property of the graph -- and a refused run should still show the last picture
     // rather than a blank panel.
-    if (auto* particle_view = findChild<ParticleView*>()) {
-        const qp::graph::Graph& graph = session_.graph();
-        for (const qp::graph::DeclaredOutput& declaration : result.render_declared) {
-            const qp::graph::Node* node = graph.find_node(declaration.node);
-            if (node == nullptr) continue;
-            for (qp::graph::IViewItem* item : qp::graph::view_items()) {
-                if (item == nullptr || !item->draws(node->type_name)) continue;
-                // `result.fields` is a member of the result rather than a pointer into the run, because the run
-                // is gone by the time this line runs: it is the same reason `particle_positions` is a member.
-                const qp::graph::ViewRequest request{&graph, &result.render_declared,
-                                                     &result.particle_positions, result.report.steps,
-                                                     &result.fields};
-                if (!request.valid()) break;
-                particle_view->set_scene(item->scene(request));
-                break;
-            }
+    //
+    // Every declaration is offered to **every** item, and each item that claims it draws into its own panel. That
+    // loop is what the second item changed: the `break` after the first claim was right while there was one item
+    // and one panel, and with two it would silently give the field-line declaration to the particle item and stop.
+    for (const qp::graph::DeclaredOutput& declaration : result.render_declared) {
+        const qp::graph::Node* node = session_.graph().find_node(declaration.node);
+        if (node == nullptr) continue;
+        for (const auto& [item, panel] : scene_panels_) {
+            if (item == nullptr || panel == nullptr || !item->draws(node->type_name)) continue;
+            // `result.fields` is a member of the result rather than a pointer into the run, because the run is
+            // gone by the time this line runs: it is the same reason `particle_positions` is a member.
+            const qp::graph::ViewRequest request{&session_.graph(), &result.render_declared,
+                                                 &result.particle_positions, result.report.steps,
+                                                 &result.fields};
+            if (!request.valid()) continue;
+            panel->set_scene(item->scene(request));
         }
     }
 

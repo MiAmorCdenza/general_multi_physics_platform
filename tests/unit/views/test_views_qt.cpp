@@ -70,7 +70,7 @@
 #include <QString>
 #include <QStringList>
 
-#include "particle_view.hpp"
+#include "scene_view.hpp"
 #include "confidence_panel.hpp"
 #include "fit_panel.hpp"
 #include "measurement_panel.hpp"
@@ -1505,14 +1505,18 @@ int main(int argc, char** argv) {
 }
 
 
-TEST_CASE("qt.views.particle.draws_a_scene_and_says_when_there_is_none", "[views][qt]") {
+TEST_CASE("qt.views.scene.draws_a_scene_and_says_when_there_is_none", "[views][qt]") {
     // The last link of the render chain, checked where it can be: the widget holds a **copy** of the scene it
     // was given, and it says so in words when there is nothing to draw. Both are decisions rather than details.
     // The copy is what keeps a painted frame and the numbers beside it from being different runs; the sentence
     // is what keeps "this graph draws nothing" from looking like "this window has not run yet".
-    qp::views::ParticleView view;
+    //
+    // The message is a **constructor parameter** rather than a constant, which is what the second view item
+    // forced: two items draw into two panels, and a panel that said "nothing to draw yet" without saying *what*
+    // would leave a user with two identical blanks and no way to tell which one their graph feeds.
+    qp::views::SceneView view{QStringLiteral("no curves yet")};
     REQUIRE(view.scene().empty());
-    REQUIRE_FALSE(qp::views::ParticleView::empty_text().isEmpty());
+    REQUIRE(view.empty_text() == QStringLiteral("no curves yet"));
 
     qp::graph::ViewScene scene;
     scene.points.push_back(qp::graph::ViewScene::Point{1.0, 2.0});
@@ -1534,6 +1538,27 @@ TEST_CASE("qt.views.particle.draws_a_scene_and_says_when_there_is_none", "[views
     unbounded.points.push_back(qp::graph::ViewScene::Point{1.0, 1.0});
     view.set_scene(unbounded);
     REQUIRE_FALSE(view.scene().has_bounds);
+
+    // A scene whose content is **curves and nothing else** is not empty, and neither is one whose only content is
+    // the body: `empty()` asks about the two lists, and the body radius is a third thing that decides whether
+    // there is a picture. Both are what the field-line item produces.
+    qp::graph::ViewScene curves;
+    curves.polylines.push_back({qp::graph::ViewScene::Point{1.0, 0.0}, qp::graph::ViewScene::Point{0.0, 1.0}});
+    curves.x_min = -2.0;
+    curves.x_max = 2.0;
+    curves.y_min = -2.0;
+    curves.y_max = 2.0;
+    curves.has_bounds = true;
+    curves.body_radius = 1.0;
+    view.set_scene(curves);
+    REQUIRE_FALSE(view.scene().empty());
+    REQUIRE(view.scene().points.empty());
+    REQUIRE(view.scene().polylines.size() == 1);
+    // Painted rather than asserted about: the mapping from units to pixels has no other check, and a widget that
+    // threw on a curve with two points would be a widget that cannot draw the shortest line in the picture.
+    QPixmap canvas{view.size()};
+    view.render(&canvas);
+    REQUIRE_FALSE(canvas.isNull());
 
     // And the scene is copied: replacing it does not touch what the caller still holds.
     Q_UNUSED(scene);
