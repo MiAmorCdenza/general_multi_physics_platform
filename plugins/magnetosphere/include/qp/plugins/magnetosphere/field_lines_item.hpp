@@ -94,20 +94,36 @@ public:
     /// @tests       magnetosphere.render.a_field_becomes_a_family_of_curves
     [[nodiscard]] std::string_view name() const noexcept override { return kName; }
 
-    /// @brief Whether the declaration is this kit's field-line item.
-    ///
-    /// @param type_name The render node's type.
-    ///
-    /// @ownership   pure
-    /// @thread      main
-    /// @pre         none
-    /// @post        True exactly for `render.field_lines`
-    /// @invariant   Depends only on the type name
-    /// @errors      noexcept
-    /// @complexity  O(1)
-    /// @nondet      none
-    /// @frozen      no
-    /// @tests       magnetosphere.render.a_field_becomes_a_family_of_curves
+    /**
+     * @brief Whether the declaration is this kit's field-line item.
+     *
+     * **This rule is what makes the item dimension-agnostic, and that is why the reference's separate electric-field
+     * item is not ported.** The claim is on the **type name** and nothing else: whichever table the declaration's
+     * wire leads to is the field that gets traced -- tesla or volts per metre, a dipole or a convection pattern --
+     * and the tracer's own specification mentions no dimension either. So "draw the electric field's lines" is a
+     * wire in this kit rather than a second item with the same arithmetic under a second name, and the case below
+     * measures it: two declarations on one item, two tables with different dimensions, two different families of
+     * curves.
+     *
+     * This contract is a **block comment** where its neighbours are `///`, and that is the gate's rule rather than a
+     * style choice: it reads block comments, so a `@tests` line written with `///` is invisible to it and the case it
+     * claims is reported as an orphan. The trap has now fired three times in this tree, which is why the rule is
+     * written down in `standards/` rather than remembered.
+     *
+     * @param type_name The render node's type.
+     *
+     * @ownership   pure
+     * @thread      main
+     * @pre         none
+     * @post        True exactly for `render.field_lines`
+     * @invariant   Depends only on the type name
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.render.a_field_becomes_a_family_of_curves,
+     *              magnetosphere.render.an_electric_field_is_drawn_by_the_same_item
+     */
     [[nodiscard]] bool draws(std::string_view type_name) const noexcept override;
 
     /// @brief Traces the declared field's lines and answers with them.

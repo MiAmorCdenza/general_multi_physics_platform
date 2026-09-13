@@ -943,6 +943,109 @@ TEST_CASE("magnetosphere.render.a_snapshot_becomes_a_scene", "[magnetosphere]") 
 }
 
 
+TEST_CASE("magnetosphere.render.an_electric_field_is_drawn_by_the_same_item", "[magnetosphere]") {
+    // **The reference has a render item per field kind. This kit has one, and this case is the measurement that
+    // says the difference is a wire rather than an omission.** `render_item_efield_lines` exists there because its
+    // canvas knows which field it is showing; here the declaration names a `(node, port)` pair, the item follows the
+    // wire, and the tracer's own specification mentions no dimension at all -- it follows whatever table it is
+    // handed. So an electric field wired into the same item draws electric field lines, and a second type with the
+    // same arithmetic under a second name would be two names for one item -- the objection that kept the
+    // reference's `kan` out of the tail and its leapfrog out of the pusher family.
+    //
+    // What the case has to prove is therefore **not** "it does not crash on volts per metre": it is that the curves
+    // are the *electric* field's, which is a statement about the wire. Two declarations on the same item, one wired
+    // to a dipole and one to a convection field, must draw different families -- and the electric one must be the
+    // field the graph says, not a plausible picture of the magnetic one.
+    Scene scene;
+    const graph::NodeId dipole = scene.add_dipole(0.0);
+    // The convection field: the reference's own `E = -grad(2 A x y)`, in volts per metre, on its own lattice.
+    const graph::NodeId convection = scene.add(FieldNodes::kConvectionType);
+    for (graph::PortNumber axis = 0; axis < 3; ++axis) {
+        scene.set(convection, FieldNodes::kPortConvectionOrigin0 + axis, -8.0 * kEarthRadiusM);
+        scene.set(convection, FieldNodes::kPortConvectionOrigin0 + 3 + axis, 0.25 * kEarthRadiusM);
+        scene.set(convection, FieldNodes::kPortConvectionOrigin0 + 6 + axis, 65.0);
+    }
+
+    const graph::NodeId magnetic_item = scene.add(RenderNodes::kFieldLinesType);
+    const graph::NodeId electric_item = scene.add(RenderNodes::kFieldLinesType);
+    for (const graph::NodeId item : {magnetic_item, electric_item}) {
+        scene.set(item, RenderNodes::kPortLineCount, 3.0);
+        scene.set(item, RenderNodes::kPortSeedStart, 2.0);
+        scene.set(item, RenderNodes::kPortSeedEnd, 4.0);
+        scene.set(item, RenderNodes::kPortStepMax, 0.2);
+        scene.set(item, RenderNodes::kPortTolerance, 1.0e-4);
+    }
+    scene.wire(dipole, FieldNodes::kPortField, magnetic_item, RenderNodes::kPortField);
+    scene.wire(convection, FieldNodes::kPortField, electric_item, RenderNodes::kPortField);
+
+    MagnetosphereRunProvider provider;
+    qp::graph::execution::RunBuildResult built = provider.build(scene.g, scene.host.node_types());
+    REQUIRE(built.ok());
+    REQUIRE(built.run->advance(10, 0.01).has_value());
+
+    // The two tables are **different dimensions**, which is the whole point: tesla and volts per metre. A store that
+    // had mixed them up would draw one field's lines under the other's name, and the picture would look fine.
+    const gfield::FieldValue magnetic = built.run->fields().view(gfield::FieldKey{dipole.index, FieldNodes::kPortField});
+    const gfield::FieldValue electric =
+        built.run->fields().view(gfield::FieldKey{convection.index, FieldNodes::kPortField});
+    REQUIRE(gfield::is_readable(magnetic));
+    REQUIRE(gfield::is_readable(electric));
+    REQUIRE(magnetic.desc.dimension.M == 1);
+    REQUIRE(magnetic.desc.dimension.T == -2);
+    REQUIRE(electric.desc.dimension.M == 1);
+    REQUIRE(electric.desc.dimension.T == -3);      // one more inverse time than tesla: a volt per metre
+    REQUIRE(magnetic.desc.dimension.T != electric.desc.dimension.T);
+
+    // One item, two declarations, and it claims both -- because it claims a **type**, not a field kind.
+    FieldLinesViewItem item;
+    REQUIRE(item.draws(RenderNodes::kFieldLinesType));
+    const std::vector<double> no_particles;
+
+    const std::vector<graph::DeclaredOutput> magnetic_only{
+        graph::DeclaredOutput{magnetic_item, RenderNodes::kPortFieldItem}};
+    const graph::ViewRequest magnetic_request{&scene.g, &magnetic_only, &no_particles, 10, &built.run->fields()};
+    const graph::ViewScene from_dipole = item.scene(magnetic_request);
+    REQUIRE(from_dipole.polylines.size() == 3);
+
+    const std::vector<graph::DeclaredOutput> electric_only{
+        graph::DeclaredOutput{electric_item, RenderNodes::kPortFieldItem}};
+    const graph::ViewRequest electric_request{&scene.g, &electric_only, &no_particles, 10, &built.run->fields()};
+    const graph::ViewScene from_convection = item.scene(electric_request);
+    // **The electric field is drawn**, and the curves are curves rather than empty: the item traced the table it
+    // was pointed at, whatever its dimension.
+    REQUIRE(from_convection.polylines.size() == 3);
+    for (const std::vector<graph::ViewScene::Point>& curve : from_convection.polylines) {
+        REQUIRE(curve.size() > 10);
+    }
+
+    // ... and they are **different families**, which is what makes the claim a measurement rather than an
+    // accident: the same item, the same parameters, two wires, two pictures. A comparison of the first curve of
+    // each is enough, and it is done on the widest `x` each reaches -- the seed is the same, so anything that
+    // differed afterwards would have to be the field.
+    bool differs = false;
+    for (std::size_t index = 0; index < from_dipole.polylines.front().size() && !differs; ++index) {
+        const graph::ViewScene::Point& a = from_dipole.polylines.front()[index];
+        const graph::ViewScene::Point& b = from_convection.polylines.front()[index %
+                                                                             from_convection.polylines.front().size()];
+        if (std::abs(a.x - b.x) > 1.0e-3 || std::abs(a.y - b.y) > 1.0e-3) differs = true;
+    }
+    REQUIRE(differs);
+
+    // And the magnetic field's own lines are still the dipole's: the item did not start drawing the electric one
+    // everywhere. The dipole's field lines cross the equator at the seed radius, which the electric field's do not
+    // -- measured as the widest `x` of the first curve against the seed it was given.
+    const auto widest_x = [](const std::vector<graph::ViewScene::Point>& curve) {
+        double widest = 0.0;
+        for (const graph::ViewScene::Point& point : curve) widest = std::max(widest, point.x);
+        return widest;
+    };
+    const auto near = [](double a, double b, double tolerance) {
+        return std::abs(a - b) <= tolerance * std::abs(b);
+    };
+    REQUIRE(near(widest_x(from_dipole.polylines.front()), 2.0, 0.05));
+    REQUIRE_FALSE(near(widest_x(from_convection.polylines.front()), 2.0, 0.05));
+}
+
 TEST_CASE("magnetosphere.render.a_field_becomes_a_family_of_curves", "[magnetosphere]") {
     // The second view item, end to end: a graph declares "draw this field", the run bakes it, and the item turns
     // the baked table into curves. Every mechanism this feature needed is on the path here -- the declaration, the
