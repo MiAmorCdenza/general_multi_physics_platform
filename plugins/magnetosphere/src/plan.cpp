@@ -17,6 +17,7 @@
 #include <qp/plugins/magnetosphere/boris.hpp>
 #include <qp/plugins/magnetosphere/field_nodes.hpp>
 #include <qp/plugins/magnetosphere/rk4.hpp>
+#include <qp/plugins/magnetosphere/verlet.hpp>
 
 #include <cmath>
 #include <cstddef>
@@ -224,11 +225,23 @@ std::vector<graph::NodeDesc> PusherNodes::node_types() {
                       "both questions: Boris is second order and conserves the speed exactly, this one is fourth "
                       "order and slowly spirals a particle in, and the case measures both.";
 
-    return {std::move(boris), std::move(rk4)};
+    // **The third member, and the same copy**: identical sockets, identical parameters, a different ordering.
+    // What its sentence has to say is *where* the force is evaluated, because that is the whole difference.
+    graph::NodeDesc verlet = boris;
+    verlet.type_name = kVerletType;
+    verlet.label = "Velocity-Verlet push";
+    verlet.description = "Advances charged particles by half a drift, the force at the midpoint, the exact "
+                         "rotation, and half a drift again -- the reference's `position first`. The same sockets, "
+                         "the same parameters and the same sub-step control as the Boris push, and the same cost: "
+                         "one field sample a sub-step. It differs in where the kick is taken, which is measurably "
+                         "a smaller energy error than Boris on the same orbit, and its step is symmetric about its "
+                         "own midpoint.";
+
+    return {std::move(boris), std::move(rk4), std::move(verlet)};
 }
 
 bool PusherNodes::is_pusher(const std::string& type_name) noexcept {
-    return type_name == kBorisType || type_name == kRk4Type;
+    return type_name == kBorisType || type_name == kRk4Type || type_name == kVerletType;
 }
 
 PlanBuildRefusal resolve_field(const graph::Graph& graph, const graph::NodeId consumer,
@@ -335,6 +348,10 @@ PlanBuildRefusal build_particle_plan(const graph::Graph& graph, const std::vecto
         // else about a step -- its sockets, its parameters, its required slots -- is the family's.
         if (node->type_name == PusherNodes::kRk4Type) {
             auto kernel = std::make_unique<Rk4Advancer>();
+            step.kernel = kernel.get();
+            out.kernels.push_back(std::move(kernel));
+        } else if (node->type_name == PusherNodes::kVerletType) {
+            auto kernel = std::make_unique<VerletAdvancer>();
             step.kernel = kernel.get();
             out.kernels.push_back(std::move(kernel));
         } else {

@@ -406,6 +406,35 @@ public:
     [[nodiscard]] std::uint64_t last_substeps() const noexcept { return last_substeps_; }
 
     /**
+     * @brief How many times the last `advance` read a field table, summed over every particle and every sub-step.
+     *
+     * **The family's cost, and the reason it is counted rather than documented.** `Rk4Advancer::kSamplesPerSubstep`
+     * said "four field samples a sub-step" and nothing checked it: the scheme takes four **stages**, and each stage
+     * reads the magnetic table *and* the electric one, so the real number is eight when both are bound. A header
+     * claiming a cost the code does not pay is the shape this repository keeps finding -- a declaration nothing
+     * consumes -- and the fix is to make the number a measurement. Every sampler a scheme calls goes through
+     * `sampled_volume` or `sampled_scalar` below, including the one `load` makes for the magnetic field, so this
+     * counter is the whole cost rather than a scheme's own estimate of it.
+     *
+     * The case asserts the exact totals for one configuration: a one-sub-step step with both tables bound costs
+     * Boris **two** reads (the magnetic field at load, and the electric field at the sub-step -- the rotation reuses
+     * the sample the load took), Verlet **three** (load plus both tables at the half-step) and RK4 **nine** (load
+     * plus four stages of two). That is the price of the order, and it is a number a report can print.
+     *
+     * @ownership   pure
+     * @thread      any
+     * @pre         none
+     * @post        The count the last `advance` accumulated, plus the one read `load` made for it
+     * @invariant   Reset at the start of every `advance`, together with the sub-step count
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.verlet.the_second_order_schemes_cost_the_same_and_rk4_does_not
+     */
+    [[nodiscard]] std::uint64_t last_field_samples() const noexcept { return last_field_samples_; }
+
+    /**
      * @brief Forgets the counters, so a second run is reported as its own.
      * @ownership   observes
      * @thread      main
@@ -431,7 +460,7 @@ protected:
      * @ownership   observes
      * @thread      eval
      * @pre         none
-     * @post        `last_substeps()` is zero
+     * @post        `last_substeps()` and `last_field_samples()` are zero
      * @invariant   Leaves the speed-clamp and retirement counts alone, which accumulate across a run
      * @errors      noexcept
      * @complexity  O(1)
@@ -439,7 +468,10 @@ protected:
      * @frozen      no
      * @tests       magnetosphere.boris.a_relativistic_particle_needs_fewer_substeps
      */
-    void begin_advance() noexcept { last_substeps_ = 0; }
+    void begin_advance() noexcept {
+        last_substeps_ = 0;
+        last_field_samples_ = 0;
+    }
 
     /**
      * @brief One particle, loaded across the units boundary and ready for a scheme's loop.
@@ -468,6 +500,58 @@ protected:
         /// False when the state was not a number and the particle has already been retired.
         bool usable = false;
     };
+
+    /**
+     * @brief A vector table read that **counts itself**.
+     *
+     * Every scheme's field access goes through here rather than through the free `sample_volume`, and that is the
+     * point: a counter a scheme has to remember to increment is a counter that will be wrong in the scheme written
+     * after it. The two functions below are the only samplers a `PusherAdvancer` should call.
+     *
+     * @param field   The table. Must be sampleable; the caller has already checked.
+     * @param grid    Where the table lives.
+     * @param point_m The position, in metres.
+     *
+     * @ownership   pure
+     * @thread      eval
+     * @pre         `is_sampleable_volume(field)`
+     * @post        `last_field_samples()` has grown by one
+     * @invariant   The value is exactly what the free sampler returns
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.verlet.the_second_order_schemes_cost_the_same_and_rk4_does_not
+     */
+    [[nodiscard]] Vec3 sampled_volume(const gfield::FieldValue& field, const GridMetadata& grid,
+                                      const Vec3& point_m) const noexcept {
+        ++last_field_samples_;
+        return sample_volume(field, grid, point_m);
+    }
+
+    /**
+     * @brief A scalar table read that counts itself, for the drag coefficient.
+     *
+     * @param field   The table. Must be scalar and readable; the caller has already checked.
+     * @param grid    Where the table lives.
+     * @param point_m The position, in metres.
+     *
+     * @ownership   pure
+     * @thread      eval
+     * @pre         `gfield::is_readable(field)` and the table is a scalar volume
+     * @post        `last_field_samples()` has grown by one
+     * @invariant   The value is exactly what the free sampler returns
+     * @errors      noexcept
+     * @complexity  O(1)
+     * @nondet      none
+     * @frozen      no
+     * @tests       magnetosphere.boris.the_speed_limit_is_counted
+     */
+    [[nodiscard]] double sampled_scalar(const gfield::FieldValue& field, const GridMetadata& grid,
+                                        const Vec3& point_m) const noexcept {
+        ++last_field_samples_;
+        return sample_scalar(field, grid, point_m);
+    }
 
     /**
      * @brief Converts one particle's state into the loop's units, clamps its speed, and counts its sub-steps.
@@ -578,6 +662,13 @@ private:
     std::uint64_t speed_clamps_ = 0;
     std::uint64_t retirements_ = 0;
     std::uint64_t last_substeps_ = 0;
+    /// Field table reads since `begin_advance`, including the one `load` took for the magnetic slot.
+    ///
+    /// **`mutable`, and it is bookkeeping rather than state** -- the distinction the run-ledger item argued from
+    /// the other side. `Rk4Advancer::stage` is `const` because computing one RK4 stage changes nothing about the
+    /// scheme, and the read that stage makes still has to be counted; a counter that forced the stage to be
+    /// non-const would be a counter that changed the interface it exists to measure.
+    mutable std::uint64_t last_field_samples_ = 0;
 };
 
 }  // namespace qp::plugins::magnetosphere

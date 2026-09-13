@@ -86,7 +86,7 @@ struct Scene final {
         // the resampler, the magnetopause and the mix.
         REQUIRE(FieldNodes::mount(host) == 17);
         REQUIRE(SourceNodes::mount(host) == 2);
-        REQUIRE(PusherNodes::mount(host) == 2);
+        REQUIRE(PusherNodes::mount(host) == 3);
         REQUIRE(EmitterNodes::mount(host) == 1);
         // The render item too, or `build_plan` cannot look its descriptor up and silently records no
         // declaration for it -- which is the failure this case exists to catch, and it caught it here first.

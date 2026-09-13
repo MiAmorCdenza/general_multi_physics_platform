@@ -42,6 +42,8 @@
 #include <qp/plugins/magnetosphere/geomagnetic.hpp>
 #include <qp/plugins/magnetosphere/geometry.hpp>
 #include <qp/plugins/magnetosphere/rk4.hpp>
+#include <qp/plugins/magnetosphere/verlet.hpp>
+#include <array>
 #include <qp/plugins/magnetosphere/units.hpp>
 
 #include <cmath>
@@ -876,6 +878,204 @@ TEST_CASE("magnetosphere.baked_field.out_of_range_is_clamped_and_counted", "[mag
     REQUIRE(table.sample(Vec3{0.0, 0.0, 0.0}).x == 1.0);
 }
 
+TEST_CASE("magnetosphere.verlet.the_second_order_schemes_cost_the_same_and_rk4_does_not", "[magnetosphere]") {
+    // **The third scheme, and the two numbers that justify it.** A third integrator has to earn its place: the
+    // reference declares four, this kit had two, and the honest questions are what the new one costs and what it
+    // does better. Both are measured here rather than asserted in a comment -- and the first measurement is also a
+    // correction: `Rk4Advancer::kSamplesPerSubstep` claimed four field reads a sub-step and the real number is five
+    // for a magnetic-only run, because four **stages** each read the table once. A number in a header that nothing
+    // checks is the shape this repository keeps finding.
+    const double re = kEarthRadiusM;
+    const Vec3 zero_field{};                       // the magnetic slot is required; a zero table keeps it honest
+    const BakedField empty = uniform_table(zero_field);
+    const pk::ParamBlock quiet = boris_params(empty, /*range_re=*/64.0, /*gravity=*/0.0);
+    const Vec3 start_re{6.0, 0.0, 0.0};
+    const Vec3 velocity_c{0.0, 1.0e-3, 0.0};
+
+    struct Cost final {
+        std::uint64_t samples = 0;
+        std::uint64_t substeps = 0;
+    };
+    const auto cost_of = [&](PusherAdvancer& kernel) {
+        ParticleState state{1};
+        state.set(0, 0, ParticleState::Slot::position, start_re.x * re);
+        state.set(0, 1, ParticleState::Slot::position, start_re.y * re);
+        state.set(0, 2, ParticleState::Slot::position, start_re.z * re);
+        state.set(0, 0, ParticleState::Slot::velocity, velocity_c.x * kSpeedOfLightSI);
+        state.set(0, 1, ParticleState::Slot::velocity, velocity_c.y * kSpeedOfLightSI);
+        state.set(0, 2, ParticleState::Slot::velocity, velocity_c.z * kSpeedOfLightSI);
+        state.set(0, 0, ParticleState::Slot::charge_mass, kProtonChargeMassSI);
+
+        pp::ParticleExecutor executor{state, boris_plan(kernel, empty, quiet)};
+        REQUIRE(executor.prepare() == pp::PlanRefusal::ok);
+        pk::AdvanceContext ctx;
+        ctx.dt = 1.0e-3;
+        REQUIRE(executor.advance(ctx).has_value());
+        return Cost{kernel.last_field_samples(), kernel.last_substeps()};
+    };
+
+    BorisAdvancer boris;
+    Rk4Advancer rk4;
+    VerletAdvancer verlet;
+    const Cost boris_cost = cost_of(boris);
+    const Cost rk4_cost = cost_of(rk4);
+    const Cost verlet_cost = cost_of(verlet);
+    INFO("one sub-step costs: boris " << boris_cost.samples << ", verlet " << verlet_cost.samples << ", rk4 "
+                                      << rk4_cost.samples << " field reads");
+    // One sub-step each, so the totals *are* per-sub-step costs and the comparison is not about the cadence.
+    REQUIRE(boris_cost.substeps == 1);
+    REQUIRE(verlet_cost.substeps == 1);
+    REQUIRE(rk4_cost.substeps == 1);
+    // Boris: the magnetic field once, at load, and the rotation reuses it.
+    REQUIRE(boris_cost.samples == 1);
+    // Verlet: the load's read **plus** the one at the midpoint, which is where its force is evaluated. The second
+    // read is what buys the midpoint, and it is the whole cost difference between the two second-order schemes.
+    REQUIRE(verlet_cost.samples == 2);
+    // RK4: the load, then four stages of one read each.
+    REQUIRE(rk4_cost.samples == 5);
+    REQUIRE(rk4_cost.samples == 1 + Rk4Advancer::kSamplesPerSubstep);
+
+    // ---- The energy, in a field the magnetic part cannot hide ------------------------------------------------
+    //
+    // A particle in the Earth's gravity alone, on a circular orbit: the potential is static and conservative, so a
+    // **symplectic** scheme's energy error is bounded and oscillatory while a non-symplectic one's accumulates.
+    // That is the property the reference's own name for its leapfrog claims, and the one this case measures.
+    //
+    // **The first version of this measurement was far too easy and measured nothing.** In the loop's units the
+    // Earth's gravity is `kNormalizedGravity = g T^2 / R_E ~ 7e-10`, so an orbit at six earth radii has a period of
+    // some 3.5 million steps at a step small enough to resolve it -- the run covered a thousandth of a degree of
+    // arc and every scheme's energy error sat at the rounding level (`5e-24`), where "bounded" and "drifting" are
+    // the same number. The experiment therefore **scales the gravity**: the multiplier is a port, the orbit is the
+    // same shape, and the period comes down to forty steps while the truncation error comes up to where the two
+    // behaviours are distinguishable. A numerical experiment is a measurement, and this one had to be designed.
+    const double gravity_multiplier = 1.0e6;
+    const double gm = kNormalizedGravity * gravity_multiplier;
+    const double radius_re = 6.0;
+    const double circular_speed = std::sqrt(gm / radius_re);
+    const double angular_rate = std::sqrt(gm / (radius_re * radius_re * radius_re));
+    // `dt * omega = 0.15`: about forty steps an orbit -- coarse enough that both schemes are visibly imperfect,
+    // fine enough that the orbit is still an orbit.
+    const double orbit_dt = 0.15 / angular_rate;
+    const std::size_t orbit_steps = 32000;
+    const double orbits_covered = orbit_steps * orbit_dt * angular_rate / (2.0 * 3.14159265358979323846);
+
+    const auto energy_of = [&](const ParticleState& state) {
+        // The parentheses are load-bearing: `const Vec3 v{...} * x;` leaves the `*` outside the declarator.
+        const Vec3 position = Vec3{state.at(0, 0, ParticleState::Slot::position),
+                                   state.at(0, 1, ParticleState::Slot::position),
+                                   state.at(0, 2, ParticleState::Slot::position)} *
+                              kNormalizedPerMetre;
+        const Vec3 velocity = Vec3{state.at(0, 0, ParticleState::Slot::velocity),
+                                   state.at(0, 1, ParticleState::Slot::velocity),
+                                   state.at(0, 2, ParticleState::Slot::velocity)} *
+                              kNormalizedPerMetrePerSecond;
+        return 0.5 * norm2(velocity) - gm / norm(position);
+    };
+
+    /// The four quarters of a run, each carrying the **worst** energy error seen inside it.
+    ///
+    /// The envelope rather than the value at a sampled instant, and that distinction is the measurement: a bounded
+    /// oscillation's *instantaneous* error depends on the phase it happens to be sampled at -- Boris's differs by a
+    /// factor of a hundred between the middle and the end of this run while its envelope is the same number in both
+    /// -- so comparing instants measures the phase and comparing envelopes measures the scheme.
+    struct Orbit final {
+        std::array<double, 4> worst{};
+        [[nodiscard]] double first() const noexcept { return worst[0]; }
+        [[nodiscard]] double last() const noexcept { return worst[3]; }
+    };
+    const auto orbit_of = [&](PusherAdvancer& kernel) {
+        ParticleState state{1};
+        state.set(0, 0, ParticleState::Slot::position, radius_re * re);
+        state.set(0, 1, ParticleState::Slot::velocity, circular_speed * kSpeedOfLightSI);
+        state.set(0, 0, ParticleState::Slot::charge_mass, kProtonChargeMassSI);
+
+        const pk::ParamBlock params =
+            boris_params(empty, /*range_re=*/64.0, /*gravity=*/gravity_multiplier, /*substep_cap=*/4096.0);
+        pp::ParticleExecutor executor{state, boris_plan(kernel, empty, params)};
+        REQUIRE(executor.prepare() == pp::PlanRefusal::ok);
+        pk::AdvanceContext ctx;
+        ctx.dt = orbit_dt;
+
+        const double initial = energy_of(state);
+        const double scale = std::abs(initial);
+        Orbit orbit;
+        for (std::size_t step = 0; step < orbit_steps; ++step) {
+            REQUIRE(executor.advance(ctx).has_value());
+            // The error **relative to the starting energy**, so the three schemes' numbers are comparable and the
+            // bounds below are dimensionless.
+            const double error = std::abs(energy_of(state) - initial) / scale;
+            const std::size_t quarter = std::min<std::size_t>(3, step * 4 / orbit_steps);
+            orbit.worst[quarter] = std::max(orbit.worst[quarter], error);
+        }
+        return orbit;
+    };
+
+    BorisAdvancer orbit_boris;
+    VerletAdvancer orbit_verlet;
+    Rk4Advancer orbit_rk4;
+    const Orbit from_boris = orbit_of(orbit_boris);
+    const Orbit from_verlet = orbit_of(orbit_verlet);
+    const Orbit from_rk4 = orbit_of(orbit_rk4);
+    INFO("orbits covered: " << orbits_covered << "; worst energy error by quarter -- boris " << from_boris.worst[0]
+                            << " " << from_boris.worst[1] << " " << from_boris.worst[2] << " " << from_boris.worst[3]
+                            << ", verlet " << from_verlet.worst[0] << " " << from_verlet.worst[1] << " "
+                            << from_verlet.worst[2] << " " << from_verlet.worst[3] << ", rk4 " << from_rk4.worst[0]
+                            << " " << from_rk4.worst[1] << " " << from_rk4.worst[2] << " " << from_rk4.worst[3]);
+    REQUIRE(orbits_covered > 100.0);
+
+    // **Bounded, not growing**: every quarter of the run sees the same worst error, for both second-order schemes.
+    // The measured numbers are identical to six digits (Boris `0.0226046` four times, Verlet `3.32685e-05` four
+    // times), so the bound is a factor of 1.5 -- loose enough for the rounding of a window boundary, and far below
+    // the factor of four that RK4 accumulates below.
+    for (int quarter = 1; quarter < 4; ++quarter) {
+        REQUIRE(from_boris.worst[quarter] < 1.5 * from_boris.worst[0]);
+        REQUIRE(from_verlet.worst[quarter] < 1.5 * from_verlet.worst[0]);
+    }
+    // **RK4 accumulates**, monotonically across all four quarters -- which is what a non-symplectic scheme does and
+    // what the family exists to let a run show. Measured: 2.6e-3, 5.0e-3, 7.9e-3, 1.07e-2, a factor of 4.2 from
+    // the first quarter to the last.
+    REQUIRE(from_rk4.worst[1] > from_rk4.worst[0]);
+    REQUIRE(from_rk4.worst[2] > from_rk4.worst[1]);
+    REQUIRE(from_rk4.worst[3] > from_rk4.worst[2]);
+    REQUIRE(from_rk4.worst[3] > 3.0 * from_rk4.worst[0]);
+
+    // **The midpoint force is why Verlet is here at all.** On the same orbit, at the same step and for one more
+    // field read, its energy error is smaller than Boris's -- by a factor of **679** in this measurement, which is
+    // the whole of the difference between kicking at the start position and kicking at the middle of the step. The
+    // assertion is the inequality rather than the factor: 679 is a property of this orbit, not a constant of the
+    // schemes, and a case that asserted it would be asserting the orbit.
+    REQUIRE(from_verlet.worst[0] < from_boris.worst[0]);
+    REQUIRE(from_verlet.worst[3] < from_boris.worst[3]);
+}
+
+TEST_CASE("magnetosphere.verlet.a_round_trip_returns_to_the_start", "[magnetosphere]") {
+    // **The one scheme in this family that claims reversibility, and the claim is checked rather than declared.**
+    // The step is symmetric about its own midpoint -- half a drift, the kick where the halves meet, half a drift --
+    // so a `+dt` step followed by a `-dt` step is the identity up to the rounding of the arithmetic. A sign error
+    // in either half of the drift destroys the symmetry and this case is what notices.
+    const BakedField empty = uniform_table(Vec3{});
+    const pk::ParamBlock params = boris_params(empty, 64.0, /*gravity=*/1.0);
+
+    const Vec3 start_re{6.0, 0.0, 0.0};
+    const double circular_speed = std::sqrt(kNormalizedGravity / 6.0);
+    const Vec3 velocity_c{0.0, circular_speed, 0.0};
+
+    VerletAdvancer kernel;
+    REQUIRE(kernel.is_time_reversible());
+    const RunOutcome forward = run_pusher(kernel, empty, params, start_re, velocity_c, kProtonChargeMassSI,
+                                          /*steps=*/50, /*dt=*/1.0e-3);
+    REQUIRE(forward.retirements == 0);
+    const RunOutcome back = run_pusher(kernel, empty, params, forward.position_re, forward.velocity_c,
+                                       kProtonChargeMassSI, /*steps=*/50, /*dt=*/-1.0e-3);
+    const auto relative_difference = [](double a, double b) {
+        return std::abs(a - b) / (std::abs(b) > 0.0 ? std::abs(b) : 1.0);
+    };
+    REQUIRE(relative_difference(norm(back.position_re), norm(start_re)) < 1.0e-9);
+    REQUIRE(relative_difference(back.velocity_c.y, velocity_c.y) < 1.0e-9);
+    // Not *exactly* back, and the reason is worth stating: the two runs are a hundred steps of double-precision
+    // arithmetic, so the round trip is exact only to the rounding of each step. Boris's case records the same
+    // measurement for the same reason.
+}
 TEST_CASE("magnetosphere.boris.a_uniform_field_gives_the_relativistic_gyrofrequency", "[magnetosphere]") {
     // **The case that found the 2209.**
     //

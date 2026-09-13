@@ -210,7 +210,7 @@ struct Scene final {
         // divergence-free (the two blends), and none of them moves a field onto another lattice (the resampler).
         REQUIRE(FieldNodes::mount(host) == 17);
         REQUIRE(SourceNodes::mount(host) == 2);
-        REQUIRE(PusherNodes::mount(host) == 2);
+        REQUIRE(PusherNodes::mount(host) == 3);
     }
 
     [[nodiscard]] graph::EvalContext ctx() noexcept {
@@ -3695,27 +3695,40 @@ TEST_CASE("magnetosphere.pusher_nodes.the_type_declares_the_ports_the_builder_re
     // against: three field sockets with the types that stop a scalar field being wired into a vector one, and the
     // five settings a run needs but a user should not have to wire.
     //
-    // **Two schemes and one layout.** The kit ships Boris and RK4 as separate node types with identical sockets and
-    // identical parameters, which is what the reference implementation's four integrators are: one question with
-    // several answers. That claim is checked here rather than assumed -- a family whose members had drifted apart
-    // would be a graph that runs under one scheme and refuses under the other.
+    // **Three schemes and one layout.** The kit ships Boris, RK4 and velocity Verlet as separate node types with
+    // identical sockets and identical parameters, which is what the reference implementation's four integrators
+    // are: one question with several answers. That claim is checked here rather than assumed -- a family whose
+    // members had drifted apart would be a graph that runs under one scheme and refuses under another.
+    //
+    // **The size of this table is asserted here and nowhere else**, the same rule the field types follow: every
+    // other case asks for the scheme it is about by name, so adding a member moves one assertion rather than all
+    // of them.
     const std::vector<graph::NodeDesc> types = PusherNodes::node_types();
-    REQUIRE(types.size() == 2);
+    REQUIRE(types.size() == 3);
     const graph::NodeDesc& boris = types.front();
     REQUIRE(boris.type_name == PusherNodes::kBorisType);
     REQUIRE(boris.valid());
-    const graph::NodeDesc& rk4 = types[1];
-    REQUIRE(rk4.type_name == PusherNodes::kRk4Type);
-    REQUIRE(rk4.valid());
-    REQUIRE(rk4.inputs.size() == boris.inputs.size());
-    REQUIRE(rk4.outputs.size() == boris.outputs.size());
-    for (std::size_t index = 0; index < boris.inputs.size(); ++index) {
-        REQUIRE(rk4.inputs[index].number == boris.inputs[index].number);
-        REQUIRE(rk4.inputs[index].type == boris.inputs[index].type);
-        REQUIRE(rk4.inputs[index].connectable == boris.inputs[index].connectable);
+    // Each member against the first: same port numbers, same types, same connectability, same output. The list is
+    // walked rather than the two named members compared by hand, because the third one is what makes the claim a
+    // claim about a *family* rather than about a pair.
+    for (std::size_t member = 1; member < types.size(); ++member) {
+        const graph::NodeDesc& other = types[member];
+        REQUIRE(other.valid());
+        REQUIRE(PusherNodes::is_pusher(other.type_name));
+        REQUIRE(other.inputs.size() == boris.inputs.size());
+        REQUIRE(other.outputs.size() == boris.outputs.size());
+        for (std::size_t index = 0; index < boris.inputs.size(); ++index) {
+            REQUIRE(other.inputs[index].number == boris.inputs[index].number);
+            REQUIRE(other.inputs[index].type == boris.inputs[index].type);
+            REQUIRE(other.inputs[index].connectable == boris.inputs[index].connectable);
+        }
+        REQUIRE(other.outputs.front().number == boris.outputs.front().number);
+        REQUIRE(other.outputs.front().type == boris.outputs.front().type);
     }
-    REQUIRE(rk4.outputs.front().number == boris.outputs.front().number);
-    REQUIRE(rk4.outputs.front().type == boris.outputs.front().type);
+    // ... and all three names are in the table, said out loud, because a family that quietly lost a member would
+    // still pass the loop above.
+    REQUIRE(types[1].type_name == PusherNodes::kRk4Type);
+    REQUIRE(types[2].type_name == PusherNodes::kVerletType);
     // And the family's own predicate agrees with the list, name by name: a scheme the builder did not recognize
     // would be a node a user can place, wire and configure that the plan silently skips.
     for (const graph::NodeDesc& described : types) REQUIRE(PusherNodes::is_pusher(described.type_name));
@@ -3787,7 +3800,7 @@ TEST_CASE("magnetosphere.pusher_nodes.the_type_declares_the_ports_the_builder_re
             BorisAdvancer::kDefaultSpeedLimit);
 
     qp::host::PluginHost host{qp::plugin::Capability::particle_domain};
-    REQUIRE(PusherNodes::mount(host) == 2);
+    REQUIRE(PusherNodes::mount(host) == 3);
     REQUIRE(host.node_types().find(PusherNodes::kBorisType) != nullptr);
 }
 

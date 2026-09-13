@@ -93,9 +93,18 @@ public:
     ///
     /// **The same sockets and the same parameters as `kBorisType`**, because that is what the reference
     /// implementation's four integrators are: one question -- which scheme advances my particles -- with four
-    /// answers. The kernel behind this name samples the field four times a sub-step instead of once and promises
-    /// nothing about `|v|`; `rk4.hpp` argues the pair, and the case measures it.
+    /// answers. The kernel behind this name takes four **stages** a sub-step, each reading the magnetic table and
+    /// the electric one, and promises nothing about `|v|`; `rk4.hpp` argues the pair, and the case measures it.
     static constexpr const char* kRk4Type = "particle.rk4";
+
+    /// @brief The velocity-Verlet push: the force at the half step, one field sample a sub-step.
+    ///
+    /// The family's third member, and the one the reference calls "position first". It exists here because it is
+    /// **measurably a different scheme** -- the case compares its energy error against Boris's at the same step
+    /// and the same cost -- where the reference's fourth entry, its leapfrog, is what this kit's Boris already
+    /// does; the file `verlet.hpp` records that finding and the measurement behind it. A node with the same
+    /// arithmetic under a second name would be two names for one scheme.
+    static constexpr const char* kVerletType = "particle.verlet";
 
     /// @brief The magnetic field socket. `kVectorField`; what lands here becomes `SlotName::magnetic`.
     static constexpr qp::graph::PortNumber kPortMagnetic = 1;

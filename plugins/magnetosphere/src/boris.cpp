@@ -109,7 +109,7 @@ void BorisAdvancer::push(PusherAdvancer::Loaded& loaded, const pk::BatchView& ba
 
     for (std::size_t sub = 0; sub < loaded.substeps; ++sub) {
         const Vec3 b = (sub == 0) ? loaded.magnetic_start
-                                  : sample_volume(batch.in[pp::slot_index(pp::SlotName::magnetic)], field_grid,
+                                  : sampled_volume(batch.in[pp::slot_index(pp::SlotName::magnetic)], field_grid,
                                                   pos * kEarthRadiusM) *
                                         (1.0 / kEquatorialSurfaceFieldT);
 
@@ -127,7 +127,7 @@ void BorisAdvancer::push(PusherAdvancer::Loaded& loaded, const pk::BatchView& ba
         // time and the two normalized fields are then in the same units as `v x B`.
         Vec3 electric{};
         if (has_electric) {
-            electric = sample_volume(batch.in[kElectric], field_grid, pos * kEarthRadiusM) *
+            electric = sampled_volume(batch.in[kElectric], field_grid, pos * kEarthRadiusM) *
                        (1.0 / (kEquatorialSurfaceFieldT * kSpeedOfLightSI));
         }
 
@@ -151,7 +151,7 @@ void BorisAdvancer::push(PusherAdvancer::Loaded& loaded, const pk::BatchView& ba
         if (has_drag) {
             // The table is SI per second; a rate converts by the **reciprocal** of the time unit, which is why
             // this divides where a length or a field multiplies.
-            const double nu = sample_scalar(batch.in[kDrag], field_grid, pos * kEarthRadiusM) /
+            const double nu = sampled_scalar(batch.in[kDrag], field_grid, pos * kEarthRadiusM) /
                               kNormalizedPerSecond;
             if (nu > 0.0) {
                 double factor = 1.0 - nu * sub_dt;

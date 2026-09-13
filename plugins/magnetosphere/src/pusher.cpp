@@ -89,7 +89,7 @@ PusherAdvancer::Loaded PusherAdvancer::load(const pk::BatchView& batch, std::siz
     // through, so `2 atan(|t|)` is that angle, and the count keeps it under the threshold. Measured from the field
     // at the start of the step and the Lorentz factor at the start of the step, which is what makes a backward step
     // take the same number of sub-steps in the other direction: `|dt|` is what enters.
-    const Vec3 b_si_start = sample_volume(magnetic, grid, loaded.position * kEarthRadiusM);
+    const Vec3 b_si_start = sampled_volume(magnetic, grid, loaded.position * kEarthRadiusM);
     loaded.magnetic_start = b_si_start * (1.0 / kEquatorialSurfaceFieldT);
     const double gamma_now = 1.0 / std::sqrt(1.0 - norm2(loaded.velocity));
     const double t_magnitude = std::abs(loaded.charge_mass) * norm(loaded.magnetic_start) * std::abs(dt) /

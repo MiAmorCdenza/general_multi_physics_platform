@@ -33,14 +33,14 @@ Rk4Advancer::Derivative Rk4Advancer::stage(const pk::BatchView& batch, const Vec
     const double gamma = std::sqrt(1.0 + norm2(momentum));
     const Vec3 velocity = momentum * (1.0 / gamma);
 
-    const Vec3 b = sample_volume(batch.in[pp::slot_index(pp::SlotName::magnetic)], field_grid, point) *
+    const Vec3 b = sampled_volume(batch.in[pp::slot_index(pp::SlotName::magnetic)], field_grid, point) *
                    (1.0 / kEquatorialSurfaceFieldT);
 
     Derivative out;
     out.velocity = velocity;
     out.acceleration = cross(velocity, b) * charge_mass;
     if (has_electric) {
-        const Vec3 electric = sample_volume(batch.in[pp::slot_index(pp::SlotName::electric)], field_grid, point) *
+        const Vec3 electric = sampled_volume(batch.in[pp::slot_index(pp::SlotName::electric)], field_grid, point) *
                               (1.0 / (kEquatorialSurfaceFieldT * kSpeedOfLightSI));
         out.acceleration = out.acceleration + electric * charge_mass;
     }
@@ -57,7 +57,7 @@ Rk4Advancer::Derivative Rk4Advancer::stage(const pk::BatchView& batch, const Vec
         // The table is SI per second; a rate converts by the **reciprocal** of the time unit. As a force it is
         // `du/dt = -nu u`, which integrates to `u(t) = u0 exp(-nu t)` -- the decay the atmosphere node's case
         // measures against, and the reason this term is here rather than applied to the velocity afterwards.
-        const double nu = sample_scalar(batch.in[pp::slot_index(pp::SlotName::drag)], field_grid, point) /
+        const double nu = sampled_scalar(batch.in[pp::slot_index(pp::SlotName::drag)], field_grid, point) /
                           kNormalizedPerSecond;
         if (nu > 0.0) out.acceleration = out.acceleration - momentum * nu;
     }

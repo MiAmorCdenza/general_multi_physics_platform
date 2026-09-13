@@ -250,7 +250,7 @@ int main(int argc, char** argv) {
     // right when it was written and nothing tied it to the kit it was counting, which is the same shape as the
     // stale expectations this repository keeps finding in tests -- a number that describes another module's
     // inventory does not live in this one.
-    if (mounted_field_types != 17 || mounted_pushers != 2 || mounted_emitters != 1 || mounted_drivers != 2) {
+    if (mounted_field_types != 17 || mounted_pushers != 3 || mounted_emitters != 1 || mounted_drivers != 2) {
         qWarning().noquote() << "magnetosphere: mounted" << mounted_field_types << "of 17 field types,"
                              << mounted_pushers << "of 2 pushers," << mounted_emitters << "of 1 emitter and"
                              << mounted_drivers << "of 2 drivers";
