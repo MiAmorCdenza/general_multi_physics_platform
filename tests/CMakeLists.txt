@@ -44,6 +44,7 @@ if(Python3_Interpreter_FOUND)
                 --exclude unit/views
                 --exclude model
                 --exclude plugins
+                --exclude oracle
                 --quiet)
     set_tests_properties(gate.contracts PROPERTIES
         LABELS "gate"
@@ -898,4 +899,89 @@ if(QP_BUILD_VIEWS)
     set_tests_properties(qp_test_views_theme.all PROPERTIES LABELS "views;qt;theme;aggregate")
     set_tests_properties(qp_test_views_theme.all PROPERTIES
         ENVIRONMENT "PATH=${_qt_dll_dir};$ENV{PATH}")
+endif()
+
+# ==========================================================================================================================
+# The port's oracle: the original Fortran, compiled **only** so the tests can measure a port against it.
+#
+# Three guards, and every one of them is a reason rather than a convenience:
+#
+#   1. **The sources are not in the repository.** They are third-party research code with no licence statement in them,
+#      `external/` is git-ignored, and a clone that has never seen them must still configure, build and pass -- so the
+#      block is skipped with a message saying which part is missing, and nothing else in the build notices.
+#   2. **A Fortran compiler is needed**, and `check_language` is how CMake is asked without failing the configure.
+#   3. **The Fortran and C++ toolchains must be the same one.** A MinGW gfortran linked into a binary whose C++ came
+#      from a different MinGW, or from MSVC, produces something that links and then behaves according to whichever
+#      runtime won -- `libgfortran`, `libgcc` and the C runtime all have to agree. The comparison is the compiler's own
+#      target triple, which is the measurement rather than the guess: for a compiler that does not report one (MSVC),
+#      `execute_process` fails and the check reports a mismatch, which is the right answer for this purpose.
+#
+# The option exists so a developer can turn the oracle off deliberately (`-DQP_ORACLE=OFF`), and the default is ON
+# because a build that *can* verify a port should.
+# ==========================================================================================================================
+option(QP_ORACLE "Build the Fortran oracle and the tests that measure a port against it" ON)
+
+set(_qp_geopack_dir "${CMAKE_SOURCE_DIR}/external/geopack")
+set(_qp_geopack_sources
+    "${_qp_geopack_dir}/Geopack-2008_dp.for"
+    "${_qp_geopack_dir}/TS04c.for"
+    "${_qp_geopack_dir}/TA16_RBF.f"
+    "${_qp_geopack_dir}/MS_field_model.for"
+    "${_qp_geopack_dir}/parabmod.for")
+
+set(_qp_oracle_skip "")
+if(NOT QP_ORACLE)
+    set(_qp_oracle_skip "QP_ORACLE is OFF")
+else()
+    foreach(_src IN LISTS _qp_geopack_sources)
+        if(NOT EXISTS "${_src}")
+            set(_qp_oracle_skip "the vendored sources are not present (expected ${_qp_geopack_dir}; see tests/oracle/README.md)")
+            break()
+        endif()
+    endforeach()
+endif()
+
+if(NOT _qp_oracle_skip)
+    include(CheckLanguage)
+    check_language(Fortran)
+    if(NOT CMAKE_Fortran_COMPILER)
+        set(_qp_oracle_skip "no Fortran compiler was found")
+    endif()
+endif()
+
+if(NOT _qp_oracle_skip)
+    execute_process(COMMAND "${CMAKE_CXX_COMPILER}" -dumpmachine
+                    OUTPUT_VARIABLE _qp_cxx_triple OUTPUT_STRIP_TRAILING_WHITESPACE
+                    RESULT_VARIABLE _qp_cxx_triple_status ERROR_QUIET)
+    execute_process(COMMAND "${CMAKE_Fortran_COMPILER}" -dumpmachine
+                    OUTPUT_VARIABLE _qp_fc_triple OUTPUT_STRIP_TRAILING_WHITESPACE
+                    RESULT_VARIABLE _qp_fc_triple_status ERROR_QUIET)
+    if(NOT _qp_cxx_triple_status EQUAL 0 OR NOT _qp_fc_triple_status EQUAL 0)
+        set(_qp_oracle_skip "a compiler does not report its target triple, so the two toolchains cannot be shown to match")
+    elseif(NOT _qp_cxx_triple STREQUAL _qp_fc_triple)
+        set(_qp_oracle_skip "the C++ compiler targets ${_qp_cxx_triple} and the Fortran compiler targets ${_qp_fc_triple}")
+    endif()
+endif()
+
+if(_qp_oracle_skip)
+    message(STATUS "oracle: skipped -- ${_qp_oracle_skip}")
+else()
+    enable_language(Fortran)
+    message(STATUS "oracle: building against the vendored Fortran (${_qp_fc_triple})")
+
+    add_library(qp_oracle_geopack STATIC ${_qp_geopack_sources})
+    # Three flags, each of which was measured rather than assumed (see tests/oracle/README.md):
+    #   `-fno-automatic`  this generation of Fortran keeps state in COMMON and static locals, and automatic locals
+    #                     would reset it silently between calls;
+    #   `-std=legacy`     the sources are Fortran 77 and use its idioms;
+    #   `-w`              it is not our code and its warnings are not our business.
+    # The fixed-form line length is **deliberately** left at its default: `-ffixed-line-length-none` breaks TS04c.for
+    # at line 1852, which carries text past column 72 that the original build ignored.
+    target_compile_options(qp_oracle_geopack PRIVATE -std=legacy -fno-automatic -w)
+    target_include_directories(qp_oracle_geopack PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/oracle")
+
+    qp_add_test(qp_test_oracle_geopack
+        SOURCES oracle/test_oracle_geopack.cpp
+        LIBS qp_oracle_geopack
+        LABELS "oracle")
 endif()
