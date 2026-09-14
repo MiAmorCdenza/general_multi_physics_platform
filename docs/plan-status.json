@@ -1,6 +1,6 @@
 {
   "schema": "qp.plan-status/1",
-  "updated": "**oracle 接入 CTest（第 1 步完成）**：新增 Catch2 用例直接 extern \"C\" 调用原始 Fortran（recalc_08_/igrf_gsw_08_/dip_08_/gswgse_08_ 等）并读其状态块 geopack1_ —— 移植版从此对\"这台机器上编译出的原始例程\"逐点负责。三道守卫均有理由：源文件不在版本库（无许可声明，用户定\"自用调试、分发排除\"，缺席时构建与测试照常通过）；check_language(Fortran) 探编译器；**两套工具链必须是同一套**（判据是自报 target triple —— 是测量不是猜，MSVC 报不出 triple 即判不匹配）。实测本机 g++ 与 gfortran 同为 i686-w64-mingw32 故 GCC 树可同链，MSVC 树跳过（其计数里没有 oracle 用例即为证据）。抓到两个 API 陷阱：GSWGSE_08 六槽含义随 J 调换（J<0 读后三写前三），状态块声明若在匿名命名空间会得内部链接。实测边界入断言：往返长度误差 1e-10（Fortran 重算角度的精度），IGRF(3,0,0)=(1065.497,37.867,1016.775) nT 且 y 分量非零（纯偶极挣不到的那部分）。契约分区给 oracle 单列排除（钉的是第三方 Fortran，与 tests/meta 自检不进分区同一先例）。**第 2 步已开始**：移植 IGRF 与坐标/倾角层，先取 IGRF_GEO_08，其 105x3 系数表由脚本从 Fortran 的 DATA 语句生成而非手抄。GCC 870 / MSVC 868 双绿。",
+  "updated": "**IGRF 移植第 1 步完成，求值器被 oracle 判定为错、已撤出构建（重要记录）。** 系数表由脚本从 Fortran 的 DATA 生成（24 历元 + 2 年变率，约 2700 值），逐值核对并加门禁 gate.igrf_table 与用例 geopack.igrf.the_generated_table_holds_the_published_epochs（含真实物理：轴向偶极衰减，|g10| 1965->2020 单调 30334->29404.8 nT）。生成器处理三种Fortran 排版怪癖：重复计数 39*0.E0、数字内空格 - 8.4E0、以及只在 DIMENSION 里出现的 DG15/DH15。求值器症状：与 oracle 首年赤道即分道扬镳，自测平方反比 4.06 而偶极应为 8。定位：oracle 的系数数组用标准 IGRF 打包（index 2 = g10、index 4 = 1.5*g20、index 5 = sqrt(3)*g21 —— 后两者是 Schmidt 半归一因子），即 RECALC_08 在插值后还有一段归一化循环（源文件 1070 行起），补上后量级才对；仍未解决的是 MN=N*(N-1)/2+M 与循环变量的含义差一个 n，两种读法都未能复现 oracle，**索引约定须用测量而非阅读确定**。处置：错误的求值器不进构建（算错的场比不存在的场更坏）。GCC 873 / MSVC 868 双绿。oracle 首次真正使用就拦下一处会静默算错的移植——正是接入它的理由。",
   "note": "记录每个模块的下推深度。状态含义见 docs/plan-tree.md §7。",
   "statuses": [
     "planned",
@@ -81,7 +81,7 @@
     }
   },
   "test_stats": {
-    "ctest_registered": 870,
+    "ctest_registered": 873,
     "compilers_green": [
       "gcc-15.2.0-i686",
       "msvc-19.51-x64"

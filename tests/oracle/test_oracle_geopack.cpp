@@ -23,6 +23,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <string>
 
 // **The Fortran interface, at file scope.** A state block declared inside an anonymous namespace gets internal
 // linkage, which is how the first version of this file linked against nothing and reported `undefined reference to

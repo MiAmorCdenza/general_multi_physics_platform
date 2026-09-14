@@ -980,6 +980,20 @@ else()
     target_compile_options(qp_oracle_geopack PRIVATE -std=legacy -fno-automatic -w)
     target_include_directories(qp_oracle_geopack PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/oracle")
 
+    # The port is linked beside the oracle, because these cases are the only place the two meet: everything else in
+    # the tree tests one of them without the other.
+    qp_add_test(qp_test_igrf_table
+        SOURCES unit/plugins/test_igrf_table.cpp
+        LIBS qp::plugins::magnetosphere)
+
+    # The generated coefficient table, as a gate: regenerating it from the Fortran and comparing is what keeps a
+    # generated file from being edited by hand, or from silently falling behind the source it came from.
+    add_test(NAME gate.igrf_table
+        COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/scripts/generate_igrf_table.py --check)
+    set_tests_properties(gate.igrf_table PROPERTIES
+        LABELS "gate"
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
     qp_add_test(qp_test_oracle_geopack
         SOURCES oracle/test_oracle_geopack.cpp
         LIBS qp_oracle_geopack
